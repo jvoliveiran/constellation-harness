@@ -15,6 +15,5 @@
     "code-review",
     "quality-gates",
     "harness"
-  ],
-  "defaultEnabled": false
+  ]
 }

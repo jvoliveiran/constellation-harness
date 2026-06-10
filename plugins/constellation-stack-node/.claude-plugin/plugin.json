@@ -15,6 +15,5 @@
     "federation",
     "prisma",
     "skills"
-  ],
-  "defaultEnabled": false
+  ]
 }

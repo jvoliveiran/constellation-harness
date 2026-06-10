@@ -44,7 +44,7 @@ constellation-harness/                 (plugin marketplace)
 
 The harness never takes over sessions globally:
 
-1. **Plugin enablement** — plugins ship with `defaultEnabled: false`. Enable them per project in the project's `.claude/settings.json` (`enabledPlugins`), or user-wide if you prefer.
+1. **Plugin enablement** — installing makes the plugins available, but you choose the scope: enable them per project in the project's `.claude/settings.json` (`enabledPlugins`), or user-wide if you prefer.
 2. **Project initialization** — even when enabled, the SessionStart hook stays **silent** until the project contains `.constellation/config.json`. Run `/constellation:init` once per project to opt in.
 
 A project without `.constellation/` behaves exactly like vanilla Claude Code.
