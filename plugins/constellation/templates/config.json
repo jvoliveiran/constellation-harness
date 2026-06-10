@@ -1,0 +1,17 @@
+{
+  "github": {
+    "account": "<gh-username — detected from `gh api user --jq .login` during init>"
+  },
+  "commands": {
+    "lint": "npm run lint",
+    "build": "npm run build",
+    "test": "npm run test",
+    "testRelated": "npx jest --findRelatedTests"
+  },
+  "branching": {
+    "mainBranch": "main",
+    "format": "<type>/<plan-number>-<description>"
+  },
+  "schemaPath": null,
+  "stack": []
+}

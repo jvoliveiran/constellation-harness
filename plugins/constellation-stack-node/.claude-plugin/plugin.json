@@ -1,0 +1,20 @@
+{
+  "name": "constellation-stack-node",
+  "displayName": "Constellation Stack Pack — Node/NestJS/GraphQL/Prisma",
+  "version": "0.1.0",
+  "description": "Stack skill pack for the Constellation Harness: TypeScript, NestJS, GraphQL (code-first + Apollo Federation 2), Prisma migrations, observability, error handling, security checklist, and schema compatibility conventions.",
+  "author": {
+    "name": "João Oliveira",
+    "email": "jvoliveiran@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "typescript",
+    "nestjs",
+    "graphql",
+    "federation",
+    "prisma",
+    "skills"
+  ],
+  "defaultEnabled": false
+}

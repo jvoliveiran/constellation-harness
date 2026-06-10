@@ -1,0 +1,24 @@
+{
+  "name": "constellation",
+  "owner": {
+    "name": "João Oliveira",
+    "email": "jvoliveiran@gmail.com"
+  },
+  "description": "Constellation Harness — a multi-agent software delivery workflow for Claude Code, plus optional stack skill packs.",
+  "plugins": [
+    {
+      "name": "constellation",
+      "source": "./plugins/constellation",
+      "description": "Core harness: orchestrator, 7 persona agents, quality gates, workflow commands, state and metrics.",
+      "version": "0.1.0",
+      "defaultEnabled": false
+    },
+    {
+      "name": "constellation-stack-node",
+      "source": "./plugins/constellation-stack-node",
+      "description": "Stack skill pack: TypeScript, NestJS, GraphQL (+ Apollo Federation 2), Prisma, observability, error handling, security checklist, schema compatibility.",
+      "version": "0.1.0",
+      "defaultEnabled": false
+    }
+  ]
+}
