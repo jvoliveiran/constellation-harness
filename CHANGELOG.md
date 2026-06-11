@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
+### Added
+- `tdd-workflow` skill (core) — RED → GREEN → REFACTOR unit-level TDD with validated RED gate, checkpoint commits, and coverage verification (adapted from the ECC tdd-workflow skill, minus integration/E2E scope which belongs to SDET in Gate 2)
+
+### Changed
+- `software-engineer` and `frontend-engineer` now enforce TDD as their core development workflow (skill preloaded, RED-before-code hard limit)
+- `git-commit` skill reconciled with TDD checkpoint commits: checkpoints stay on the branch, one final consolidating commit, squash happens at PR merge
+- Orchestrator mandatory rules now include the TDD requirement for both engineers
+
 ## [0.3.0] - 2026-06-10
 
 ### Added

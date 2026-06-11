@@ -111,6 +111,7 @@ Orchestrator (constellation:orchestrator skill)
 
 ### Quality machinery
 
+- **TDD as the engineering process** — both engineer agents follow the `tdd-workflow` skill: RED (validated failing test) → GREEN (minimal implementation) → REFACTOR, with checkpoint commits on the feature branch. Production code is never written before a failing test. Integration/E2E coverage stays with SDET in Gate 2.
 - **Lint Gate** — project lint + build (+ schema compatibility when `schemaPath` is configured) runs before any reviewer, so expensive Opus reviewers never see code that doesn't compile.
 - **Parallel gates** — reviewers are spawned concurrently in a single message; blockers from both are merged into one fix list.
 - **Incremental review** — fix passes send reviewers only the fix delta plus the original blocker list, not the whole diff again.
@@ -125,8 +126,8 @@ Orchestrator (constellation:orchestrator skill)
 | Agent | Model | Role | Gate-mode tools |
 |---|---|---|---|
 | `software-architect` | opus | Plans with acceptance criteria, risks, validation | full |
-| `software-engineer` | sonnet | Implements backend/service plans and changes | full |
-| `frontend-engineer` | sonnet | Implements UI work — components, state, accessibility, design quality | full |
+| `software-engineer` | sonnet | Implements backend/service plans and changes, test-first (TDD) | full |
+| `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
 | `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only** |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
@@ -149,7 +150,7 @@ Models are reassigned dynamically per change complexity (small → all Sonnet; m
 
 ## Skills
 
-**Core (`constellation`)**: `orchestrator`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`.
+**Core (`constellation`)**: `orchestrator`, `tdd-workflow`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`.
 **Stack pack (`constellation-stack-node`)**: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`.
 **Stack pack (`constellation-stack-frontend`)**: `frontend-design` (distinctive, production-grade UI aesthetics — typography, color, motion, composition).
 
