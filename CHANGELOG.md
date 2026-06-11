@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-10
+
+### Changed
+- PM × Architect pairing refined: the Architect can now propose product ideas, suggestions, and recommendations (new `PRODUCT_SUGGESTIONS` field in the Feasibility contract), but the PM leads product scope — every suggestion is triaged (scope / park / drop) like any other idea
+
 ## [0.5.0] - 2026-06-10
 
 ### Added
