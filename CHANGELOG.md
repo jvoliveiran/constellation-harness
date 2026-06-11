@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-10
+
+### Changed
+- `tdd-workflow` skill enriched from the ECC tdd-guide: mandatory edge-case checklist (incl. race conditions, large data, special characters), weak-assertion anti-pattern, and a pre-handoff quality checklist. Deliberately not ported: integration/E2E scope, prompt-defense boilerplate, eval-driven addendum, and the standalone TDD agent (TDD is enforced inside the engineer agents instead).
+
 ## [0.4.0] - 2026-06-10
 
 ### Added

@@ -214,6 +214,19 @@ When the project defines thresholds, respect them; when adding them, 80% is the 
 }
 ```
 
+## Edge Cases You MUST Test
+
+For every unit under test, work through this list and cover what applies:
+
+1. **Null/Undefined** input
+2. **Empty** arrays/strings
+3. **Invalid types** passed
+4. **Boundary values** (min/max, off-by-one)
+5. **Error paths** (dependency failures, thrown exceptions)
+6. **Race conditions** (concurrent calls, out-of-order async resolution)
+7. **Large data** (performance and correctness with 10k+ items)
+8. **Special characters** (Unicode, emojis, quotes, SQL/HTML-significant characters)
+
 ## Common Testing Mistakes to Avoid
 
 ### ❌ WRONG: Testing Implementation Details
@@ -239,6 +252,20 @@ const el = container.querySelector('.css-class-xyz')
 // Resilient to changes
 screen.getByRole('button', { name: 'Submit' })
 screen.getByTestId('submit-button')
+```
+
+### ❌ WRONG: Asserting Too Little
+```typescript
+// Passes even when the behavior is broken
+const result = calculateTotal(lineItems)
+expect(result).toBeDefined()
+```
+
+### ✅ CORRECT: Specific, Meaningful Assertions
+```typescript
+// A wrong value fails the test
+const result = calculateTotal(lineItems)
+expect(result).toBe(255) // 300 - 15% discount
 ```
 
 ### ❌ WRONG: No Test Isolation
@@ -282,6 +309,20 @@ Before every checkpoint commit: the relevant tests pass and lint is clean.
 8. **Keep Tests Fast** — unit tests < 50ms each
 9. **Clean Up After Tests** — no side effects
 10. **Review Coverage Reports** — identify gaps
+
+## Quality Checklist
+
+Self-check before handing off to the Lint Gate:
+
+- [ ] All public functions/components touched by the change have unit tests
+- [ ] Every test failed (RED) before its implementation existed
+- [ ] Edge cases covered (null, empty, invalid, boundaries)
+- [ ] Error paths tested — not just the happy path
+- [ ] External dependencies mocked at the boundary
+- [ ] Tests are independent (no shared state, no ordering)
+- [ ] Assertions are specific and meaningful — a wrong value fails them
+- [ ] Coverage is 80%+ on the changed code
+- [ ] RED/GREEN/REFACTOR checkpoint commits exist on the branch
 
 ## Success Metrics
 
