@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-10
+
+### Added
+- `ui-ux-designer` agent (Opus) — design-led frontend specialist for dashboards and landing pages, extracted from guardei-ui and improved: project-convention-first stack selection, design rationale persisted to `.constellation/designs/`, workflow-gate integration, clarified division of labor with `frontend-engineer`
+- `/constellation:init` now scaffolds `.constellation/designs/`
+
 ## [0.2.0] - 2026-06-10
 
 ### Added

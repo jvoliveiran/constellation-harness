@@ -13,7 +13,7 @@ constellation-harness/                 (plugin marketplace)
 ├── .claude-plugin/marketplace.json
 └── plugins/
     ├── constellation/                 CORE — universal harness
-    │   ├── agents/                    8 persona subagents
+    │   ├── agents/                    9 persona subagents
     │   ├── commands/                  /constellation:* workflow commands
     │   ├── skills/                    orchestrator + generic delivery skills
     │   ├── templates/                 files scaffolded by /constellation:init
@@ -127,6 +127,7 @@ Orchestrator (constellation:orchestrator skill)
 | `software-architect` | opus | Plans with acceptance criteria, risks, validation | full |
 | `software-engineer` | sonnet | Implements backend/service plans and changes | full |
 | `frontend-engineer` | sonnet | Implements UI work — components, state, accessibility, design quality | full |
+| `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
 | `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only** |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |

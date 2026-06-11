@@ -9,8 +9,8 @@
     {
       "name": "constellation",
       "source": "./plugins/constellation",
-      "description": "Core harness: orchestrator, 8 persona agents, quality gates, workflow commands, state and metrics.",
-      "version": "0.2.0"
+      "description": "Core harness: orchestrator, 9 persona agents, quality gates, workflow commands, state and metrics.",
+      "version": "0.3.0"
     },
     {
       "name": "constellation-stack-node",

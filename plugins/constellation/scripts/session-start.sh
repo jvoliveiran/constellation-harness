@@ -26,6 +26,7 @@ AGENTS (spawn via the Agent tool using the listed subagent_type)
 | Software Architect | constellation:software-architect | plans, architecture, brainstorming — "should we", "how would you design", "create a plan", "compare" |
 | Software Engineer | constellation:software-engineer | implement, build, fix, refactor backend/service code — executing an approved plan or bounded change |
 | Frontend Engineer | constellation:frontend-engineer | implement frontend/UI work — components, pages, forms, styling, client state (use when config.stack has frontend skills) |
+| UI/UX Designer | constellation:ui-ux-designer | design-led frontend work — "design", "redesign", "beautify", dashboards, landing pages, visual polish |
 | Code Reviewer | constellation:code-reviewer | "review my changes", "code review", correctness/maintainability review |
 | Security Analyst | constellation:security-analyst | security review, vulnerabilities, OWASP, "harden", auth risks |
 | SDET | constellation:sdet | add/run/improve tests, coverage gaps, test audits |

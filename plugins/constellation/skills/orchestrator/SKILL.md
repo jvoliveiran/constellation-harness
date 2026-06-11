@@ -68,6 +68,7 @@ Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: 
 | `constellation:software-architect` | what/how to build, architecture comparison, brainstorm, cost/tradeoffs, formal plan. Signals: *"should we", "what's the best way", "how would you design", "brainstorm", "plan for", "compare", "create a plan", "advise"* |
 | `constellation:software-engineer` | write/implement/fix/refactor specific backend/service code; implement an approved plan. Signals: *"implement", "build the", "fix this", "configure", "create a file", "generate the"* |
 | `constellation:frontend-engineer` | implement frontend/UI work — components, pages, forms, layouts, styling, client state. Signals: *"build this page/component", "implement the form", "fix this UI", "style", "responsive"* |
+| `constellation:ui-ux-designer` | design-led frontend work — dashboards, landing pages, redesigns, visual polish, design systems. Signals: *"design", "redesign", "beautify", "landing page", "dashboard layout", "make it look", "hero section", "pricing page"* |
 | `constellation:code-reviewer` | review staged or locally committed changes. Signals: *"review code changes", "check my changes", "code review"* |
 | `constellation:security-analyst` | security review/audit, vulnerabilities, hardening. Signals: *"security review", "is this secure", "OWASP", "harden", "attack surface"* |
 | `constellation:sdet` | add/review/improve tests, explore untested paths. Signals: *"add tests", "run tests", "are we testing", "test this"* |
@@ -78,8 +79,10 @@ Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: 
 
 "Engineer" in every workflow track means the engineer matching the work:
 - Frontend/UI work (components, pages, styling, client state) or a project whose `config.stack` includes frontend skills (e.g. `frontend-design`) → `constellation:frontend-engineer`
+- **Design-led** frontend work where visual quality/UX is the goal (new surfaces, dashboards, landing pages, redesigns, design systems) → `constellation:ui-ux-designer`
 - Backend/service/CLI work → `constellation:software-engineer`
 - Full-stack changes → split per area, or use both engineers sequentially with a shared plan
+- Design-then-build features → ui-ux-designer establishes the direction and key surfaces, frontend-engineer builds the remaining functionality against them
 
 ### Tiebreaker for ambiguous requests (first yes wins)
 
