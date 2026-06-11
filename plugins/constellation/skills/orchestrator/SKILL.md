@@ -218,7 +218,7 @@ Fast automated check between Engineer completion and the review gate. It exists 
 
 ### Behavior
 
-- Lint or build fails → hand the errors back to the Software Engineer. Re-run the gate after fixes. **Loop until both pass.**
+- Lint or build fails → hand the errors back to the Software Engineer. Re-run the gate after fixes. **Capped at 3 retries** — after the third failure, stop and escalate the errors to the user instead of looping further.
 - Breaking schema changes → flag them. Engineer must deprecate-and-add or get explicit user confirmation. Re-run after resolution.
 - All pass → proceed to the review gate. **→ Log**: `{ event: "lint-gate-pass" }` (or `lint-gate-fail` with an error summary).
 
@@ -318,10 +318,13 @@ Every gate subagent MUST return a structured result:
 
 1. Any `BLOCKED` verdict → collect ALL blockers into a single list.
 2. New `PATTERNS` reported → append them to `.constellation/memory/review-patterns.md`.
-3. Present the merged blocker list to the Software Engineer as one combined fix request.
-4. Record `PRE_FIX_SHA` before the Engineer starts fixing.
-5. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
-6. All `PASS` → present suggestions/nits as informational output and proceed.
+3. **Increment `reviewLoopCount`** in the state file. **If it exceeds 3 → STOP**: do not re-spawn the gate. Present the surviving blockers to the user with both sides' positions, log `{ event: "gate1-escalated", reviewLoops: N }`, and wait for the user's decision (accept risk, change approach, or abort).
+4. Present the merged blocker list to the Software Engineer as one combined fix request.
+5. Record `PRE_FIX_SHA` before the Engineer starts fixing.
+6. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
+7. All `PASS` → present suggestions/nits as informational output and proceed.
+
+A subagent return that does not match its output contract (no parsable `VERDICT`) is re-requested **once**; if still malformed, treat it as `BLOCKED` — never as a pass.
 
 ### Rules
 
@@ -437,6 +440,7 @@ Update rules: after each gate, append newly reported `PATTERNS`; each pattern ha
 1. State which agent you are invoking and why — one sentence.
 2. State the model and the heuristic reason.
 3. Spawn via the Agent tool with the proper `subagent_type` — pass the **full original request unchanged** plus the plan/branch context. Do not summarize or reinterpret it.
+   - **Code Reviewer has no shell access** — for any invocation (gate or direct), capture the `git diff` yourself and include it in the prompt, along with the review memory.
 4. Update the state file with the current step.
 5. Do not add your own answer before or after the handoff.
 6. If the agent returns open questions, present them to the user, then continue the pipeline once resolved.
@@ -462,7 +466,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 2. All code changes get a Code Reviewer review.
 3. Security Analyst runs **ALWAYS** alongside Code Reviewer in Gate 1 (except Hotfixes).
 4. SDET runs **ALWAYS** after reviews pass.
-5. 🔴 Blockers **ALWAYS** loop back: Engineer → Lint Gate → re-trigger the entire gate.
+5. 🔴 Blockers **ALWAYS** loop back: Engineer → Lint Gate → re-trigger the entire gate. **All fix loops are capped at 3** (lint gate retries, review-gate loops) — beyond that, escalate to the user; never loop indefinitely.
 6. Engineer only triggers the Lint Gate when no blocker fixes are pending.
 7. **No human confirmation between agent handoffs** — agents proceed automatically unless a plan has open questions.
 8. Every completed workflow ends with a commit via the `constellation:git-commit` skill.

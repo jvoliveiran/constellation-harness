@@ -133,7 +133,7 @@ Orchestrator (constellation:orchestrator skill)
 | `software-engineer` | sonnet | Implements backend/service plans and changes, test-first (TDD) | full |
 | `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
-| `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only** |
+| `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only, no shell** |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |
@@ -178,12 +178,13 @@ Copy the `constellation-stack-node` structure, swap in skills for the new stack 
 
 ---
 
+## Hard Enforcement
+
+Beyond the prompt-level rules, the harness mechanically enforces its git safety policy via a `PreToolUse` hook (`scripts/guard-git.sh`, active only in initialized projects): no commits or pushes to the main branch, no `--no-verify`, no staging of `.env`/credential files. Fix loops (lint gate, review gates) are capped at 3 — beyond that the orchestrator escalates to you instead of looping. The Code Reviewer has no shell access at all; the diff is supplied in its prompt.
+
 ## Roadmap
 
-- Hook-enforced Lint Gate (PreToolUse/Stop) instead of orchestrator-driven
-- `claude plugin validate` in CI
-- `/constellation:metrics` dashboard command summarizing `workflow-log.jsonl`
-- Additional stack packs
+See [ROADMAP.md](ROADMAP.md) — Tier 2 (close the SDLC loop: post-PR flow, `/constellation:iterate`, `/constellation:metrics`) and Tier 3 (robustness: state validation, harness self-test, cost bounds, versioned distribution).
 
 ## License
 

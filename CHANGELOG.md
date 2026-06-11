@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-11
+
+### Added
+- `guard-git.sh` PreToolUse hook — mechanically blocks commits/pushes to the main branch, `--no-verify`, and staging of `.env`/credential files (active only in initialized projects)
+- CI parity template (`templates/github-actions-ci.yml`) — `/constellation:init` offers to install a workflow mirroring the Lint Gate; recommend branch protection
+- ROADMAP.md documenting Tier 2 (close the SDLC loop) and Tier 3 (robustness) improvements
+
+### Changed
+- All fix loops capped at 3 (lint gate retries, review-gate loops) — beyond that the orchestrator escalates to the user instead of looping indefinitely
+- Malformed gate contracts (no parsable VERDICT) are re-requested once, then treated as BLOCKED — never as a pass
+- Code Reviewer hardened: no Bash (`tools: [Read, Grep, Glob]`) — the orchestrator supplies the diff in the prompt
+
 ## [0.5.1] - 2026-06-10
 
 ### Changed

@@ -1,0 +1,31 @@
+# Constellation Harness — CI parity workflow.
+# Installed by /constellation:init (adapted to the project's commands from
+# .constellation/config.json). Mirrors the harness's Lint Gate so a red PR
+# cannot merge: enable branch protection on the main branch requiring this check.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]   # ← replace with branching.mainBranch if different
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node projects — replace with the project's toolchain setup if different
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Mirror the Lint Gate — replace each with commands.* from .constellation/config.json
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test

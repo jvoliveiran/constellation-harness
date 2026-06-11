@@ -59,7 +59,14 @@ Fill the placeholder sections of `project-map.md` by scanning the repository:
 - **Finding Tests**: glob patterns for the project's unit/integration/e2e tests.
 - **Schema / Data Model**: where the source-of-truth schema lives, or "not applicable".
 
-### 5. Report
+### 5. CI parity (optional, recommended)
+
+If the project's remote is GitHub and `.github/workflows/` has no equivalent quality workflow, offer to install one:
+- Copy `${CLAUDE_PLUGIN_ROOT}/templates/github-actions-ci.yml` to `.github/workflows/constellation-ci.yml`
+- Replace the lint/build/test steps and branch name with the values detected in step 2
+- Recommend enabling branch protection on the main branch requiring this check — so a red PR cannot merge even outside harness sessions
+
+### 6. Report
 
 - Summarize the generated config (commands, account, main branch, stack skills).
 - If a stack was detected, recommend installing/enabling the matching stack plugin (`constellation-stack-node` for backend Node, `constellation-stack-frontend` for web UIs) if it isn't already.
