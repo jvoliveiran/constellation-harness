@@ -52,20 +52,23 @@ Determine the **workflow track** before picking the first agent — it defines t
 
 ```
 1. Is production broken RIGHT NOW and the user says so?        → Hotfix
-2. Explicit exploration/research with no clear deliverable?     → Spike
-3. Scope analysis (git diff --stat if changes exist, else estimate):
+2. Product discovery — brainstorming ideas, deciding WHAT to
+   build, PRDs, roadmaps, prioritization (no committed code)?   → Discovery
+3. Explicit technical exploration/research, no deliverable?     → Spike
+4. Scope analysis (git diff --stat if changes exist, else estimate):
    a. 3+ files, new module, or architectural decisions?         → Planned Work
    b. Bounded change to 1-2 files, no architectural ambiguity?  → Tweak
-4. Unclear → ask: "Tweak or plan? How many files/modules will this touch?"
+5. Unclear → ask: "Tweak or plan? How many files/modules will this touch?"
 ```
 
-Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: …"*.
+Explicit overrides: *"hotfix: …"* / *"discovery: …"* / *"spike: …"* / *"tweak: …"* / *"plan: …"*.
 
 ### Agent routing
 
 | Agent (`subagent_type`) | Invoke when the request is… |
 |---|---|
-| `constellation:software-architect` | what/how to build, architecture comparison, brainstorm, cost/tradeoffs, formal plan. Signals: *"should we", "what's the best way", "how would you design", "brainstorm", "plan for", "compare", "create a plan", "advise"* |
+| `constellation:product-manager` | WHAT to build and why — product brainstorming, idea triage, PRDs, roadmaps, prioritization, scope decisions. Signals: *"brainstorm ideas", "what should we build", "PRD", "roadmap", "prioritize", "MVP/MLP", "is this worth building", "product"* |
+| `constellation:software-architect` | HOW to build — architecture comparison, technical brainstorm, cost/tradeoffs, formal plan. Signals: *"what's the best way", "how would you design", "plan for", "compare", "create a plan", "advise"* |
 | `constellation:software-engineer` | write/implement/fix/refactor specific backend/service code; implement an approved plan. Signals: *"implement", "build the", "fix this", "configure", "create a file", "generate the"* |
 | `constellation:frontend-engineer` | implement frontend/UI work — components, pages, forms, layouts, styling, client state. Signals: *"build this page/component", "implement the form", "fix this UI", "style", "responsive"* |
 | `constellation:ui-ux-designer` | design-led frontend work — dashboards, landing pages, redesigns, visual polish, design systems. Signals: *"design", "redesign", "beautify", "landing page", "dashboard layout", "make it look", "hero section", "pricing page"* |
@@ -86,7 +89,8 @@ Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: 
 
 ### Tiebreaker for ambiguous requests (first yes wins)
 
-1. Architectural decision unmade OR investigation requested? → Architect
+0. Product question — WHAT to build, for whom, why, in what order (value, scope, prioritization)? → Product Manager
+1. Architectural decision unmade OR technical investigation requested? → Architect
 2. Plan ready to implement OR bug fix? → Engineer (per [Choosing the Engineer](#choosing-the-engineer))
 3. Staged, uncommitted changes to review? → Code Reviewer
 4. Security concern? → Security Analyst
@@ -95,7 +99,7 @@ Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: 
 7. Documentation? → Technical Writer
 8. None → ask the user.
 
-When in doubt, prefer the Software Architect. An unnecessary plan costs only time; code written without a plan costs rework.
+When in doubt: product ambiguity (what/why) → Product Manager; technical ambiguity (how) → Software Architect. An unnecessary plan costs only time; code written without a plan costs rework.
 
 ---
 
@@ -106,8 +110,10 @@ Agent model assignments depend on the complexity of the current change. Before s
 | Scope | Lines Changed | Modules Touched | Model Assignment |
 |---|---|---|---|
 | **Small** | < 50 | 1 | Sonnet for all agents |
-| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer; Opus for Reviewer/Security/Architect |
-| **Large** | > 200 | 4+ | Opus for Reviewer/Security/Architect; Sonnet for Engineer/SDET/DevOps/Writer |
+| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer; Opus for Reviewer/Security/Architect/PM |
+| **Large** | > 200 | 4+ | Opus for Reviewer/Security/Architect/PM; Sonnet for Engineer/SDET/DevOps/Writer |
+
+The Product Manager defaults to Opus regardless of size — scope decisions are leverage, not labor.
 
 Overrides:
 - Auth, RBAC, or security-sensitive code → always Opus for Security Analyst.
@@ -129,7 +135,9 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
                                                       ↑ parallel gate 1        ↑ parallel gate 2
 ```
 
-1. Software Architect produces a plan in `.constellation/plans/`.
+1. Planning:
+   - **Product-scoped work** (a feature from a PRD or a user feature request): the **Product Manager drives, the Software Architect pairs**. Run the pairing loop (max 3 rounds): PM produces the scope draft (Product Scope contract) → Architect reviews feasibility (Feasibility contract) → PM responds (descope/accept/hold) → repeat until both return `AGREED`. The Architect then writes the plan to `.constellation/plans/` with the PM's BDD criteria preserved and `scope-approved-by: product-manager, software-architect` in the front-matter. No convergence after 3 rounds → present both positions to the user as open questions.
+   - **Purely technical work** (refactors, infrastructure, performance, migrations): the Software Architect plans alone.
    **→ Save state**: `{ step: "architect", track: "planned" }`
 2. Plan ready: no open questions → hand to DevOps Engineer **immediately** to create the branch. Open questions → present to the user; once resolved, hand over **immediately**.
    **→ Save state**: `{ step: "devops-branch" }`
@@ -183,6 +191,18 @@ Architect → Engineer → Document findings
 2. Engineer explores, prototypes, documents findings in `.constellation/spikes/` — **NOT** production code.
 3. No review, testing, branching, or commit — spikes are throwaway. Findings feed a future plan.
    **→ Log**: `{ event: "workflow-complete", track: "spike" }`
+
+### Discovery
+
+```
+PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts
+```
+
+1. The Product Manager leads: reviews the parking lot for fired triggers, brainstorms/narrows with the user, and produces product artifacts in `.constellation/product/` (PRD, roadmap update, parking-lot entries).
+   **→ Save state**: `{ step: "product-manager", track: "discovery" }`
+2. If a PRD or project definition was produced, the Software Architect runs a lightweight feasibility pass (Feasibility contract) — flagging infeasible or disproportionate scope before it hardens into a roadmap commitment.
+3. No branch, no code, no gates — outputs are markdown product artifacts only. Implementation later enters **Planned Work** referencing the PRD (where the full PM × Architect pairing happens).
+   **→ Log**: `{ event: "workflow-complete", track: "discovery" }`
 
 ---
 
@@ -392,7 +412,7 @@ version: 003
 ---
 ```
 
-1. Architect sets `draft` on creation, `approved` when open questions are resolved.
+1. Architect sets `draft` on creation, `approved` when open questions are resolved. For product-scoped plans, `approved` additionally requires the PM × Architect pairing to have converged — recorded as `scope-approved-by: product-manager, software-architect` in the front-matter.
 2. Engineer sets `in-progress` when implementation begins.
 3. Architect sets `completed` and records the commit SHA after final verification.
 4. Plans `completed` for 30+ days move to `.constellation/plans/archive/` (Technical Writer).

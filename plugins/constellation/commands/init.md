@@ -42,6 +42,10 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 ├── spikes/.gitkeep
 ├── adrs/.gitkeep
 ├── designs/.gitkeep            ← design rationale docs from ui-ux-designer (frontend projects)
+├── product/                    ← product-manager artifacts
+│   ├── prds/.gitkeep
+│   ├── roadmap.md              ← from templates/roadmap.md, verbatim
+│   └── parking-lot.md          ← from templates/parking-lot.md, verbatim
 ├── state/.gitkeep
 ├── metrics/.gitkeep
 └── .gitignore               ← from templates/gitignore, verbatim

@@ -13,7 +13,7 @@ constellation-harness/                 (plugin marketplace)
 ├── .claude-plugin/marketplace.json
 └── plugins/
     ├── constellation/                 CORE — universal harness
-    │   ├── agents/                    9 persona subagents
+    │   ├── agents/                    10 persona subagents
     │   ├── commands/                  /constellation:* workflow commands
     │   ├── skills/                    orchestrator + generic delivery skills
     │   ├── templates/                 files scaffolded by /constellation:init
@@ -104,10 +104,13 @@ Orchestrator (constellation:orchestrator skill)
 
 | Track | Pipeline | Trigger |
 |---|---|---|
-| **Planned Work** | Architect → DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → PR | 3+ files / new module / architecture, or `plan: …` |
+| **Discovery** | PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts in `.constellation/product/` | product ideas, PRDs, roadmaps, prioritization, or `discovery: …` |
+| **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → PR | 3+ files / new module / architecture, or `plan: …` |
 | **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → PR | bounded 1-2 file change, or `tweak: …` |
 | **Hotfix** | DevOps branch → Engineer → Lint Gate → Reviewer → SDET → Commit → PR | production broken, or `hotfix: …` |
 | **Spike** | Architect → Engineer → findings doc in `.constellation/spikes/` | research, or `spike: …` |
+
+\* Product-scoped work only: the Product Manager drives scope (MLP slice, BDD criteria, metrics) and the Architect pairs on feasibility — a bounded convergence loop (max 3 rounds); the plan is approved only when both sign. Purely technical work skips the pairing and the Architect plans alone.
 
 ### Quality machinery
 
@@ -125,7 +128,8 @@ Orchestrator (constellation:orchestrator skill)
 
 | Agent | Model | Role | Gate-mode tools |
 |---|---|---|---|
-| `software-architect` | opus | Plans with acceptance criteria, risks, validation | full |
+| `product-manager` | opus | MLP scope, value loop, PRDs, roadmaps, parking lot — drives the planning phase | full |
+| `software-architect` | opus | Plans with acceptance criteria, risks, validation — pairs with PM on feasibility | full |
 | `software-engineer` | sonnet | Implements backend/service plans and changes, test-first (TDD) | full |
 | `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |

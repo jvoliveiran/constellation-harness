@@ -23,7 +23,8 @@ RULES
 AGENTS (spawn via the Agent tool using the listed subagent_type)
 | Agent | subagent_type | Routes when the request involves |
 |---|---|---|
-| Software Architect | constellation:software-architect | plans, architecture, brainstorming — "should we", "how would you design", "create a plan", "compare" |
+| Product Manager | constellation:product-manager | WHAT to build/why — product brainstorms, idea triage, PRDs, roadmaps, prioritization, "MVP/MLP", scope decisions |
+| Software Architect | constellation:software-architect | HOW to build — architecture, technical brainstorms, "how would you design", "create a plan", "compare" |
 | Software Engineer | constellation:software-engineer | implement, build, fix, refactor backend/service code — executing an approved plan or bounded change |
 | Frontend Engineer | constellation:frontend-engineer | implement frontend/UI work — components, pages, forms, styling, client state (use when config.stack has frontend skills) |
 | UI/UX Designer | constellation:ui-ux-designer | design-led frontend work — "design", "redesign", "beautify", dashboards, landing pages, visual polish |
@@ -35,14 +36,15 @@ AGENTS (spawn via the Agent tool using the listed subagent_type)
 
 WORKFLOW TRACK — decide before picking the first agent
 1. Production broken RIGHT NOW and the user says so → Hotfix
-2. Exploration/research with no production deliverable → Spike
-3. Touches 3+ files, new module, or architectural decision → Planned Work
-4. Bounded change to 1–2 files, no architectural ambiguity → Tweak
+2. Product discovery — brainstorming ideas, WHAT to build, PRDs, roadmaps, prioritization → Discovery (PM-led)
+3. Technical exploration/research with no production deliverable → Spike
+4. Touches 3+ files, new module, or architectural decision → Planned Work (product-scoped: PM drives planning, Architect pairs — plan valid only when both AGREE)
+5. Bounded change to 1–2 files, no architectural ambiguity → Tweak
 If unclear, ask: "Tweak or plan? How many files/modules will this touch?"
-Explicit overrides: "hotfix: …", "spike: …", "tweak: …", "plan: …".
+Explicit overrides: "hotfix: …", "discovery: …", "spike: …", "tweak: …", "plan: …".
 
 TIEBREAKER for ambiguous requests (first yes wins)
-architectural decision unmade or investigation → Architect; plan ready or bug fix → Engineer; staged/uncommitted changes to review → Code Reviewer; security concern → Security Analyst; validation/test request → SDET; branches/PRs/releases → DevOps; documentation → Writer. When in doubt, prefer Architect — an unnecessary plan costs minutes, unplanned code costs rework.
+product question (what/for whom/why, prioritization) → Product Manager; architectural decision unmade or technical investigation → Architect; plan ready or bug fix → Engineer; staged/uncommitted changes to review → Code Reviewer; security concern → Security Analyst; validation/test request → SDET; branches/PRs/releases → DevOps; documentation → Writer. When in doubt: product ambiguity → PM, technical ambiguity → Architect — an unnecessary plan costs minutes, unplanned code costs rework.
 
 COMMANDS
 /constellation:status, /constellation:dry-run, /constellation:abort, /constellation:resume, /constellation:skip-gate, /constellation:init.

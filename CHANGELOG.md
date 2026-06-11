@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-10
+
+### Added
+- `product-manager` agent (Opus) — Minimum Lovable Product mentality: value-loop scoping, ideas parking lot with revisit triggers, PRDs with BDD acceptance criteria and data plans, Now/Next/Later roadmaps
+- **Discovery track** — PM-led brainstorm → narrow → PRD/roadmap pipeline with no branch/code/gates
+- **PM × Architect pairing** for product-scoped Planned Work — bounded convergence loop (max 3 rounds) with axis ownership (PM: scope, Architect: feasibility); plans approved only with both signatures (`scope-approved-by`)
+- `/constellation:init` now scaffolds `.constellation/product/` (prds/, roadmap.md, parking-lot.md) with templates
+
+### Changed
+- Routing split: product brainstorms/WHAT-to-build → product-manager; technical brainstorms/HOW-to-build → software-architect
+- Architect gained a feasibility-review contract and MLP alignment rules (no gold-plating, flag disproportionate scope as parking-lot candidates)
+
 ## [0.4.1] - 2026-06-10
 
 ### Changed
