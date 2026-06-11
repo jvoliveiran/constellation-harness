@@ -25,7 +25,9 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 - **GitHub account**: run `gh api user --jq .login` (fall back to asking the user if `gh` is not authenticated).
 - **Main branch**: `git remote show origin` (HEAD branch) or default `main`.
 - **Schema artifact**: look for a generated API schema (e.g. `src/schema.gql`, `schema.graphql`, `openapi.yaml`). Set `schemaPath` if found, else `null`.
-- **Stack**: detect frameworks from dependencies (e.g. typescript, nestjs, graphql, apollo federation, prisma). Map to available stack skill names (e.g. from the `constellation-stack-node` plugin: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`). Only list skills whose technology is actually present.
+- **Stack**: detect frameworks from dependencies and map to available stack skill names. Only list skills whose technology is actually present:
+  - Backend Node (from `constellation-stack-node`): `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`
+  - Frontend (from `constellation-stack-frontend`): `frontend-design` — include when the project is a web UI (react, vue, next, vite, tailwind, etc.). Frontend projects also typically get `typescript` and `graphql` when those are present.
 
 ### 3. Scaffold `.constellation/`
 
@@ -55,6 +57,6 @@ Fill the placeholder sections of `project-map.md` by scanning the repository:
 ### 5. Report
 
 - Summarize the generated config (commands, account, main branch, stack skills).
-- If a stack was detected, recommend installing/enabling the matching stack plugin (e.g. `constellation-stack-node`) if it isn't already.
+- If a stack was detected, recommend installing/enabling the matching stack plugin (`constellation-stack-node` for backend Node, `constellation-stack-frontend` for web UIs) if it isn't already.
 - Remind the user: the harness activates in this project on the next session start (or immediately for the rest of this session — treat the orchestrator routing policy as active from now on).
 - Suggest committing `.constellation/` (minus the gitignored `state/` and `metrics/`) so teammates share the same configuration.

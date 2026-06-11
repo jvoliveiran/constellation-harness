@@ -9,13 +9,19 @@
     {
       "name": "constellation",
       "source": "./plugins/constellation",
-      "description": "Core harness: orchestrator, 7 persona agents, quality gates, workflow commands, state and metrics.",
-      "version": "0.1.0"
+      "description": "Core harness: orchestrator, 8 persona agents, quality gates, workflow commands, state and metrics.",
+      "version": "0.2.0"
     },
     {
       "name": "constellation-stack-node",
       "source": "./plugins/constellation-stack-node",
       "description": "Stack skill pack: TypeScript, NestJS, GraphQL (+ Apollo Federation 2), Prisma, observability, error handling, security checklist, schema compatibility.",
+      "version": "0.1.0"
+    },
+    {
+      "name": "constellation-stack-frontend",
+      "source": "./plugins/constellation-stack-frontend",
+      "description": "Stack skill pack: distinctive, production-grade frontend design guidance (typography, color, motion, composition).",
       "version": "0.1.0"
     }
   ]

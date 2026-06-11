@@ -66,17 +66,25 @@ Explicit overrides: *"hotfix: …"* / *"spike: …"* / *"tweak: …"* / *"plan: 
 | Agent (`subagent_type`) | Invoke when the request is… |
 |---|---|
 | `constellation:software-architect` | what/how to build, architecture comparison, brainstorm, cost/tradeoffs, formal plan. Signals: *"should we", "what's the best way", "how would you design", "brainstorm", "plan for", "compare", "create a plan", "advise"* |
-| `constellation:software-engineer` | write/implement/fix/refactor specific code; implement an approved plan. Signals: *"implement", "build the", "fix this", "configure", "create a file", "generate the"* |
+| `constellation:software-engineer` | write/implement/fix/refactor specific backend/service code; implement an approved plan. Signals: *"implement", "build the", "fix this", "configure", "create a file", "generate the"* |
+| `constellation:frontend-engineer` | implement frontend/UI work — components, pages, forms, layouts, styling, client state. Signals: *"build this page/component", "implement the form", "fix this UI", "style", "responsive"* |
 | `constellation:code-reviewer` | review staged or locally committed changes. Signals: *"review code changes", "check my changes", "code review"* |
 | `constellation:security-analyst` | security review/audit, vulnerabilities, hardening. Signals: *"security review", "is this secure", "OWASP", "harden", "attack surface"* |
 | `constellation:sdet` | add/review/improve tests, explore untested paths. Signals: *"add tests", "run tests", "are we testing", "test this"* |
 | `constellation:devops-engineer` | branches, push, PRs, CI/CD, releases, CHANGELOG. Signals: *"create a branch", "push", "create PR", "deploy", "changelog"* |
 | `constellation:technical-writer` | documentation, README, ADRs. Signals: *"update docs", "document this", "write an ADR"* |
 
+### Choosing the Engineer
+
+"Engineer" in every workflow track means the engineer matching the work:
+- Frontend/UI work (components, pages, styling, client state) or a project whose `config.stack` includes frontend skills (e.g. `frontend-design`) → `constellation:frontend-engineer`
+- Backend/service/CLI work → `constellation:software-engineer`
+- Full-stack changes → split per area, or use both engineers sequentially with a shared plan
+
 ### Tiebreaker for ambiguous requests (first yes wins)
 
 1. Architectural decision unmade OR investigation requested? → Architect
-2. Plan ready to implement OR bug fix? → Engineer
+2. Plan ready to implement OR bug fix? → Engineer (per [Choosing the Engineer](#choosing-the-engineer))
 3. Staged, uncommitted changes to review? → Code Reviewer
 4. Security concern? → Security Analyst
 5. Validation/test request? → SDET

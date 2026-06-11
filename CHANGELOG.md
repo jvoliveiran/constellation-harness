@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
+### Added
+- `frontend-engineer` agent in the core plugin — senior frontend persona (component architecture, state management, accessibility, design quality), extracted from the guardei-ui `.agentic` workflow
+- `constellation-stack-frontend` skill pack with the `frontend-design` skill (distinctive, production-grade UI aesthetics)
+- Orchestrator routing: engineer selection by project stack (frontend vs backend)
+
 ## [0.1.0] - 2026-06-10
 
 ### Added

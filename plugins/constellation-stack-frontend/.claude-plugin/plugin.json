@@ -1,0 +1,19 @@
+{
+  "name": "constellation-stack-frontend",
+  "displayName": "Constellation Stack Pack — Frontend",
+  "version": "0.1.0",
+  "description": "Frontend skill pack for the Constellation Harness: distinctive, production-grade UI design guidance (typography, color, motion, composition) that avoids generic AI aesthetics.",
+  "author": {
+    "name": "João Oliveira",
+    "email": "jvoliveiran@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "frontend",
+    "design",
+    "ui",
+    "css",
+    "react",
+    "skills"
+  ]
+}

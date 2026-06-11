@@ -13,13 +13,16 @@ constellation-harness/                 (plugin marketplace)
 ├── .claude-plugin/marketplace.json
 └── plugins/
     ├── constellation/                 CORE — universal harness
-    │   ├── agents/                    7 persona subagents
+    │   ├── agents/                    8 persona subagents
     │   ├── commands/                  /constellation:* workflow commands
     │   ├── skills/                    orchestrator + generic delivery skills
     │   ├── templates/                 files scaffolded by /constellation:init
     │   ├── hooks/ + scripts/          SessionStart activation (gated per project)
     │   └── .claude-plugin/plugin.json
-    └── constellation-stack-node/      OPT-IN — Node/NestJS/GraphQL/Prisma skills
+    ├── constellation-stack-node/      OPT-IN — Node/NestJS/GraphQL/Prisma skills
+    │   ├── skills/
+    │   └── .claude-plugin/plugin.json
+    └── constellation-stack-frontend/  OPT-IN — frontend design skills
         ├── skills/
         └── .claude-plugin/plugin.json
 ```
@@ -36,8 +39,11 @@ constellation-harness/                 (plugin marketplace)
 # 2. Install the core harness
 /plugin install constellation@constellation
 
-# 3. (Node/NestJS/GraphQL/Prisma projects) install the stack pack
+# 3. (Node/NestJS/GraphQL/Prisma projects) install the backend stack pack
 /plugin install constellation-stack-node@constellation
+
+# 4. (Web UI projects) install the frontend stack pack
+/plugin install constellation-stack-frontend@constellation
 ```
 
 ### Per-project activation (two gates)
@@ -119,7 +125,8 @@ Orchestrator (constellation:orchestrator skill)
 | Agent | Model | Role | Gate-mode tools |
 |---|---|---|---|
 | `software-architect` | opus | Plans with acceptance criteria, risks, validation | full |
-| `software-engineer` | sonnet | Implements plans/changes with engineering discipline | full |
+| `software-engineer` | sonnet | Implements backend/service plans and changes | full |
+| `frontend-engineer` | sonnet | Implements UI work — components, state, accessibility, design quality | full |
 | `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only** |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
@@ -143,6 +150,7 @@ Models are reassigned dynamically per change complexity (small → all Sonnet; m
 
 **Core (`constellation`)**: `orchestrator`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`.
 **Stack pack (`constellation-stack-node`)**: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`.
+**Stack pack (`constellation-stack-frontend`)**: `frontend-design` (distinctive, production-grade UI aesthetics — typography, color, motion, composition).
 
 Agents load stack skills dynamically based on `config.stack` — the core stays stack-agnostic.
 
