@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multi-LLM validation design spike (`docs/spikes/multi-llm-validation.md`).
 
 ### Changed
+- Cross-model validation: recommended/default model switched from `openai/gpt-5.2-codex`
+  to the free-tier `google/gemini-3-flash-preview` (Google AI Studio, no card, ~1,500
+  req/day) — config template, wrapper fallback, init guidance, and spike updated; free
+  alternatives (opencode Zen, OpenRouter `:free`, local) documented in the spike's §17
 - README installation section reworked: added a **Prerequisites** subsection (`jq` for the git-guard hook, authenticated `gh`), an explicit "install once per machine / enable + init once per repo" scoping note, copy-paste `enabledPlugins` examples for backend vs. frontend repos, and clarified that `/constellation:init` auto-detects `config.stack`
 
 ## [0.6.0] - 2026-06-11

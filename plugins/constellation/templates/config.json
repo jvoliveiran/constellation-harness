@@ -16,7 +16,7 @@
   "stack": [],
   "crossModelValidation": {
     "enabled": false,
-    "model": "openai/gpt-5.2-codex",
+    "model": "google/gemini-3-flash-preview",
     "effort": "",
     "steps": ["code-review"],
     "reviewLens": "same",

@@ -85,8 +85,13 @@ If the project's remote is GitHub and `.github/workflows/` has no equivalent qua
   ```
   If `opencode` is absent, or the probe returns `model_not_found` / no text, **warn the
   user** and leave `enabled:false` — the gate would only ever infra-skip otherwise.
-- Recommend a model the project can actually call (e.g. one already used manually) and a
-  generous `timeoutSec` (reasoning/codex models can be slow or throttled).
+- Recommend a model the project can actually call and a generous `timeoutSec`
+  (reasoning/codex models can be slow or throttled). Recommended starting model:
+  **`google/gemini-3-flash-preview`** — free via the Google AI Studio tier (no card;
+  ~1,500 req/day), a genuine second family, and needs no `effort` value. Requires
+  `opencode auth login` → Google with an AI Studio key first; fallbacks if the preview id
+  is not callable: `google/gemini-3.5-flash`, `google/gemini-2.5-flash`. See the
+  multi-llm spike §17 for alternatives (opencode Zen free models, paid GPT).
 
 ### 6. Report
 

@@ -351,8 +351,8 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 
 **Optional, off by default.** When `.constellation/config.json` → `crossModelValidation.enabled`
 is `true` and its `steps` include `"code-review"`, Gate 1 gains a **third reviewer**:
-`constellation:cross-model-reviewer`, which runs a different model family (e.g. GPT via the
-local `opencode` CLI) over the **same diff** the Opus code-reviewer sees. Spawn it in the
+`constellation:cross-model-reviewer`, which runs a different model family (e.g. Gemini or
+GPT via the local `opencode` CLI) over the **same diff** the Opus code-reviewer sees. Spawn it in the
 **same message** as the two Opus reviewers (§Parallel Execution → Gate 1).
 
 If the key is absent or `enabled:false`, do nothing different — Gate 1 is the standard

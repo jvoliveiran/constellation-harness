@@ -65,7 +65,7 @@ The cost — extra latency, extra API spend, and a more complex merge — is why
 | Decision | Choice | Rationale |
 |---|---|---|
 | Backend | **local `opencode` only** | Simplicity; single CLI the harness controls; codex dropped |
-| Model family | **GPT via opencode** | Only OpenAI is authed in the user's opencode; different family from Opus |
+| Model family | **GPT via opencode** — superseded by **Gemini free tier** (§17) | Only OpenAI was authed at design time; §17 moves the recommendation to a free model |
 | Merge policy | **Blocking** | External 🔴 gates the pipeline like an Opus 🔴 |
 | Disagreement | **Escalate to user** | A cross-model-only blocker is human-adjudicated, never auto-looped |
 | Review lens | **Same ground** as Opus code-reviewer | Maximizes agreement signal; makes "unconfirmed" meaningful |
@@ -104,13 +104,13 @@ discovery are untouched.
 ```jsonc
 "crossModelValidation": {
   "enabled": false,                 // master switch — default OFF
-  "model": "openai/gpt-5.2-codex",  // opencode "provider/model" — verified accessible here (§16)
-  "effort": "high",                 // opencode --variant (reasoning effort); optional
+  "model": "google/gemini-3-flash-preview", // opencode "provider/model" — free-tier recommendation (§17); live-probed at init
+  "effort": "",                     // opencode --variant (reasoning effort); GPT-oriented knob — leave unset for Gemini
   "steps": ["code-review"],         // phase 1: code-review only. "plan-review" = phase 2
   "reviewLens": "same",             // "same" = review the same scope as Opus code-reviewer
   "onUnconfirmedBlocker": "escalate", // "escalate" | "loop"
   "onInfraFailure": "skip",         // "skip" (log + proceed) — never "block"
-  "timeoutSec": 150                 // hard cap on the opencode call
+  "timeoutSec": 180                 // hard cap on the opencode call
 }
 ```
 
@@ -311,7 +311,8 @@ it from day one.
    diffs on fix passes keep it bounded.
 3. **Single-family today.** Only OpenAI is authed in opencode, so "multi-model" currently
    means Claude + GPT. A third family (Gemini/DeepSeek/local) just means authing another
-   provider in opencode — the config's `model` already accommodates it.
+   provider in opencode — the config's `model` already accommodates it. **Update
+   (2026-07-01):** the recommended default is now the free-tier **Gemini** option — see §17.
 
 ---
 
@@ -347,6 +348,10 @@ it from day one.
       captured. Run once throttling clears — flag on vs off across real diffs; record
       extra loops, escalations, and genuine defects Opus missed. (Non-model paths —
       usage/missing-opencode/timeout→infra-skip — and JSONL parsing ARE verified.)
+      **Update (2026-07-01):** the free-tier Gemini option (§17) removes this blocker —
+      1,500 requests/day is ample for the A/B run.
+- [x] Free-model option researched and documented; recommendation and config default
+      switched to `google/gemini-3-flash-preview` (§17).
 
 **Design changes made during the build (differ from earlier sections):**
 - The wrapper **inlines the diff into the prompt** and runs in a throwaway `--dir`,
@@ -392,6 +397,9 @@ it from day one.
    `effort: "high"` for a blocking reviewer, but nothing is pinned. `init` live-probes
    whatever the user set (§13). Rationale: a hardcoded default would silently break on any
    project without that entitlement — the exact failure the other 9 models exhibit here.
+   **Update (2026-07-01):** the documented recommendation moved to the free-tier
+   `google/gemini-3-flash-preview` — see §17. The live-probe rationale is unchanged and
+   applies identically to Gemini.
 
 ---
 
@@ -434,4 +442,64 @@ known-unknowns to settled facts and surfaced one blocking issue.
   no hard-coded default, and why `onInfraFailure: skip` is load-bearing (`model_not_found`
   arrives as a normal `error` event and must degrade to the two-reviewer flow, never block
   delivery).
-```
+
+---
+
+## 17. Addendum (2026-07-01) — free-model option: Gemini via Google AI Studio
+
+The design is model-agnostic by construction (§15.3: required `model`, no baked-in
+default, live-probe at init), so switching away from a paid GPT model is a config-only
+change. This addendum records the research into **free** models callable through
+opencode, and moves the documented recommendation to Gemini.
+
+### Recommendation — `google/gemini-3-flash-preview`
+
+- **Cost:** Google AI Studio free tier — no credit card. As of mid-2026: ~10 req/min,
+  1,500 req/day for Gemini 3 Flash, with the 1M context window. Gate 1 uses one call per
+  review pass plus up to 3 fix loops — orders of magnitude below the quota. It also
+  unblocks the pending A/B evaluation (§14), which was stalled on `gpt-5.2-codex`
+  throttling.
+- **Family:** Gemini ≠ Claude ≠ GPT — a genuine second family, which is the whole point
+  (§2). Quality is strong enough for a *blocking* reviewer, where the false-🔴 rate
+  matters (§8); `onUnconfirmedBlocker: "escalate"` remains the safety valve for the
+  marginal blockers a Flash-class model will raise more often than a codex-class one.
+- **Model id:** the models.dev catalog (opencode's source) has **no plain
+  `gemini-3-flash`** — the id is **`gemini-3-flash-preview`**. Stable fallbacks if the
+  preview id stops resolving: `google/gemini-3.5-flash`, `google/gemini-2.5-flash`. The
+  init live-probe (§13) settles which one is callable — same mechanism as before.
+- **`effort`:** leave unset. `--variant` is a GPT/reasoning-effort knob; the wrapper
+  already omits it when empty.
+
+**Setup (one-time, per machine):**
+1. Create an API key at Google AI Studio (aistudio.google.com) on a **billing-free**
+   project.
+2. `opencode auth login` → Google → paste the key. (`opencode models` only lists
+   providers with credentials — `google/*` appears after this step.)
+3. Set `crossModelValidation.model` and run the init live-probe.
+
+**Caveats:**
+- Since April 2026 the free tier covers **Flash / Flash-Lite only** — Pro models are
+  paid-only.
+- Enabling billing on the Google Cloud project **deletes the free tier for that
+  project** (unlike most GCP services) — keep the key on a project with billing off.
+- Google may use free-tier traffic for training; diffs are sent to the endpoint. Same
+  class of caveat as every free option below — do not enable on repos where that is
+  unacceptable.
+
+### Alternatives considered
+
+| Option | Models | Verdict |
+|---|---|---|
+| **opencode Zen free tier** | `opencode/deepseek-v4-flash-free`, `opencode/nemotron-3-ultra-free`, `opencode/big-pickle`, `opencode/mimo-v2.5-free`, `opencode/north-mini-code-free` (verified in the local catalog) | Lowest friction (native `/connect`), but beta/promo models that rotate without notice, train on submitted data, and Zen signup asks for billing details. Fine as a fallback; `model_not_found` → infra-skip already absorbs rotation. |
+| **OpenRouter `:free`** | rotating `:free` suffix models (~20 req/min, ~200 req/day) | Roster churns too fast for a standing gate dependency (e.g. Qwen3-Coder's free endpoint vanished June 2026). Experimentation only. |
+| **Local (Ollama / LM Studio)** | any local model | Truly free and private, but not installed on this machine; laptop-class models raise the false-🔴 rate §8 warns about and strain `timeoutSec` on large diffs. Only worth it when data privacy is a hard requirement. |
+
+### What changed where
+
+- `templates/config.json` — `crossModelValidation.model` default →
+  `google/gemini-3-flash-preview` (still `enabled:false`).
+- `templates/opencode-review.sh` — fallback model id updated to match.
+- `commands/init.md` §5b — free-tier Gemini named as the recommended starting model.
+- README — "e.g. GPT" mentions widened to "e.g. Gemini or GPT".
+- §4, §12.3, §14, §15.3 above — update notes pointing here. §16's GPT entitlement
+  findings remain valid history and still motivate the live-probe.

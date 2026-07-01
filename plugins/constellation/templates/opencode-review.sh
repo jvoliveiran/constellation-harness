@@ -11,7 +11,7 @@
 #
 #   <input-file>   file whose content is reviewed (a unified diff, or a plan)
 #   <prompt-file>  file containing the review instructions + output contract
-#   model          opencode "provider/model" id (default: openai/gpt-5.2-codex)
+#   model          opencode "provider/model" id (default: google/gemini-3-flash-preview)
 #   effort         reasoning effort -> opencode --variant (default: unset)
 #   timeoutSec     hard cap on the opencode call (default: 180). Reasoning/codex
 #                  models can be slow or provider-throttled — a too-low cap just
@@ -37,7 +37,7 @@ set -uo pipefail
 
 INPUT_FILE="${1-}"
 PROMPT_FILE="${2-}"
-MODEL="${3:-openai/gpt-5.2-codex}"
+MODEL="${3:-google/gemini-3-flash-preview}"
 EFFORT="${4-}"
 TIMEOUT="${5:-180}"
 

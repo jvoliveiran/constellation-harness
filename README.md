@@ -140,7 +140,7 @@ Orchestrator (constellation:orchestrator skill)
 - **Parallel gates** — reviewers are spawned concurrently in a single message; blockers from both are merged into one fix list.
 - **Incremental review** — fix passes send reviewers only the fix delta plus the original blocker list, not the whole diff again.
 - **Review memory** — recurring blocker patterns accumulate in `.constellation/memory/review-patterns.md`; the Engineer self-checks against them before each gate, reducing loops over time.
-- **Cross-model validation (optional, off by default)** — when `crossModelValidation.enabled` is set, Gate 1 adds a third reviewer that runs a different model family (e.g. GPT via the local [`opencode`](https://opencode.ai) CLI) over the same diff. Blocking merge: confirmed and Opus-only blockers loop as usual; a cross-model-only blocker **escalates to you** rather than auto-looping. Infrastructure failures (opencode missing/slow/throttled) **skip and proceed** on the Opus reviews — they never block delivery. See [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
+- **Cross-model validation (optional, off by default)** — when `crossModelValidation.enabled` is set, Gate 1 adds a third reviewer that runs a different model family (e.g. Gemini — free via Google AI Studio — or GPT, through the local [`opencode`](https://opencode.ai) CLI) over the same diff. Blocking merge: confirmed and Opus-only blockers loop as usual; a cross-model-only blocker **escalates to you** rather than auto-looping. Infrastructure failures (opencode missing/slow/throttled) **skip and proceed** on the Opus reviews — they never block delivery. See [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
 - **State & resume** — every milestone is saved to `.constellation/state/current-workflow.json`; interrupted workflows resume with `/constellation:resume`.
 - **Metrics** — every event appends to `.constellation/metrics/workflow-log.jsonl` for pattern analysis.
 
@@ -156,7 +156,7 @@ Orchestrator (constellation:orchestrator skill)
 | `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
 | `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only, no shell** |
-| `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
+| `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (e.g. Gemini or GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |

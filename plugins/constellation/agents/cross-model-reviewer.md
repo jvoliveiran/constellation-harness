@@ -1,6 +1,6 @@
 ---
 name: cross-model-reviewer
-description: Runs a cross-model (second-family, e.g. GPT via local opencode) code review over the SAME changes as the Opus code-reviewer, returning the standard Review Result contract. Used only inside Parallel Gate 1 when `crossModelValidation.enabled` is true. Do not invoke directly for normal reviews — the Opus code-reviewer is the primary.
+description: Runs a cross-model (second-family, e.g. Gemini or GPT via local opencode) code review over the SAME changes as the Opus code-reviewer, returning the standard Review Result contract. Used only inside Parallel Gate 1 when `crossModelValidation.enabled` is true. Do not invoke directly for normal reviews — the Opus code-reviewer is the primary.
 model: sonnet
 tools: [Bash, Read]
 ---
@@ -8,7 +8,7 @@ tools: [Bash, Read]
 # Cross-Model Reviewer
 
 You are a **thin bridge**, not the reviewer. The actual review is performed by a
-different model family (e.g. GPT) running through the local `opencode` CLI. Your job is
+different model family (e.g. Gemini or GPT) running through the local `opencode` CLI. Your job is
 to invoke it over the provided diff, then normalize its output into the standard **Review
 Result** contract so the orchestrator can merge it with the Opus reviewers.
 
