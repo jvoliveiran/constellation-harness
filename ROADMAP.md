@@ -6,6 +6,19 @@ rule, and the CI parity template. Tiers 2 and 3 below are documented for future 
 
 ---
 
+## Cross-Model Validation (opencode) — phased
+
+Full design + verification: [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
+
+- **Phase 1 — code review at Gate 1**: ✅ built (commit `e57e8de`, opt-in, off by default).
+  **A/B evaluation still pending** — blocked on a callable, un-throttled model.
+- **Phase 2 — plan review**: extend the opencode adapter to critique the Architect's plan
+  (feasibility gaps, missed edge cases) with the same escalate-on-unconfirmed merge.
+- **Phase 3 — ideas**: multi-provider (Gemini/DeepSeek/local via opencode), a `voting`
+  merge mode (2-of-3), and metrics on cross-model agreement rate.
+
+---
+
 ## Tier 2 — Close the SDLC loop
 
 ### 2.1 Post-PR phase (address review comments → merge → verify)

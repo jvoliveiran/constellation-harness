@@ -1,6 +1,6 @@
 ---
 title: Multi-LLM Validation (opencode) — Design Spike
-status: draft
+status: phase-1-built (A/B eval pending) — see §14
 author: João Oliveira
 date-created: 2026-07-01
 last-edit: 2026-07-01
@@ -331,20 +331,34 @@ it from day one.
 
 ---
 
-## 14. Implementation checklist (for the eventual build)
+## 14. Implementation checklist
 
-Phase 1 — code review:
-- [ ] Verify opencode read-only `review` agent config + `--format json` event shape.
-- [ ] `plugins/constellation/scripts/opencode-review.sh` (guard, invoke, parse, timeout).
-- [ ] `plugins/constellation/agents/cross-model-reviewer.md` (Bash+Read, contract
+### Phase 1 — code review — ✅ BUILT (commit `e57e8de`, 2026-07-01)
+- [x] Verify opencode `--format json` event shape + agent model. (§16)
+- [x] `plugins/constellation/templates/opencode-review.sh` (guard, invoke, parse, timeout).
+- [x] `plugins/constellation/agents/cross-model-reviewer.md` (Bash+Read, contract
       normalization, re-request-once).
-- [ ] Orchestrator: conditional third spawn at Gate 1; §7 merge table; state + metrics.
-- [ ] Config template + schema note; `init` detection/warning.
-- [ ] README + CHANGELOG (feature is opt-in, opencode-only).
-- [ ] A/B: run a handful of real diffs with the flag on vs off; record extra loops,
-      escalations, and genuine defects caught that Opus missed.
+- [x] Orchestrator: conditional third spawn at Gate 1; §7 merge table; state + metrics.
+- [x] Config template (`crossModelValidation` block, `enabled:false`).
+- [x] `init`: scaffold the wrapper + per-model live-probe readiness.
+- [x] README + CHANGELOG (feature is opt-in, opencode-only).
+- [ ] **A/B evaluation — still pending.** Blocked on a callable model: `gpt-5.2-codex`
+      became provider-throttled during build testing, so no full successful review was
+      captured. Run once throttling clears — flag on vs off across real diffs; record
+      extra loops, escalations, and genuine defects Opus missed. (Non-model paths —
+      usage/missing-opencode/timeout→infra-skip — and JSONL parsing ARE verified.)
 
-Phase 2 — plan review (later):
+**Design changes made during the build (differ from earlier sections):**
+- The wrapper **inlines the diff into the prompt** and runs in a throwaway `--dir`,
+  instead of attaching via `-f` and relying on a read-only `--agent`. Reason: the
+  built-in `plan` agent (denied `plan_enter`) risks hanging, and inlining means the model
+  needs no tool call — `--dir` isolation is the real safety net. (§6.2/§6.4 describe the
+  earlier `-f` + `review`-agent approach; the shipped script supersedes them.)
+- Default `timeoutSec` is **180** (was 150) — observed `gpt-5.2-codex` latency/throttling.
+- The shipped wrapper lives at `templates/opencode-review.sh` and `init` copies it to
+  `.constellation/scripts/opencode-review.sh` (project-local, stable path for the agent).
+
+### Phase 2 — plan review (later)
 - [ ] Extend adapter for plan input; add `plan-review` handling to the Architect step.
 
 ---
