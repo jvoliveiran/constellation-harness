@@ -31,29 +31,50 @@ constellation-harness/                 (plugin marketplace)
 
 ## Installation
 
+The mental model: **install once per machine, then enable + init once per repo.** Installing a plugin only makes it *available* — it does nothing until you enable it in a project and run `/constellation:init` there.
+
+### Prerequisites
+
+- **`jq`** — the git-guard hook (`guard-git.sh`) uses it to enforce git safety (no commits/pushes to main, no `--no-verify`, no staging secrets). **Without `jq` the hook silently no-ops** — no error, just no protection. Install it: `brew install jq` (macOS) / `apt install jq` (Debian).
+- **`gh` (GitHub CLI), authenticated** — `/constellation:init` uses it to detect your GitHub account, and the DevOps agent uses it to open PRs. Verify with `gh auth status`.
+
+### 1. Install (once per machine)
+
 ```
-# 1. Add the marketplace (local path or GitHub once published)
+# Add the marketplace (local path or GitHub once published)
 /plugin marketplace add /path/to/constellation-harness
 # or: /plugin marketplace add <github-owner>/constellation-harness
 
-# 2. Install the core harness
+# Core harness (always)
 /plugin install constellation@constellation
 
-# 3. (Node/NestJS/GraphQL/Prisma projects) install the backend stack pack
+# Backend stack pack — Node/NestJS/GraphQL/Prisma repos
 /plugin install constellation-stack-node@constellation
 
-# 4. (Web UI projects) install the frontend stack pack
+# Frontend stack pack — web UI repos
 /plugin install constellation-stack-frontend@constellation
 ```
 
-### Per-project activation (two gates)
+Installing all three is harmless — a plugin stays dormant until enabled in a project, so machine-wide install costs nothing.
 
-The harness never takes over sessions globally:
+### 2. Activate per repo (two gates)
 
-1. **Plugin enablement** — installing makes the plugins available, but you choose the scope: enable them per project in the project's `.claude/settings.json` (`enabledPlugins`), or user-wide if you prefer.
-2. **Project initialization** — even when enabled, the SessionStart hook stays **silent** until the project contains `.constellation/config.json`. Run `/constellation:init` once per project to opt in.
+The harness never takes over sessions globally. Each repo opts in with two steps:
 
-A project without `.constellation/` behaves exactly like vanilla Claude Code.
+**a. Enable the plugins** — in the repo's `.claude/settings.json`, enable **core + only the one stack that repo uses** (not both). Note this is `.claude/settings.json`, distinct from the `.constellation/config.json` that `init` generates in step b.
+
+```jsonc
+// Backend repo — .claude/settings.json
+{ "enabledPlugins": ["constellation@constellation", "constellation-stack-node@constellation"] }
+```
+```jsonc
+// Frontend repo — .claude/settings.json
+{ "enabledPlugins": ["constellation@constellation", "constellation-stack-frontend@constellation"] }
+```
+
+**b. Initialize** — even when enabled, the SessionStart hook stays **silent** until the repo contains `.constellation/config.json`. Run `/constellation:init` once per repo to opt in. It scans the codebase and **auto-detects the stack**, writing `config.stack` for you (verify it once on the first repo).
+
+A repo without `.constellation/` behaves exactly like vanilla Claude Code.
 
 ---
 

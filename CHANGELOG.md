@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- README installation section reworked: added a **Prerequisites** subsection (`jq` for the git-guard hook, authenticated `gh`), an explicit "install once per machine / enable + init once per repo" scoping note, copy-paste `enabledPlugins` examples for backend vs. frontend repos, and clarified that `/constellation:init` auto-detects `config.stack`
+
 ## [0.6.0] - 2026-06-11
 
 ### Added
