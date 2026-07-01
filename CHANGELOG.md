@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Cross-model validation (opencode) — phase 1, opt-in, off by default.** When
+  `crossModelValidation.enabled` is set, Gate 1 gains a third reviewer
+  (`cross-model-reviewer`) that runs a second model family (e.g. GPT via the local
+  `opencode` CLI) over the same diff. Blocking merge with escalate-on-unconfirmed
+  (a cross-model-only blocker escalates to the user instead of auto-looping);
+  infrastructure failures (opencode missing/slow/`model_not_found`/timeout) skip and
+  proceed on the Opus reviews, never blocking delivery. Includes the
+  `templates/opencode-review.sh` adapter (JSONL parse, temp-dir isolation, inlined diff,
+  timeout→infra-skip), the `cross-model-reviewer` agent, orchestrator Gate 1 wiring +
+  merge rules, a `crossModelValidation` config block, and `/constellation:init`
+  scaffolding with a per-model live-probe. Design + verification in
+  `docs/spikes/multi-llm-validation.md`.
+- Multi-LLM validation design spike (`docs/spikes/multi-llm-validation.md`).
+
 ### Changed
 - README installation section reworked: added a **Prerequisites** subsection (`jq` for the git-guard hook, authenticated `gh`), an explicit "install once per machine / enable + init once per repo" scoping note, copy-paste `enabledPlugins` examples for backend vs. frontend repos, and clarified that `/constellation:init` auto-detects `config.stack`
 

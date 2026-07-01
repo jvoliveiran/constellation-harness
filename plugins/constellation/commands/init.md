@@ -46,10 +46,15 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 │   ├── prds/.gitkeep
 │   ├── roadmap.md              ← from templates/roadmap.md, verbatim
 │   └── parking-lot.md          ← from templates/parking-lot.md, verbatim
+├── scripts/
+│   └── opencode-review.sh    ← from templates/opencode-review.sh, verbatim (chmod +x); cross-model review adapter
 ├── state/.gitkeep
 ├── metrics/.gitkeep
 └── .gitignore               ← from templates/gitignore, verbatim
 ```
+
+`config.json` includes a `crossModelValidation` block (from the template) that is
+**disabled by default** — the harness behaves exactly as before until a user opts in.
 
 ### 4. Generate the project map
 
@@ -65,6 +70,23 @@ If the project's remote is GitHub and `.github/workflows/` has no equivalent qua
 - Copy `${CLAUDE_PLUGIN_ROOT}/templates/github-actions-ci.yml` to `.github/workflows/constellation-ci.yml`
 - Replace the lint/build/test steps and branch name with the values detected in step 2
 - Recommend enabling branch protection on the main branch requiring this check — so a red PR cannot merge even outside harness sessions
+
+### 5b. Cross-model validation readiness (optional)
+
+`crossModelValidation` is scaffolded **disabled**. Only if the user asks to enable it:
+- Copy `templates/opencode-review.sh` → `.constellation/scripts/opencode-review.sh` and
+  `chmod +x` it (also do this whenever the file is missing on `--refresh`).
+- **Live-probe the configured model** — auth presence is NOT sufficient; entitlement is
+  per-model. Run a trivial call and check for a text response, not a `model_not_found`
+  error:
+  ```
+  opencode run "reply with the single word OK" -m "<model>" --format json \
+    | jq -e 'select(.type=="text")' >/dev/null   # success = model is callable
+  ```
+  If `opencode` is absent, or the probe returns `model_not_found` / no text, **warn the
+  user** and leave `enabled:false` — the gate would only ever infra-skip otherwise.
+- Recommend a model the project can actually call (e.g. one already used manually) and a
+  generous `timeoutSec` (reasoning/codex models can be slow or throttled).
 
 ### 6. Report
 

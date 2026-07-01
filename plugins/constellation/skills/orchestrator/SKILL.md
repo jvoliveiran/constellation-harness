@@ -18,6 +18,7 @@ All project-specific values come from `.constellation/config.json`:
 | `schemaPath` | Path to a generated API schema artifact (e.g. `src/schema.gql`), or `null` if not applicable |
 | `github.account` | GitHub account to use for remote operations |
 | `stack` | Stack skill names agents should load (e.g. from the `constellation-stack-node` plugin) |
+| `crossModelValidation` | Optional cross-model review at Gate 1 via local `opencode` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
 
 Project layout reference: `.constellation/project-map.md`.
 
@@ -242,7 +243,7 @@ Parallel gates spawn multiple subagents via the **Agent tool in a single message
 4. **Wait for all subagents to return** — partial results are not actionable.
 5. **Merge results** and decide the next step per gate rules.
 
-### Gate 1 (Review) — spawn both in one message
+### Gate 1 (Review) — spawn all in one message
 
 ```
 Agent call 1: subagent_type: constellation:code-reviewer,  model: <heuristic>
@@ -251,7 +252,15 @@ Agent call 1: subagent_type: constellation:code-reviewer,  model: <heuristic>
 Agent call 2: subagent_type: constellation:security-analyst, model: <heuristic>
   prompt: <diff> + <plan reference> + <review memory> +
           "Subagent mode: security-review the changes, return the Security Review Result contract."
+Agent call 3 (ONLY if crossModelValidation.enabled and its steps include "code-review"):
+  subagent_type: constellation:cross-model-reviewer, model: sonnet
+  prompt: <diff> + <plan reference> + <review memory> +
+          crossModelValidation config (model, effort, timeoutSec) +
+          "Subagent mode: run the cross-model review, return the Cross-Model Review Result contract."
 ```
+
+The third reviewer runs **concurrently** with the two Opus reviewers (spawn all in the
+same message). See [Cross-Model Validation](#cross-model-validation) for the merge rules.
 
 ### Gate 2 (QA) — spawn both in one message
 
@@ -338,6 +347,54 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 
 ---
 
+## Cross-Model Validation
+
+**Optional, off by default.** When `.constellation/config.json` → `crossModelValidation.enabled`
+is `true` and its `steps` include `"code-review"`, Gate 1 gains a **third reviewer**:
+`constellation:cross-model-reviewer`, which runs a different model family (e.g. GPT via the
+local `opencode` CLI) over the **same diff** the Opus code-reviewer sees. Spawn it in the
+**same message** as the two Opus reviewers (§Parallel Execution → Gate 1).
+
+If the key is absent or `enabled:false`, do nothing different — Gate 1 is the standard
+two-reviewer flow. This section applies ONLY when it is enabled.
+
+### The cross-model verdict can be PASS, BLOCKED, or SKIPPED
+
+- **SKIPPED** = infrastructure failure (opencode missing, `model_not_found`, timeout,
+  unparseable output). Treat as **no cross-model signal this pass** — proceed on the Opus
+  reviews exactly as if the third reviewer were not configured. **Never a blocker.** Log
+  `crossModelSkipped` with the reason. This is `onInfraFailure: skip` and is load-bearing:
+  a slow/throttled model must never block delivery.
+- **PASS / BLOCKED** = a real verdict → feed into the merge below.
+
+### Merge rules (blocking, with escalate-on-unconfirmed)
+
+The Opus reviewers remain authoritative and behave exactly as today. The cross-model
+reviewer covers the **same ground**, so its blockers are classified by confirmation:
+
+| 🔴 Blocker raised by | Meaning | Action |
+|---|---|---|
+| Cross-model **and** an Opus reviewer (same issue) | Confirmed | **Loop** Engineer (normal fix flow) |
+| An Opus reviewer only | Authoritative (unchanged from today) | **Loop** Engineer |
+| **Cross-model only** — no Opus reviewer raised it | Unconfirmed / disagreement | Per `onUnconfirmedBlocker`: **`escalate`** (default) → present to the user as an open question, do NOT auto-loop, do NOT increment the loop counter; **`loop`** → treat like a confirmed blocker |
+
+**Escalation** presents the unconfirmed blocker(s) inline as open questions (both
+positions — what the cross-model flagged and that no Opus reviewer confirmed it) and waits
+for the user: accept risk / send back to Engineer / abort. Reuse the same inline
+open-question flow as Architect open questions. Log `crossModelEscalated`.
+
+Confirmed and Opus-only blockers loop through the Engineer + Lint Gate as usual and honor
+the **3-loop cap**. On fix passes, the cross-model reviewer gets the **incremental diff**
+plus the original blocker list, same as the Opus reviewers.
+
+### Metrics
+
+Append to `gate1Results.crossModel` in state, and log `crossModelBlockers`,
+`crossModelEscalated`, `crossModelSkipped` counts in the `gate1-pass` / `gate1-blocked`
+metrics events.
+
+---
+
 ## Workflow State Persistence
 
 Location: `.constellation/state/current-workflow.json`
@@ -350,7 +407,7 @@ Location: `.constellation/state/current-workflow.json`
   "originalRequest": "implement the audit log feature",
   "currentStep": "parallel-gate-1",
   "completedSteps": ["architect", "devops-branch", "engineer", "lint-gate"],
-  "gate1Results": { "reviewer": null, "security": null },
+  "gate1Results": { "reviewer": null, "security": null, "crossModel": null },
   "gate2Results": { "sdet": null, "writer": null },
   "reviewLoopCount": 0,
   "preFixSha": null,
