@@ -18,7 +18,7 @@ All project-specific values come from `.constellation/config.json`:
 | `schemaPath` | Path to a generated API schema artifact (e.g. `src/schema.gql`), or `null` if not applicable |
 | `github.account` | GitHub account to use for remote operations |
 | `stack` | Stack skill names agents should load (e.g. from the `constellation-stack-node` plugin) |
-| `crossModelValidation` | Optional cross-model review at Gate 1 via local `opencode` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
+| `crossModelValidation` | Optional cross-model validation via local `opencode` — code review at Gate 1 and/or plan critique before branching, per its `steps` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
 
 Project layout reference: `.constellation/project-map.md`.
 
@@ -140,7 +140,9 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
    - **Product-scoped work** (a feature from a PRD or a user feature request): the **Product Manager drives, the Software Architect pairs**. Run the pairing loop (max 3 rounds): PM produces the scope draft (Product Scope contract) → Architect reviews feasibility and may contribute product suggestions (Feasibility contract) → PM responds (descope/accept/hold) and triages every suggestion (scope/park/drop — the PM leads scope) → repeat until both return `AGREED`. The Architect then writes the plan to `.constellation/plans/` with the PM's BDD criteria preserved and `scope-approved-by: product-manager, software-architect` in the front-matter. No convergence after 3 rounds → present both positions to the user as open questions.
    - **Purely technical work** (refactors, infrastructure, performance, migrations): the Software Architect plans alone.
    **→ Save state**: `{ step: "architect", track: "planned" }`
-2. Plan ready: no open questions → hand to DevOps Engineer **immediately** to create the branch. Open questions → present to the user; once resolved, hand over **immediately**.
+1b. **Cross-model plan review** (ONLY if `crossModelValidation.enabled` and its `steps` include `"plan-review"`): spawn `constellation:cross-model-reviewer` in `plan-review` mode over the drafted plan. Architect adjudicates each 🔴: accepted → revise the plan; disputed → becomes an open question for step 2. Single pass — do not re-critique the revised plan. `SKIPPED` → proceed. See [Cross-Model Validation → Plan review](#cross-model-validation).
+   **→ Save state**: `{ step: "plan-review" }`
+2. Plan ready: no open questions → hand to DevOps Engineer **immediately** to create the branch. Open questions (the Architect's own, or disputed cross-model plan blockers) → present to the user; once resolved, hand over **immediately**.
    **→ Save state**: `{ step: "devops-branch" }`
 3. DevOps Engineer creates `feat/<plan-number>-<description>` and hands to Software Engineer **immediately**.
    **→ Save state**: `{ step: "engineer" }`
@@ -350,13 +352,18 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 ## Cross-Model Validation
 
 **Optional, off by default.** When `.constellation/config.json` → `crossModelValidation.enabled`
-is `true` and its `steps` include `"code-review"`, Gate 1 gains a **third reviewer**:
-`constellation:cross-model-reviewer`, which runs a different model family (e.g. Gemini or
-GPT via the local `opencode` CLI) over the **same diff** the Opus code-reviewer sees. Spawn it in the
-**same message** as the two Opus reviewers (§Parallel Execution → Gate 1).
+is `true`, `constellation:cross-model-reviewer` bridges to a different model family (e.g.
+Gemini or GPT via the local `opencode` CLI) at the steps listed in `crossModelValidation.steps`:
+
+- `"code-review"` → Gate 1 gains a **third reviewer** over the **same diff** the Opus
+  code-reviewer sees. Spawn it in the **same message** as the two Opus reviewers
+  (§Parallel Execution → Gate 1).
+- `"plan-review"` → the Architect's drafted plan gets a **cross-model critique** before
+  the branch is created (Planned Work step 1b; rules below).
 
 If the key is absent or `enabled:false`, do nothing different — Gate 1 is the standard
-two-reviewer flow. This section applies ONLY when it is enabled.
+two-reviewer flow and plans go straight from Architect to DevOps. This section applies
+ONLY when it is enabled.
 
 ### The cross-model verdict can be PASS, BLOCKED, or SKIPPED
 
@@ -387,11 +394,36 @@ Confirmed and Opus-only blockers loop through the Engineer + Lint Gate as usual 
 the **3-loop cap**. On fix passes, the cross-model reviewer gets the **incremental diff**
 plus the original blocker list, same as the Opus reviewers.
 
+### Plan review (`steps` include `"plan-review"`) — Planned Work only
+
+Runs at step 1b of Planned Work, after the plan is drafted (and, for product-scoped work,
+after PM × Architect convergence). Spawn `constellation:cross-model-reviewer` with:
+the plan content + the original request + the config (`model`, `effort`, `timeoutSec`) +
+*"Subagent mode: plan-review — critique the plan, return the Cross-Model Plan Review
+Result contract."*
+
+There is no second Opus plan reviewer, so confirmation works differently from Gate 1:
+the **Architect adjudicates** each cross-model 🔴 (agreement = Architect accepts, the
+analog of two models agreeing on a diff blocker):
+
+| Cross-model plan 🔴 | Meaning | Action |
+|---|---|---|
+| Architect **accepts** | Confirmed gap | Architect **revises the plan** to address it |
+| Architect **disputes** | Disagreement | Per `onUnconfirmedBlocker`: **`escalate`** (default) → joins the plan's open questions at step 2 (both positions presented; user decides: adopt the change / keep the plan as written / abort); **`loop`** → Architect must revise to address it anyway |
+| VERDICT `SKIPPED` | No cross-model signal | Proceed with the plan as-is; log `crossModelSkipped` |
+
+- **Single pass**: the revised plan is NOT re-critiqued — the revision addressed accepted
+  blockers and disputes went to the user; re-critiquing invites plan ping-pong.
+- SUGGESTIONS go to the Architect to incorporate or ignore — they never block and never
+  escalate.
+- Plan review never touches the review loop counter — that belongs to Gate 1.
+
 ### Metrics
 
-Append to `gate1Results.crossModel` in state, and log `crossModelBlockers`,
-`crossModelEscalated`, `crossModelSkipped` counts in the `gate1-pass` / `gate1-blocked`
-metrics events.
+Append to `gate1Results.crossModel` (code review) and `planReviewResult` (plan review) in
+state. Log `crossModelBlockers`, `crossModelEscalated`, `crossModelSkipped` counts in the
+`gate1-pass` / `gate1-blocked` events, and `planReviewBlockers`, `planReviewEscalated`,
+`planReviewSkipped` in a `plan-review` event.
 
 ---
 
@@ -409,6 +441,7 @@ Location: `.constellation/state/current-workflow.json`
   "completedSteps": ["architect", "devops-branch", "engineer", "lint-gate"],
   "gate1Results": { "reviewer": null, "security": null, "crossModel": null },
   "gate2Results": { "sdet": null, "writer": null },
+  "planReviewResult": null,
   "reviewLoopCount": 0,
   "preFixSha": null,
   "modelProfile": "medium",

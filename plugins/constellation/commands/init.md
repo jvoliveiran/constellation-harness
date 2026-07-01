@@ -92,6 +92,9 @@ If the project's remote is GitHub and `.github/workflows/` has no equivalent qua
   `opencode auth login` → Google with an AI Studio key first; fallbacks if the preview id
   is not callable: `google/gemini-3.5-flash`, `google/gemini-2.5-flash`. See the
   multi-llm spike §17 for alternatives (opencode Zen free models, paid GPT).
+- `steps` defaults to `["code-review"]` (Gate 1 only). Adding `"plan-review"` also runs a
+  cross-model critique of each plan before branching — mention it exists, but do not add
+  it unless the user asks.
 
 ### 6. Report
 

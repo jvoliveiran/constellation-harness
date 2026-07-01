@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scaffolding with a per-model live-probe. Design + verification in
   `docs/spikes/multi-llm-validation.md`.
 - Multi-LLM validation design spike (`docs/spikes/multi-llm-validation.md`).
+- **Cross-model validation phase 2 — plan review (opt-in).** Adding `"plan-review"` to
+  `crossModelValidation.steps` runs a cross-model critique of the Architect's plan before
+  branching (feasibility gaps, missed edge cases, risky assumptions). The Architect
+  adjudicates each blocker: accepted → plan revised; disputed → escalates to the user via
+  the existing open-questions flow (`onUnconfirmedBlocker`). Single critique pass, never
+  re-critiqued; infra failures skip as usual. New `plan-review` mode in the
+  `cross-model-reviewer` agent with a softer `Cross-Model Plan Review Result` contract
+  (no file/line); orchestrator Planned Work step 1b + `planReviewResult` state +
+  `plan-review` metrics. The opencode adapter needed no changes (content-agnostic).
 
 ### Changed
 - Cross-model validation: recommended/default model switched from `openai/gpt-5.2-codex`

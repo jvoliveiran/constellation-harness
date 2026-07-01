@@ -1,6 +1,6 @@
 ---
 title: Multi-LLM Validation (opencode) — Design Spike
-status: phase-1-built (A/B eval pending) — see §14
+status: phase-1+2-built (live A/B eval pending on Google auth) — see §14, §17
 author: João Oliveira
 date-created: 2026-07-01
 last-edit: 2026-07-01
@@ -271,19 +271,27 @@ not halt delivery.
 
 ---
 
-## 11. Phase 2 — plan review (documented, not built)
+## 11. Phase 2 — plan review — ✅ BUILT (2026-07-01)
 
-After code review proves out, extend `steps` to include `plan-review`:
+Enabled by adding `"plan-review"` to `crossModelValidation.steps`:
 
 - After the Architect writes the plan (and after PM × Architect convergence for
-  product-scoped work), run a cross-model **plan critique** via the same opencode adapter.
+  product-scoped work), the cross-model reviewer runs a **plan critique** via the same
+  opencode adapter (the wrapper was already content-agnostic — no adapter change needed).
 - Reviews feasibility gaps, missed edge cases, risky assumptions — not a diff.
-- Merge with the Architect's own output; same escalate-on-disagreement rule.
-- Softer contract (no file/line), so normalization and the "malformed → skip" path get
-  more exercise.
+- Softer contract: `Cross-Model Plan Review Result` — blockers as
+  `<plan section/step> — <gap or risk> — <concrete change>`, no file/line, no NITS.
 
-Out of scope for the first cut; listed so the config (`steps`) is designed to accommodate
-it from day one.
+**Design decisions locked at build time:**
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Who confirms a plan 🔴 | **The Architect adjudicates** (accept → revise / dispute → escalate) | No second Opus plan reviewer exists; Architect acceptance is the analog of two models agreeing on a diff blocker |
+| Disputed blockers | Per `onUnconfirmedBlocker` — default **escalate**, joining the plan's existing open-questions step | Reuses the one human-decision-point mechanism, same as §15.2 |
+| Critique passes | **Exactly one** — the revised plan is not re-critiqued | Avoids plan ping-pong; accepted blockers are addressed, disputed ones went to the user |
+| Loop counter | Untouched — plan review never increments the Gate 1 review loop count | Separate concerns; the 3-loop cap protects the code loop |
+| Tracks | **Planned Work only** | Plans only exist there; spikes/discovery produce throwaway or product artifacts |
+| Infra failure | Same `onInfraFailure: skip` — `SKIPPED` verdict proceeds with the plan as-is | Same load-bearing rule as §9 |
 
 ---
 
@@ -363,8 +371,15 @@ it from day one.
 - The shipped wrapper lives at `templates/opencode-review.sh` and `init` copies it to
   `.constellation/scripts/opencode-review.sh` (project-local, stable path for the agent).
 
-### Phase 2 — plan review (later)
-- [ ] Extend adapter for plan input; add `plan-review` handling to the Architect step.
+### Phase 2 — plan review — ✅ BUILT (2026-07-01)
+- [x] Adapter already content-agnostic (generic `CONTENT UNDER REVIEW` markers) — no change.
+- [x] `cross-model-reviewer` agent: `plan-review` mode (critique prompt, softer
+      `Cross-Model Plan Review Result` contract, mode-aware normalization).
+- [x] Orchestrator: Planned Work step 1b (conditional critique before branching),
+      Architect-adjudicated merge table, `planReviewResult` state slot, `plan-review`
+      metrics event. Design decisions in §11.
+- [ ] Live exercise — same blocker as the phase 1 A/B eval: needs a callable model
+      (Google auth pending, see §17).
 
 ---
 

@@ -11,10 +11,12 @@ rule, and the CI parity template. Tiers 2 and 3 below are documented for future 
 Full design + verification: [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
 
 - **Phase 1 — code review at Gate 1**: ✅ built (commit `e57e8de`, opt-in, off by default).
-  **A/B evaluation still pending** — blocked on a callable, un-throttled model.
-- **Phase 2 — plan review**: extend the opencode adapter to critique the Architect's plan
-  (feasibility gaps, missed edge cases) with the same escalate-on-unconfirmed merge.
-- **Phase 3 — ideas**: multi-provider (Gemini/DeepSeek/local via opencode), a `voting`
+  **A/B evaluation still pending** — recommended model is now the free-tier
+  `google/gemini-3-flash-preview` (spike §17); waiting on Google auth in opencode.
+- **Phase 2 — plan review**: ✅ built (2026-07-01, opt-in via `steps: ["plan-review"]`).
+  Cross-model critique of the Architect's plan before branching; Architect adjudicates,
+  disputes escalate. Live exercise pending on the same Google auth.
+- **Phase 3 — ideas**: additional providers (DeepSeek/local via opencode), a `voting`
   merge mode (2-of-3), and metrics on cross-model agreement rate.
 
 ---
