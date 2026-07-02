@@ -168,16 +168,18 @@ Models are reassigned dynamically per change complexity (small → all Sonnet; m
 
 ## Commands
 
-| Command | Effect |
-|---|---|
-| `/constellation:init` | Onboard the current project (generate `.constellation/`) |
-| `/constellation:status` | Show workflow state — track, step, gates, loops |
-| `/constellation:dry-run <request>` | Trace agents/models/gates without executing |
-| `/constellation:abort` | Stop now, save state, keep branch + changes |
-| `/constellation:resume` | Continue from saved state |
-| `/constellation:ship` | Merge the workflow's PR (squash) after preconditions pass + post-merge verify |
-| `/constellation:metrics` | Decision-ready summary of workflow telemetry (`ab` mode for the A/B table) |
-| `/constellation:skip-gate` | Skip the current gate (with confirmation, logged) |
+In SDLC order — project setup → previewing work → controlling a running workflow → shipping → learning from telemetry:
+
+| Command | What it does & when to use it | Example |
+|---|---|---|
+| `/constellation:init` | Onboards the current repo: generates `.constellation/` (config, project map, review memory, scripts) and detects commands/stack/account. Run **once per repo** before anything else; re-run with `--refresh` after harness upgrades to update scaffolded files. | `/constellation:init` |
+| `/constellation:dry-run` | Traces the exact workflow a request would trigger — track, agents, models, skills, gates — **without executing or modifying anything**. Use before committing to a large piece of work, or to sanity-check how a request will be classified. | `/constellation:dry-run add rate limiting to the login endpoint` |
+| `/constellation:status` | Shows where the current workflow stands: track, step, gates passed, review loops. Use **mid-workflow** to orient yourself, or at session start to see what's in flight. | `/constellation:status` |
+| `/constellation:skip-gate` | Skips the gate the workflow is currently blocked on (asks for confirmation, records the skip in metrics). Use **sparingly** — when a gate is stuck on something you've consciously decided to accept. | `/constellation:skip-gate` |
+| `/constellation:abort` | Stops the workflow **now**, saving state and keeping the branch + changes intact. Use when priorities shift mid-workflow — nothing is lost, resume later. | `/constellation:abort` |
+| `/constellation:resume` | Continues an interrupted workflow from saved state — after validating it (branch exists, plan present, PR still open); stale state is archived, never blindly trusted. Use at the start of a session when work was left unfinished. | `/constellation:resume` |
+| `/constellation:ship` | Merges the workflow's PR (squash) once mechanical preconditions pass — CI green, review threads resolved — then verifies main builds post-merge. Use to ship a PR that paused at the human merge gate (blocker history), or any workflow PR left unmerged. | `/constellation:ship` |
+| `/constellation:metrics` | Turns `.constellation/metrics/workflow-log.jsonl` into a decision-ready report: loops, blockers per gate, escalations, ship outcomes, with threshold-gated improvement signals. Use **periodically** to tune the harness; `ab` mode prints the cross-model A/B table. | `/constellation:metrics ab` |
 
 ## Skills
 
