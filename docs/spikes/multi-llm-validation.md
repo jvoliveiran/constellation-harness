@@ -492,6 +492,18 @@ opencode, and moves the documented recommendation to Gemini.
    providers with credentials — `google/*` appears after this step.)
 3. Set `crossModelValidation.model` and run the init live-probe.
 
+**Verified callable (2026-07-02, after Google auth):**
+- Live probe: `opencode run "reply with the single word OK" -m google/gemini-3-flash-preview
+  --format json` → clean `text` event with `OK`, no `error` events. Same JSONL shape as §16.
+- **End-to-end wrapper run** (first full success on any model — gpt-5.2-codex was throttled
+  during the phase-1 build): `opencode-review.sh` over a synthetic diff with a planted
+  security defect returned a contract-conformant `VERDICT: BLOCKED` with correct file:line
+  and fix (flagged card-number/CVV logging), and correctly did **not** flag an
+  arithmetic-looking red herring (`total * pct / 100` is precedence-equivalent) — no false
+  positive.
+- **Latency is variable**: one run timed out at 120s (exercising the timeout→exit-3
+  infra-skip path live), the next completed in ~80s. The 180s default `timeoutSec` stands.
+
 **Caveats:**
 - Since April 2026 the free tier covers **Flash / Flash-Lite only** — Pro models are
   paid-only.
