@@ -99,6 +99,31 @@ Scans the project and generates:
 
 Commit `.constellation/` (state/metrics are gitignored) so teammates share the configuration. Re-run with `--refresh` to regenerate the project map.
 
+### 4. Update (when a new version is released)
+
+Custom marketplaces do **not** auto-update by default — updating is a two-step pull, once per machine:
+
+```
+# 1. Refresh the marketplace metadata (pulls the latest git state)
+/plugin marketplace update constellation
+
+# 2. Update the installed plugin(s), then restart — or /reload-plugins to apply now
+/plugin update constellation@constellation
+```
+
+Then, **once per repo**, re-run `/constellation:init --refresh` so files that init copies into `.constellation/` (e.g. `scripts/opencode-review.sh`, the CI template) pick up the new version — the plugin update alone does not touch them.
+
+Optional:
+- **Auto-update**: `/plugin` → Marketplaces tab → constellation → enable auto-update (checks at session start).
+- **Version pinning**: add the marketplace at a release tag for reproducible installs — `/plugin marketplace add jvoliveiran/constellation-harness#constellation--v0.7.0`. Pinned installs stay locked until you re-add at a newer tag; the unpinned form tracks `main`.
+
+### Releasing a new version (maintainer)
+
+1. Bump `version` in `plugins/constellation/.claude-plugin/plugin.json` **and** the matching entry in `.claude-plugin/marketplace.json` (stack packs likewise when they changed).
+2. Cut `CHANGELOG.md`: `[Unreleased]` → `[x.y.z] - <date>`.
+3. `scripts/selftest.sh` must be green.
+4. Commit, tag `constellation--v<x.y.z>`, push `main` + the tag.
+
 ---
 
 ## How It Works
