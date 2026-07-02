@@ -41,9 +41,9 @@ The mental model: **install once per machine, then enable + init once per repo.*
 ### 1. Install (once per machine)
 
 ```
-# Add the marketplace (local path or GitHub once published)
-/plugin marketplace add /path/to/constellation-harness
-# or: /plugin marketplace add <github-owner>/constellation-harness
+# Add the marketplace (GitHub — versioned, reproducible)
+/plugin marketplace add jvoliveiran/constellation-harness
+# or from a local clone: /plugin marketplace add /path/to/constellation-harness
 
 # Core harness (always)
 /plugin install constellation@constellation

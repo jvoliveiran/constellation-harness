@@ -59,10 +59,10 @@ CI (`.github/workflows/selftest.yml`). Caught one real wrap-induced drift on fir
 Set `maxTurns` on code-reviewer/security-analyst **after** ~2 weeks of 2.3 metrics
 establish the legitimate turn distribution (start at 15). Measuring before capping.
 
-### 3.4 Versioned distribution — pending (needs a GitHub repo decision)
-Push this repo to GitHub; cut releases with `claude plugin tag` (`<name>--v<version>`);
-pin marketplace entries by `ref`/`sha`; install via `/plugin marketplace add
-<owner>/constellation-harness`. Blocked only on choosing the owner/visibility.
+### 3.4 Versioned distribution — ✅ built (2026-07-02)
+Repo published to `jvoliveiran/constellation-harness`; releases tagged
+`constellation--v<version>` (first: `constellation--v0.7.0`); install via
+`/plugin marketplace add jvoliveiran/constellation-harness`.
 
 ### 3.5 Stronger secret-staging guard — ✅ built (2026-07-02)
 `guard-git.sh` scans `git status --porcelain` on sweep staging (`git add -A`/`--all`/`.`)
