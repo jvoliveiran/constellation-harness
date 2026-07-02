@@ -176,6 +176,7 @@ Models are reassigned dynamically per change complexity (small → all Sonnet; m
 | `/constellation:abort` | Stop now, save state, keep branch + changes |
 | `/constellation:resume` | Continue from saved state |
 | `/constellation:ship` | Merge the workflow's PR (squash) after preconditions pass + post-merge verify |
+| `/constellation:metrics` | Decision-ready summary of workflow telemetry (`ab` mode for the A/B table) |
 | `/constellation:skip-gate` | Skip the current gate (with confirmation, logged) |
 
 ## Skills

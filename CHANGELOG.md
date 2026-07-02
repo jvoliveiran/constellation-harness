@@ -57,6 +57,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Security Analyst is now shell-less (`tools: [Read, Grep, Glob]`) — the orchestrator
   pre-runs the dependency audit and supplies the output in the prompt.
 
+- **Operability & robustness (ROADMAP 2.3, 3.1, 3.2).** `/constellation:metrics` turns
+  `workflow-log.jsonl` into a decision-ready report with threshold-gated signals (plus an
+  `ab` mode printing the spike §18 A/B table). `/constellation:resume` now validates
+  state before trusting it (shape, branch existence, plan presence, `preFixSha`
+  ancestry, PR freshness) and offers archive-and-restart on failure. New
+  `scripts/selftest.sh` (shell syntax, JSON validity, plugin validation, gate-agent ↔
+  orchestrator contract-drift check, config-template coherence) wired into this repo's
+  CI via `.github/workflows/selftest.yml`.
+
 ### Changed
 - Cross-model validation: recommended/default model switched from `openai/gpt-5.2-codex`
   to the free-tier `google/gemini-3-flash-preview` (Google AI Studio, no card, ~1,500

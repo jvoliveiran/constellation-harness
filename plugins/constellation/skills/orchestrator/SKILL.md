@@ -425,8 +425,8 @@ plus the original blocker list, same as the Opus reviewers.
 Runs at step 1b of Planned Work, after the plan is drafted (and, for product-scoped work,
 after PM × Architect convergence). Spawn `constellation:cross-model-reviewer` with:
 the plan content + the original request + the config (`model`, `effort`, `timeoutSec`) +
-*"Subagent mode: plan-review — critique the plan, return the Cross-Model Plan Review
-Result contract."*
+*"Subagent mode: plan-review — critique the plan, return the contract."* The expected
+contract is the `Cross-Model Plan Review Result` (defined in the agent).
 
 There is no second Opus plan reviewer, so confirmation works differently from Gate 1:
 the **Architect adjudicates** each cross-model 🔴 (agreement = Architect accepts, the

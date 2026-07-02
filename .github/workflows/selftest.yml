@@ -1,0 +1,16 @@
+# Harness self-test — catches broken scripts, invalid JSON, and contract drift
+# between gate agents and the orchestrator (ROADMAP 3.2).
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # jq + bash are preinstalled on ubuntu runners; the claude CLI is not —
+      # selftest.sh skips plugin validation automatically when it's absent.
+      - run: scripts/selftest.sh

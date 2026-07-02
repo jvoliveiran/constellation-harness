@@ -35,30 +35,34 @@ exercise pending** (scratch-repo run per the plan's verification section).
 **Proposal**: `/constellation:iterate` command — PM loads the PRD, ingests the data the user provides (or instrumentation output), applies the decision rule, updates `roadmap.md` (Shipped section with the outcome) and the parking lot (fired triggers), and opens the next Discovery cycle.
 **Done when**: a shipped PRD can be judged and the next cycle started with one command.
 
-### 2.3 Metrics dashboard (`/constellation:metrics`)
-**Problem**: `workflow-log.jsonl` is write-only — the harness never learns from its own telemetry.
-**Proposal**: a command that summarizes the log: workflows per track, average review loops, blocker counts by gate, lint-gate catch rate, escalations. Surface actionable signals (e.g., "Gate 1 averages 2.8 loops — review the engineer skills or the review-patterns memory").
-**Done when**: one command turns the JSONL into a decision-ready summary.
+### 2.3 Metrics dashboard (`/constellation:metrics`) — ✅ built (2026-07-02)
+Summarizes the JSONL (per-track counts, avg/max review loops, blockers by gate, lint-gate
+catch rate, escalations, cross-model agreement, ship outcomes) with threshold-gated
+signals; `/constellation:metrics ab` prints the spike §18 A/B table.
 
 ---
 
 ## Tier 3 — Robustness & operability
 
-### 3.1 State validation on resume
-**Problem**: `/constellation:resume` trusts `current-workflow.json` blindly.
-**Proposal**: validate shape (required keys, known `currentStep`) and freshness before resuming — branch still exists and is checked out, plan file still present, HEAD consistent with `preFixSha` when set. Offer cleanup for stale state.
+### 3.1 State validation on resume — ✅ built (2026-07-02)
+`/constellation:resume` validates before trusting state: shape (required keys, known
+track/step), branch existence, plan-file presence, `preFixSha` ancestry, PR freshness
+(merged-outside-harness offers verify+cleanup). Failures offer archive-and-restart —
+never resume from invalid state.
 
-### 3.2 Harness self-test (`scripts/selftest.sh`)
-**Problem**: the harness has no tests for itself; contract drift between agent files and the orchestrator is the most likely silent failure.
-**Proposal**: a script that runs `bash -n` on all scripts, `jq empty` on all JSON, `claude plugin validate` on the marketplace and every plugin, and greps that each gate agent's output contract section matches the orchestrator's expected contract markers (VERDICT/BLOCKERS/etc.). Run it in this repo's CI on every push.
+### 3.2 Harness self-test (`scripts/selftest.sh`) — ✅ built (2026-07-02)
+Shell syntax, JSON validity, `claude plugin validate` (skips when CLI absent), gate-agent
+↔ orchestrator contract-marker drift, config-template key coherence. Runs in this repo's
+CI (`.github/workflows/selftest.yml`). Caught one real wrap-induced drift on first run.
 
-### 3.3 Cost bounding for gate reviewers
-**Problem**: gate reviewers have no turn limit; a confused Opus reviewer exploring the repo is the most expensive failure mode.
-**Proposal**: `maxTurns: 15` frontmatter on code-reviewer and security-analyst (legitimate reviews fit comfortably); measure first via 2.3 metrics if unsure.
+### 3.3 Cost bounding for gate reviewers — deferred by design
+Set `maxTurns` on code-reviewer/security-analyst **after** ~2 weeks of 2.3 metrics
+establish the legitimate turn distribution (start at 15). Measuring before capping.
 
-### 3.4 Versioned distribution
-**Problem**: the marketplace is a local path — installs track whatever is on disk.
-**Proposal**: push this repo to GitHub; cut releases with `claude plugin tag` (`<name>--v<version>`); pin marketplace entries by `ref`/`sha`; install via `/plugin marketplace add <owner>/constellation-harness`. Any machine then gets reproducible, versioned installs.
+### 3.4 Versioned distribution — pending (needs a GitHub repo decision)
+Push this repo to GitHub; cut releases with `claude plugin tag` (`<name>--v<version>`);
+pin marketplace entries by `ref`/`sha`; install via `/plugin marketplace add
+<owner>/constellation-harness`. Blocked only on choosing the owner/visibility.
 
 ### 3.5 Stronger secret-staging guard — ✅ built (2026-07-02)
 `guard-git.sh` scans `git status --porcelain` on sweep staging (`git add -A`/`--all`/`.`)
