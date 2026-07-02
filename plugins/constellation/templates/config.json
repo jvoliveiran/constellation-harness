@@ -14,6 +14,9 @@
   },
   "schemaPath": null,
   "stack": [],
+  "review": {
+    "fixPolicy": "blockers"
+  },
   "crossModelValidation": {
     "enabled": false,
     "model": "google/gemini-3-flash-preview",

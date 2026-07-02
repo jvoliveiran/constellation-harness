@@ -18,6 +18,7 @@ All project-specific values come from `.constellation/config.json`:
 | `schemaPath` | Path to a generated API schema artifact (e.g. `src/schema.gql`), or `null` if not applicable |
 | `github.account` | GitHub account to use for remote operations |
 | `stack` | Stack skill names agents should load (e.g. from the `constellation-stack-node` plugin) |
+| `review.fixPolicy` | What review findings the Engineer must fix: `"blockers"` (default) or `"blockers+suggestions"`. Nits follow the piggyback rule (§Merging results). Absent → `"blockers"`. |
 | `crossModelValidation` | Optional cross-model validation via local `opencode` — code review at Gate 1 and/or plan critique before branching, per its `steps` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
 
 Project layout reference: `.constellation/project-map.md`.
@@ -329,11 +330,24 @@ Every gate subagent MUST return a structured result:
 
 1. Any `BLOCKED` verdict → collect ALL blockers into a single list.
 2. New `PATTERNS` reported → append them to `.constellation/memory/review-patterns.md`.
-3. **Increment `reviewLoopCount`** in the state file. **If it exceeds 3 → STOP**: do not re-spawn the gate. Present the surviving blockers to the user with both sides' positions, log `{ event: "gate1-escalated", reviewLoops: N }`, and wait for the user's decision (accept risk, change approach, or abort).
-4. Present the merged blocker list to the Software Engineer as one combined fix request.
-5. Record `PRE_FIX_SHA` before the Engineer starts fixing.
-6. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
-7. All `PASS` → present suggestions/nits as informational output and proceed.
+3. **Increment `reviewLoopCount`** in the state file (blocker loops only — see rule 5). **If it exceeds 3 → STOP**: do not re-spawn the gate. Present the surviving blockers to the user with both sides' positions, log `{ event: "gate1-escalated", reviewLoops: N }`, and wait for the user's decision (accept risk, change approach, or abort).
+4. **Build the fix list** per `review.fixPolicy` in config (default `"blockers"`):
+   - 🔴 **Blockers** — always in the fix list (both policies).
+   - 🟡 **Suggestions** — `"blockers"`: informational only. `"blockers+suggestions"`: join the
+     fix list on the **first** gate pass only; suggestions raised on re-reviews are
+     informational (prevents suggestion churn).
+   - 💭 **Nits — piggyback rule (both policies)**: if a fix pass is being triggered AND the
+     first gate pass contained at least one blocker or suggestion, nits join the fix list.
+     Otherwise nits are left to the Engineer's discretion. Nits never trigger a pass on
+     their own, never loop, and fix verification never blocks on them.
+5. **A fix pass is triggered by**: any blocker (either policy), or first-pass suggestions
+   under `"blockers+suggestions"`. A suggestions-only fix pass does **not** increment
+   `reviewLoopCount` (it can occur at most once by construction).
+6. Present the fix list to the Software Engineer as one combined fix request.
+7. Record `PRE_FIX_SHA` before the Engineer starts fixing.
+8. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
+9. Re-reviews verify blockers were addressed; only unresolved or new **blockers** keep
+   looping. All `PASS` → present remaining suggestions/nits as informational output and proceed.
 
 A subagent return that does not match its output contract (no parsable `VERDICT`) is re-requested **once**; if still malformed, treat it as `BLOCKED` — never as a pass.
 

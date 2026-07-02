@@ -530,3 +530,40 @@ opencode, and moves the documented recommendation to Gemini.
 - README — "e.g. GPT" mentions widened to "e.g. Gemini or GPT".
 - §4, §12.3, §14, §15.3 above — update notes pointing here. §16's GPT entitlement
   findings remain valid history and still motivate the live-probe.
+
+---
+
+## 18. A/B evaluation protocol (defined 2026-07-02 — data collection pending)
+
+Answers the open question from §14: does the second model family catch real defects the
+Opus reviewers miss, and at what cost? This is the **go/no-go gate for Phase 3** (voting
+mode, more providers): no measured signal → Phase 3 stays parked.
+
+### Method
+
+- **Test bed**: a real repo with `.constellation/` initialized and
+  `crossModelValidation.enabled: true`, `model: google/gemini-3-flash-preview`
+  (free tier — quota is not a constraint). Candidate: user-service (needs
+  `/constellation:init` — it currently has the older `.agentic/` layout).
+- **Sample**: 6–10 real changes through Planned Work or Tweaks, alternating the flag
+  **on/off per workflow** (odd workflows on, even off — no cherry-picking).
+- **Source of truth**: `.constellation/metrics/workflow-log.jsonl` — no manual notes
+  except the defect-attribution column.
+
+### Record per workflow
+
+| # | Flag | Track | reviewLoops | gate1Blockers | crossModelBlockers | confirmed / unconfirmed | escalations | genuine defect Opus missed? | wall-clock Gate 1 |
+|---|---|---|---|---|---|---|---|---|---|
+
+"Genuine defect Opus missed" = an **unconfirmed** cross-model blocker that the human
+adjudicated as *real* (accepted → sent to Engineer). This is the entire value signal.
+
+### Decision rule
+
+- **≥1 genuine defect caught** across the sample AND escalation noise ≤ ~1 per workflow →
+  keep enabled, consider Phase 3 (voting to cut the noise further).
+- **0 genuine defects** and escalations > 0 → the second family adds friction without
+  signal at this sample size: leave off by default, revisit with a stronger free model.
+- Latency/cost are secondary: infra-skip already bounds the worst case.
+
+Results land here as §18.1 once collected.
