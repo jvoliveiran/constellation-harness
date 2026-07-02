@@ -48,6 +48,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Gate 1 pass had any blocker/suggestion, otherwise Engineer's discretion — nits never
   trigger or block a loop.
 
+- **Mechanical gate enforcement (ROADMAP 3.5 + 3.6 + push gating).** `guard-git.sh` now
+  (a) blocks `git push` while a workflow is mid-pipeline — allowed only at
+  `devops-pr`/`post-pr`/`ship` steps, so gates are enforced before anything reaches the
+  remote (TDD checkpoint commits remain local; fail-open on unreadable state); (b) scans
+  `git status --porcelain` on sweep staging (`git add -A`/`--all`/`.`) and blocks when
+  secret-pattern files would be swept in. CI template gains an optional gitleaks job.
+  Security Analyst is now shell-less (`tools: [Read, Grep, Glob]`) — the orchestrator
+  pre-runs the dependency audit and supplies the output in the prompt.
+
 ### Changed
 - Cross-model validation: recommended/default model switched from `openai/gpt-5.2-codex`
   to the free-tier `google/gemini-3-flash-preview` (Google AI Studio, no card, ~1,500

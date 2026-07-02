@@ -260,8 +260,12 @@ Agent call 1: subagent_type: constellation:code-reviewer,  model: <heuristic>
   prompt: <diff> + <plan reference> + <review memory> +
           "Subagent mode: review the changes, return the Review Result contract."
 Agent call 2: subagent_type: constellation:security-analyst, model: <heuristic>
-  prompt: <diff> + <plan reference> + <review memory> +
+  prompt: <diff> + <plan reference> + <review memory> + <dependency audit output>* +
           "Subagent mode: security-review the changes, return the Security Review Result contract."
+
+  * When the diff touches the dependency manifest/lockfile, pre-run the project's audit
+    (e.g. `npm audit --json 2>/dev/null | head -c 20000`; never fail the gate on audit
+    exit codes) and paste the output — the security-analyst has no shell.
 Agent call 3 (ONLY if crossModelValidation.enabled and its steps include "code-review"):
   subagent_type: constellation:cross-model-reviewer, model: sonnet
   prompt: <diff> + <plan reference> + <review memory> +
@@ -366,7 +370,7 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 - Always re-run the **entire gate** after fixes — not just the agent that found blockers.
 - Use incremental diffs on fix passes; full diff only on the first pass.
 - Always include review memory in reviewer prompts.
-- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions).
+- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions). The code-reviewer and security-analyst have **no shell**; the diff (and dependency-audit output when relevant) is supplied in their prompts.
 - SDET in Gate 2 CAN modify code (adding tests) — safe because Gate 1 already approved the implementation.
 
 ---

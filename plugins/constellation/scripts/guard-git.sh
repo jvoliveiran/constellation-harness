@@ -31,6 +31,18 @@ if printf '%s' "$CMD" | grep -Eq "git[^|;&]*\bpush\b[^|;&]*[[:space:]:]${MAIN_BR
   deny "pushing directly to '${MAIN_BRANCH}' is not allowed — all changes go through feature branches and PRs."
 fi
 
+# Rule: gates before remote — while a workflow is mid-pipeline, pushing is allowed only
+# at the steps that come after the quality gates. TDD checkpoint commits stay local.
+# Fail-open on unreadable state (resume's validation owns that problem).
+STATE="$PROJECT_DIR/.constellation/state/current-workflow.json"
+if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bpush\b' && [ -f "$STATE" ]; then
+  STEP=$(jq -r '.currentStep // empty' "$STATE" 2>/dev/null)
+  case "$STEP" in
+    devops-pr|ship|post-pr|"") ;;
+    *) deny "workflow in progress (step: ${STEP}) — push is allowed only after the gates pass (steps devops-pr/post-pr/ship). Finish the gates, or /constellation:abort." ;;
+  esac
+fi
+
 # Rule: never commit on the main branch
 if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bcommit\b'; then
   CURRENT_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null)
@@ -47,6 +59,16 @@ if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\badd\b'; then
   fi
   if printf '%s' "$CMD" | grep -Eq '(id_rsa|id_ed25519|\.pem\b|credentials\.json|service-account.*\.json)'; then
     deny "staging credential/key files is not allowed."
+  fi
+  # Sweep staging (git add -A / --all / .) can pull in secrets without naming them —
+  # scan what would actually be staged before allowing.
+  if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\badd\b[^|;&]*(-[A-Za-z]*A|--all\b|[[:space:]]\.([[:space:]]|$))'; then
+    SUSPECTS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | cut -c4- \
+      | grep -E '(^|/)\.env(\.[A-Za-z0-9_-]+)?$|id_rsa|id_ed25519|\.pem$|credentials\.json$|service-account.*\.json$' \
+      | grep -Ev '\.env\.(example|sample|template|test)$')
+    if [ -n "$SUSPECTS" ]; then
+      deny "sweep-staging would include secret-pattern files: $(printf '%s' "$SUSPECTS" | tr '\n' ' ')— stage files explicitly or gitignore them."
+    fi
   fi
 fi
 

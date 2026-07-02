@@ -29,3 +29,15 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+
+  # Optional: secret scanning — uncomment to catch secrets the local guard can't
+  # (e.g. committed outside harness sessions). Zero-config for public patterns.
+  # secrets:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0   # gitleaks scans history
+  #     - uses: gitleaks/gitleaks-action@v2
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

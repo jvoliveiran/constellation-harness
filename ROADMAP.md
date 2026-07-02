@@ -60,13 +60,17 @@ exercise pending** (scratch-repo run per the plan's verification section).
 **Problem**: the marketplace is a local path — installs track whatever is on disk.
 **Proposal**: push this repo to GitHub; cut releases with `claude plugin tag` (`<name>--v<version>`); pin marketplace entries by `ref`/`sha`; install via `/plugin marketplace add <owner>/constellation-harness`. Any machine then gets reproducible, versioned installs.
 
-### 3.5 Stronger secret-staging guard
-**Problem**: `guard-git.sh` blocks `git add` of named secret files, but `git add -A` can sweep secrets in without naming them.
-**Proposal**: on `git add -A`/`git add .`, run a quick `git status --porcelain` scan for secret-pattern files before allowing; or integrate a lightweight secret scanner (e.g. gitleaks) in the CI template.
+### 3.5 Stronger secret-staging guard — ✅ built (2026-07-02)
+`guard-git.sh` scans `git status --porcelain` on sweep staging (`git add -A`/`--all`/`.`)
+and blocks when secret-pattern files would be included; optional gitleaks job added to the
+CI template (commented block). Plus: **push gating** — while a workflow is mid-pipeline,
+`git push` is blocked until the state reaches `devops-pr`/`post-pr`/`ship` (gates before
+remote, mechanically; TDD checkpoint commits stay local).
 
-### 3.6 Reviewer hardening, phase 2
-**Problem**: Security Analyst still has Bash (needed for `npm audit`).
-**Proposal**: investigate agent-scoped PreToolUse hooks (or a `bin/audit-only` wrapper) so its shell is limited to audit commands; alternatively pre-run the audit in the orchestrator and pass results in the prompt, dropping Bash like the Code Reviewer.
+### 3.6 Reviewer hardening, phase 2 — ✅ built (2026-07-02)
+Security Analyst is shell-less (`tools: [Read, Grep, Glob]`); the orchestrator pre-runs
+the dependency audit when the manifest/lockfile changed and pastes the output into the
+prompt. The agent flags a missing audit as a 🟡 finding rather than skipping silently.
 
 ---
 
