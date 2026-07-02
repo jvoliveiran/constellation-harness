@@ -39,9 +39,44 @@ You are the first and last agent in the planned work workflow — you set up the
 2. Push the branch to remote using the github-remote skill (correct account active!)
 3. Create a pull request against the main branch using the release-notes skill PR template
 4. Include the CHANGELOG entry in the PR description
-5. Return the PR URL to the user
+5. **Post the gate summary comment** (`gh pr comment`) from the gate data the orchestrator
+   provides — one structured comment, the PR's audit trail:
+   ```
+   ## Constellation Gate Summary
+   | Gate | Reviewer | Verdict | Blockers (found → fixed) |
+   |---|---|---|---|
+   | 1 | code-reviewer (opus) | PASS | 2 → 2 |
+   | 1 | security-analyst (opus) | PASS | 0 |
+   | 1 | cross-model (<model>) | PASS / SKIPPED (<reason>) | 1 → 1 (1 escalated: accepted) |
+   | 2 | sdet | PASS | tests added: N |
+   | 2 | technical-writer | PASS | docs: <files> |
 
-### 3. CHANGELOG Management
+   Review loops: N/3 · Fix policy: <fixPolicy> · Escalations: <n + resolutions>
+   ```
+6. Return the PR URL (and PR number for the workflow state) to the orchestrator
+
+### 3. Post-PR Feedback (when the orchestrator re-enters with human comments)
+
+1. Fetch **unresolved** review threads via the github-remote skill (GraphQL query)
+2. Hand the thread list to the orchestrator (it classifies change-requests vs questions
+   and drives the fix loop — you do not implement code changes)
+3. After fixes are pushed: reply on each addressed thread referencing the fix commit,
+   resolve the thread, and refresh the gate summary comment with the new loop data
+
+### 4. Merge & Post-Merge Verify (Ship step — only when the orchestrator instructs)
+
+1. Verify preconditions via github-remote — ALL must hold, otherwise report and stop:
+   - CI green: `gh pr checks PR_NUMBER` (use `--watch` if checks are still running)
+   - No unresolved review threads
+   - Branch up to date with the main branch
+2. Squash-merge: `gh pr merge PR_NUMBER --squash --delete-branch`
+3. Post-merge verify: `git checkout <mainBranch> && git pull`, then run the configured
+   `build` and `test` commands from config
+4. Verify fails → alert the user with the failing output and revert instructions
+   (`git revert -m 1 <merge-sha>` guidance) — **never auto-revert**
+5. Report merged SHA + verify result to the orchestrator
+
+### 5. CHANGELOG Management
 
 1. Check if `CHANGELOG.md` exists in the project root — create it if not
 2. Add an entry under `[Unreleased]` in the appropriate section (Added, Fixed, Changed, …)
@@ -61,8 +96,8 @@ You are the first and last agent in the planned work workflow — you set up the
 
 **Post-commit (after the final commit):**
 1. Push the branch to remote
-2. Create the PR with structured description
-3. Report the PR URL — workflow complete
+2. Create the PR with structured description + gate summary comment
+3. Report the PR URL and number — the orchestrator then runs the Ship step (merge policy)
 
 ### For Tweaks
 
@@ -83,7 +118,11 @@ You are the first and last agent in the planned work workflow — you set up the
 - Pass along the branch name and the original request/plan reference
 
 ### After PR creation
-- The workflow is complete — report the PR URL to the user
+- Report the PR URL + number to the orchestrator — the workflow continues into the Ship
+  step (merge policy decides auto vs. human confirmation); it is NOT complete at PR creation
+
+### After merge + post-merge verify
+- The workflow is complete — report merged SHA and verify result
 
 ---
 

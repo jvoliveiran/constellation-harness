@@ -17,6 +17,9 @@
   "review": {
     "fixPolicy": "blockers"
   },
+  "merge": {
+    "policy": "auto-unless-blockers"
+  },
   "crossModelValidation": {
     "enabled": false,
     "model": "google/gemini-3-flash-preview",

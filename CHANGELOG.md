@@ -30,6 +30,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (no file/line); orchestrator Planned Work step 1b + `planReviewResult` state +
   `plan-review` metrics. The opencode adapter needed no changes (content-agnostic).
 
+- **Closed SDLC loop — post-PR phase + Ship step (ROADMAP 2.1).** Every PR now gets a
+  structured **gate summary comment** (per-reviewer verdicts, blockers found→fixed, loops,
+  escalations). Human review comments re-enter the workflow: unresolved threads are
+  fetched (GraphQL), change requests loop Engineer → Lint Gate → incremental Gate 1 →
+  push + per-thread replies + thread resolution; question comments escalate to the user.
+  New **Ship step**: `merge.policy: "auto-unless-blockers"` (default) squash-merges
+  autonomously when CI is green, threads are resolved, and the review history had no 🔴
+  blocker — otherwise asks the user (`"always-ask"` available). Post-merge verify runs
+  the configured build+test on main (never auto-reverts). New `/constellation:ship`
+  command, `hadBlockers`/`prNumber` state fields, `pr-comments-addressed` and
+  `workflow-shipped` metrics events; github-remote skill gains comment read/write,
+  thread resolution, checks watching, and squash-merge operations.
+- **`review.fixPolicy`** — `"blockers"` (default) | `"blockers+suggestions"` (suggestions
+  join the first fix pass only; a suggestions-only pass never increments the loop
+  counter). **Nit piggyback rule**: nits are mandatory in the fix list when the first
+  Gate 1 pass had any blocker/suggestion, otherwise Engineer's discretion — nits never
+  trigger or block a loop.
+
 ### Changed
 - Cross-model validation: recommended/default model switched from `openai/gpt-5.2-codex`
   to the free-tier `google/gemini-3-flash-preview` (Google AI Studio, no card, ~1,500

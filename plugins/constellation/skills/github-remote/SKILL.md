@@ -1,6 +1,6 @@
 ---
 name: github-remote
-description: Safe remote GitHub operations via the gh CLI — account verification and switching, cloning, pushing, and PR creation against the right account.
+description: Safe remote GitHub operations via the gh CLI — account verification and switching, cloning, pushing, PR creation, reading/answering PR feedback, CI checks, and merging against the right account.
 ---
 
 # GitHub Remote Skill
@@ -115,6 +115,54 @@ gh pr view PR_NUMBER [--web]
 gh pr checks PR_NUMBER
 gh pr checkout PR_NUMBER
 ```
+
+### Reading PR Feedback
+
+```bash
+# Issue-level comments + reviews, flattened (quick read)
+gh pr view PR_NUMBER --comments
+
+# Review threads with resolution state (the source of truth for "unresolved")
+gh api graphql -f query='
+  query($owner:String!, $repo:String!, $pr:Int!) {
+    repository(owner:$owner, name:$repo) {
+      pullRequest(number:$pr) {
+        reviewThreads(first:100) { nodes {
+          id isResolved path line
+          comments(first:20) { nodes { author { login } body } }
+        } }
+      }
+    }
+  }' -f owner=OWNER -f repo=REPO -F pr=PR_NUMBER \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)'
+```
+
+### Writing PR Feedback
+
+```bash
+# Top-level PR comment (e.g. the gate summary)
+gh pr comment PR_NUMBER --body "..."
+
+# Reply to a specific review comment
+gh api repos/OWNER/REPO/pulls/PR_NUMBER/comments/COMMENT_ID/replies -f body="..."
+
+# Resolve a review thread (after the fix is pushed and the reply posted)
+gh api graphql -f query='
+  mutation($thread:ID!) {
+    resolveReviewThread(input:{threadId:$thread}) { thread { isResolved } }
+  }' -f thread=THREAD_ID
+```
+
+### Waiting on CI and Merging
+
+```bash
+gh pr checks PR_NUMBER --watch      # blocks until all checks complete; non-zero exit on failure
+
+gh pr merge PR_NUMBER --squash --delete-branch
+```
+
+Never merge with `--admin` (bypasses branch protection) and never use `--auto` without the
+orchestrator's merge-policy preconditions being verified first.
 
 ---
 

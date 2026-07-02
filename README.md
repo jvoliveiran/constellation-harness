@@ -126,9 +126,9 @@ Orchestrator (constellation:orchestrator skill)
 | Track | Pipeline | Trigger |
 |---|---|---|
 | **Discovery** | PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts in `.constellation/product/` | product ideas, PRDs, roadmaps, prioritization, or `discovery: …` |
-| **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → PR | 3+ files / new module / architecture, or `plan: …` |
-| **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → PR | bounded 1-2 file change, or `tweak: …` |
-| **Hotfix** | DevOps branch → Engineer → Lint Gate → Reviewer → SDET → Commit → PR | production broken, or `hotfix: …` |
+| **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → PR + gate summary → Ship (merge + verify) | 3+ files / new module / architecture, or `plan: …` |
+| **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → PR + gate summary → Ship | bounded 1-2 file change, or `tweak: …` |
+| **Hotfix** | DevOps branch → Engineer → Lint Gate → Reviewer → SDET → Commit → PR + gate summary → Ship | production broken, or `hotfix: …` |
 | **Spike** | Architect → Engineer → findings doc in `.constellation/spikes/` | research, or `spike: …` |
 
 \* Product-scoped work only: the Product Manager drives scope (MLP slice, BDD criteria, metrics) and the Architect pairs on feasibility — a bounded convergence loop (max 3 rounds); the plan is approved only when both sign. Purely technical work skips the pairing and the Architect plans alone.
@@ -141,6 +141,7 @@ Orchestrator (constellation:orchestrator skill)
 - **Incremental review** — fix passes send reviewers only the fix delta plus the original blocker list, not the whole diff again.
 - **Review memory** — recurring blocker patterns accumulate in `.constellation/memory/review-patterns.md`; the Engineer self-checks against them before each gate, reducing loops over time.
 - **Fix policy** — `review.fixPolicy` controls what the Engineer must fix after review: `"blockers"` (default) or `"blockers+suggestions"` (suggestions join the first fix pass only). Nits piggyback: mandatory when the first pass had any blocker/suggestion, otherwise at the Engineer's discretion — they never trigger or block a loop.
+- **Ship step (closed SDLC loop)** — every PR gets a structured gate summary comment (audit trail), then merges per `merge.policy`: `"auto-unless-blockers"` (default) squash-merges autonomously when the review history was clean — CI green, threads resolved — and asks you first only when a 🔴 blocker ever appeared; `"always-ask"` for conservative repos. Post-merge, the main branch is pulled and build+test verified (alert + revert guidance on failure, never auto-revert). Human PR comments re-enter the flow: change requests loop Engineer → Lint → incremental Gate 1 → push + thread replies; question comments escalate to you. `/constellation:ship` runs the merge step manually.
 - **Cross-model validation (optional, off by default)** — when `crossModelValidation.enabled` is set, Gate 1 adds a third reviewer that runs a different model family (e.g. Gemini — free via Google AI Studio — or GPT, through the local [`opencode`](https://opencode.ai) CLI) over the same diff. Blocking merge: confirmed and Opus-only blockers loop as usual; a cross-model-only blocker **escalates to you** rather than auto-looping. With `"plan-review"` in `crossModelValidation.steps`, the Architect's plan also gets a cross-model critique before implementation — the Architect adjudicates each finding, disputes escalate to you. Infrastructure failures (opencode missing/slow/throttled) **skip and proceed** — they never block delivery. See [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
 - **State & resume** — every milestone is saved to `.constellation/state/current-workflow.json`; interrupted workflows resume with `/constellation:resume`.
 - **Metrics** — every event appends to `.constellation/metrics/workflow-log.jsonl` for pattern analysis.
@@ -174,6 +175,7 @@ Models are reassigned dynamically per change complexity (small → all Sonnet; m
 | `/constellation:dry-run <request>` | Trace agents/models/gates without executing |
 | `/constellation:abort` | Stop now, save state, keep branch + changes |
 | `/constellation:resume` | Continue from saved state |
+| `/constellation:ship` | Merge the workflow's PR (squash) after preconditions pass + post-merge verify |
 | `/constellation:skip-gate` | Skip the current gate (with confirmation, logged) |
 
 ## Skills

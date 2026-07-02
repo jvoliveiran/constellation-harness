@@ -19,6 +19,7 @@ All project-specific values come from `.constellation/config.json`:
 | `github.account` | GitHub account to use for remote operations |
 | `stack` | Stack skill names agents should load (e.g. from the `constellation-stack-node` plugin) |
 | `review.fixPolicy` | What review findings the Engineer must fix: `"blockers"` (default) or `"blockers+suggestions"`. Nits follow the piggyback rule (§Merging results). Absent → `"blockers"`. |
+| `merge.policy` | `"auto-unless-blockers"` (default): clean-review PRs merge autonomously, blocker-history PRs ask the user. `"always-ask"`: every merge is confirmed. See [Ship](#ship--merge-policy). Absent → `"auto-unless-blockers"`. |
 | `crossModelValidation` | Optional cross-model validation via local `opencode` — code review at Gate 1 and/or plan critique before branching, per its `steps` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
 
 Project layout reference: `.constellation/project-map.md`.
@@ -157,8 +158,12 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
    **→ Save state**: `{ step: "architect-verify" }` **→ Log**: `{ event: "gate2-pass" }`
 8. Software Architect verifies the plan is fulfilled, sets plan status `completed`, hands to SDET to **commit** using the `constellation:git-commit` skill.
    **→ Save state**: `{ step: "devops-pr" }`
-9. DevOps Engineer pushes and creates the PR. Reports the PR URL — workflow complete.
-   **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "planned" }`
+9. DevOps Engineer pushes, creates the PR, and posts the **gate summary comment** (audit
+   trail built from `gate1Results`/`gate2Results`/escalations in state). Reports the PR URL.
+   **→ Save state**: `{ step: "ship", prNumber: N }` **→ Log**: `{ event: "workflow-complete", track: "planned" }`
+10. **Ship step** (see [Ship — merge policy](#ship--merge-policy)): merge autonomously or
+   ask, per `merge.policy` and `hadBlockers`; then post-merge verify.
+   **→ Delete state file.** **→ Log**: `{ event: "workflow-shipped", ... }`
 
 ### Tweaks
 
@@ -170,8 +175,9 @@ DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security] → SDET �
 2. Engineer implements the original request, then Lint Gate (loop until pass).
 3. Parallel Gate 1 (Reviewer + Security). Blockers loop back through Engineer + Lint Gate until clean.
 4. SDET checks tests related **ONLY** to changed files; adds missing tests; runs them.
-5. SDET commits (message derived from the original request). DevOps pushes and creates the PR.
-   **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "tweak" }`
+5. SDET commits (message derived from the original request). DevOps pushes, creates the PR
+   + gate summary comment, then the **Ship step** applies exactly as in Planned Work.
+   **→ Delete state file after ship.** **→ Log**: `{ event: "workflow-complete", track: "tweak" }` then `workflow-shipped`
 
 ### Hotfixes
 
@@ -182,8 +188,9 @@ DevOps (branch) → Engineer → Lint Gate → Reviewer → SDET → Commit → 
 - Branch `hotfix/<description>` from latest main. No plan. **No parallel gate — speed is the priority.**
 - Code Reviewer only (🔴 blockers loop back). **Exception**: if the fix touches auth or security-sensitive code, also invoke Security Analyst.
 - SDET runs **ONLY existing tests** related to the fix; new tests only if the bug was caused by a missing test. Commits with `fix:`.
-- DevOps pushes and creates the PR immediately.
-  **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "hotfix" }`
+- DevOps pushes and creates the PR immediately (+ gate summary comment), then the **Ship
+  step** applies as in Planned Work — speed still favors auto-merge when the review was clean.
+  **→ Delete state file after ship.** **→ Log**: `{ event: "workflow-complete", track: "hotfix" }` then `workflow-shipped`
 
 ### Spikes
 
@@ -328,7 +335,8 @@ Every gate subagent MUST return a structured result:
 
 ### Merging results
 
-1. Any `BLOCKED` verdict → collect ALL blockers into a single list.
+1. Any `BLOCKED` verdict → collect ALL blockers into a single list, and set
+   `hadBlockers: true` in state (feeds the Ship step's merge policy — never resets).
 2. New `PATTERNS` reported → append them to `.constellation/memory/review-patterns.md`.
 3. **Increment `reviewLoopCount`** in the state file (blocker loops only — see rule 5). **If it exceeds 3 → STOP**: do not re-spawn the gate. Present the surviving blockers to the user with both sides' positions, log `{ event: "gate1-escalated", reviewLoops: N }`, and wait for the user's decision (accept risk, change approach, or abort).
 4. **Build the fix list** per `review.fixPolicy` in config (default `"blockers"`):
@@ -441,6 +449,58 @@ state. Log `crossModelBlockers`, `crossModelEscalated`, `crossModelSkipped` coun
 
 ---
 
+## Ship — merge policy
+
+Runs after the PR + gate summary comment exist (final step of every PR-producing track).
+Executed by the DevOps Engineer (its §4); the orchestrator decides **auto vs. ask** here.
+
+**Preconditions — all mechanical, all must hold** (any failure → report to the user, do
+not merge): CI green (`gh pr checks`, `--watch` while running), zero unresolved review
+threads, branch up to date with the main branch, no outstanding fix-list items per
+`review.fixPolicy`.
+
+**Decision — `merge.policy` in config:**
+
+| `merge.policy` | `hadBlockers` | Action |
+|---|---|---|
+| `"auto-unless-blockers"` (default) | `false` | **Merge autonomously** (squash, delete branch) — no human gate |
+| `"auto-unless-blockers"` | `true` | **Ask the user**: present the blocker history (which reviewer, what, how fixed) + gate summary, wait for merge confirmation |
+| `"always-ask"` | any | Always ask before merging |
+
+`hadBlockers` is set `true` in state whenever **any** Gate 1 pass — initial, fix loop, or
+post-PR round — returns at least one 🔴 blocker. It never resets within a workflow.
+
+**After merge**: DevOps runs post-merge verify (checkout main + pull + configured
+`build` and `test`). Failure → alert the user with output and `git revert -m 1 <sha>`
+guidance; never auto-revert. Then delete the state file and log `workflow-shipped`.
+
+`/constellation:ship` invokes this same step manually — e.g. after a human-gate pause in
+a previous session, or for a PR whose workflow state still exists.
+
+---
+
+## Post-PR Phase — addressing human review comments
+
+Re-entry path for a PR that received human feedback. Trigger: the user asks to address
+PR comments, or resume finds state at `step: "ship"` with unresolved review threads.
+
+1. DevOps fetches **unresolved** review threads (github-remote GraphQL query).
+   **→ Save state**: `{ step: "post-pr" }`
+2. Orchestrator classifies each thread:
+   - **Change request** → joins the fix list.
+   - **Question / discussion** → escalate to the user with a drafted answer — never guess
+     an answer on the human's behalf, never mark it addressed silently.
+3. Software Engineer implements the change requests (TDD) → **Lint Gate** → **Gate 1
+   incremental** (fix delta + the comment list as the blocker context; same 3-loop cap;
+   cross-model participates if enabled — a blocker here sets `hadBlockers`).
+4. Push. DevOps replies on each addressed thread referencing the fix commit, resolves the
+   threads, refreshes the gate summary comment.
+   **→ Log**: `{ event: "pr-comments-addressed", data: { threads: N, loops: N } }`
+5. Return to the **Ship step** (preconditions re-checked — CI runs again on the push).
+   **→ Save state**: `{ step: "ship" }`
+
+---
+
 ## Workflow State Persistence
 
 Location: `.constellation/state/current-workflow.json`
@@ -456,6 +516,8 @@ Location: `.constellation/state/current-workflow.json`
   "gate1Results": { "reviewer": null, "security": null, "crossModel": null },
   "gate2Results": { "sdet": null, "writer": null },
   "planReviewResult": null,
+  "hadBlockers": false,
+  "prNumber": null,
   "reviewLoopCount": 0,
   "preFixSha": null,
   "modelProfile": "medium",
@@ -496,6 +558,8 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
 | `gate1-pass` / `gate1-blocked` | After Gate 1 (include loop/blocker count) |
 | `gate2-pass` | After Gate 2 |
 | `workflow-complete` | PR created (include full summary) |
+| `pr-comments-addressed` | Post-PR round done (include `threads`, `loops`) |
+| `workflow-shipped` | Merged + post-merge verified (include `prNumber`, `merge: "auto"\|"confirmed"`, `hadBlockers`, `postMergeVerify: "pass"\|"fail"`) |
 | `workflow-aborted` | User aborts |
 | `gate-skipped` | User skips a gate |
 

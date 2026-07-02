@@ -23,10 +23,12 @@ Full design + verification: [`docs/spikes/multi-llm-validation.md`](docs/spikes/
 
 ## Tier 2 — Close the SDLC loop
 
-### 2.1 Post-PR phase (address review comments → merge → verify)
-**Problem**: the workflow ends at "PR created". Human review comments, merge, and post-merge verification have no flow.
-**Proposal**: a re-entry path in the orchestrator — `gh pr view --comments` → Engineer implements fixes (TDD) → Lint Gate → re-trigger Gate 1 with the fix delta → push. Optionally a `/constellation:ship` command that merges (squash) after CI is green and verifies the main branch builds post-merge.
-**Done when**: a PR with human comments can be driven to merged + verified entirely through the harness.
+### 2.1 Post-PR phase (address review comments → merge → verify) — ✅ built (2026-07-02)
+Post-PR re-entry (unresolved threads → classify → Engineer fixes → Lint → incremental
+Gate 1 → push + thread replies), gate summary comment on every PR, Ship step with
+`merge.policy: "auto-unless-blockers"` (clean-history PRs merge autonomously; blocker
+history asks the user), post-merge verify, `/constellation:ship`. **Live end-to-end
+exercise pending** (scratch-repo run per the plan's verification section).
 
 ### 2.2 Iteration review trigger (`/constellation:iterate <prd>`)
 **Problem**: PRDs define a primary metric, threshold, and decision rule — but nothing operationalizes "the judgment period ended". The PM "re-enters when data arrives" only if the user remembers.
