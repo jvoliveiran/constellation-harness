@@ -41,6 +41,15 @@ Summarizes the JSONL (per-track counts, avg/max review loops, blockers by gate, 
 catch rate, escalations, cross-model agreement, ship outcomes) with threshold-gated
 signals; `/constellation:metrics ab` prints the spike §18 A/B table.
 
+### 2.4 Workflow Progress HUD — ✅ built (2026-07-03)
+Plan: [`docs/plans/001-workflow-progress-hud.md`](docs/plans/001-workflow-progress-hud.md).
+One canonical step map (`templates/tracks.json`, copied to `.constellation/tracks.json`)
+rendered three ways: Progress Banner after every state save, opt-in `statusline.sh`
+(mechanical HUD wired by init), and a visual `/constellation:status`. Step ids normalized
+across all five tracks; new `waitingOn` state field renders `⛔ awaiting your decision`
+(foundation for 4.5 park semantics); selftest checks 6 (track-map drift) and 7
+(statusline fixture render).
+
 ---
 
 ## Tier 3 — Robustness & operability

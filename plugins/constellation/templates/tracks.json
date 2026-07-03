@@ -1,0 +1,51 @@
+{
+  "modifiers": {
+    "fixLoop":   { "emoji": "🔁", "label": "fix loop" },
+    "escalated": { "emoji": "⛔", "label": "awaiting your decision" },
+    "aborted":   { "emoji": "⏸", "label": "paused" }
+  },
+  "extraSteps": {
+    "post-pr": { "emoji": "💬", "label": "PR Feedback" }
+  },
+  "tracks": {
+    "planned": [
+      { "id": "architect",        "emoji": "📐", "label": "Plan" },
+      { "id": "plan-review",      "emoji": "🔭", "label": "Plan Review", "optionalIf": "plan-review" },
+      { "id": "devops-branch",    "emoji": "🌿", "label": "Branch" },
+      { "id": "engineer",         "emoji": "🔨", "label": "Implement" },
+      { "id": "lint-gate",        "emoji": "🧹", "label": "Lint Gate" },
+      { "id": "parallel-gate-1",  "emoji": "🔍", "label": "Review Gate" },
+      { "id": "parallel-gate-2",  "emoji": "🧪", "label": "QA Gate" },
+      { "id": "architect-verify", "emoji": "🧭", "label": "Verify" },
+      { "id": "devops-pr",        "emoji": "🚀", "label": "PR" },
+      { "id": "ship",             "emoji": "🚢", "label": "Ship" }
+    ],
+    "tweak": [
+      { "id": "devops-branch",   "emoji": "🌿", "label": "Branch" },
+      { "id": "engineer",        "emoji": "🔨", "label": "Implement" },
+      { "id": "lint-gate",       "emoji": "🧹", "label": "Lint Gate" },
+      { "id": "parallel-gate-1", "emoji": "🔍", "label": "Review Gate" },
+      { "id": "sdet",            "emoji": "🧪", "label": "Tests" },
+      { "id": "devops-pr",       "emoji": "🚀", "label": "PR" },
+      { "id": "ship",            "emoji": "🚢", "label": "Ship" }
+    ],
+    "hotfix": [
+      { "id": "devops-branch", "emoji": "🌿", "label": "Branch" },
+      { "id": "engineer",      "emoji": "🚑", "label": "Fix" },
+      { "id": "lint-gate",     "emoji": "🧹", "label": "Lint Gate" },
+      { "id": "review-gate",   "emoji": "🔍", "label": "Review" },
+      { "id": "sdet",          "emoji": "🧪", "label": "Tests" },
+      { "id": "devops-pr",     "emoji": "🚀", "label": "PR" },
+      { "id": "ship",          "emoji": "🚢", "label": "Ship" }
+    ],
+    "discovery": [
+      { "id": "product-manager",       "emoji": "💡", "label": "Discovery" },
+      { "id": "architect-feasibility", "emoji": "📐", "label": "Feasibility" }
+    ],
+    "spike": [
+      { "id": "architect", "emoji": "📐", "label": "Frame" },
+      { "id": "engineer",  "emoji": "🔬", "label": "Explore" },
+      { "id": "findings",  "emoji": "📄", "label": "Findings" }
+    ]
+  }
+}

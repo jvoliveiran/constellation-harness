@@ -57,5 +57,48 @@ for key in commands branching schemaPath stack review merge crossModelValidation
 done
 say "5. config template coherence checked"
 
+# 6. Track-map drift — every step id the orchestrator saves must exist in tracks.json
+#    (as a track step or an extraSteps key), and every tracks.json id must be saved
+#    somewhere in the orchestrator. Otherwise the Progress HUD renders lies.
+TRACKS="$ROOT/plugins/constellation/templates/tracks.json"
+SKILL_IDS="$(grep -oE 'step: "[a-z0-9-]+"' "$ORCH" | sed 's/step: "//; s/"//' | sort -u)"
+MAP_IDS="$(jq -r '[.tracks[][].id, (.extraSteps | keys[])] | .[]' "$TRACKS" 2>/dev/null | sort -u)"
+[ -n "$MAP_IDS" ] || fail "tracks.json yields no step ids"
+for id in $SKILL_IDS; do
+  printf '%s\n' "$MAP_IDS" | grep -qx "$id" || fail "orchestrator step '$id' missing from tracks.json"
+done
+for id in $MAP_IDS; do
+  printf '%s\n' "$SKILL_IDS" | grep -qx "$id" || fail "tracks.json step '$id' never saved by the orchestrator"
+done
+say "6. track-map drift checked"
+
+# 7. Statusline fixture render — the mechanical HUD must render a known state correctly
+#    and stay silent (exit 0, no output) when there is no workflow.
+SL="$ROOT/plugins/constellation/templates/statusline.sh"
+SLTMP="$(mktemp -d)"
+mkdir -p "$SLTMP/.constellation/state"
+cp "$TRACKS" "$SLTMP/.constellation/tracks.json"
+cat > "$SLTMP/.constellation/config.json" <<'EOF'
+{ "crossModelValidation": { "enabled": true, "steps": ["code-review", "plan-review"] } }
+EOF
+cat > "$SLTMP/.constellation/state/current-workflow.json" <<'EOF'
+{
+  "track": "planned",
+  "branch": "feat/011-audit-log",
+  "currentStep": "parallel-gate-1",
+  "completedSteps": ["architect", "plan-review", "devops-branch", "engineer", "lint-gate"],
+  "reviewLoopCount": 1,
+  "waitingOn": null,
+  "lastUpdatedAt": "2026-07-03T10:00:00Z"
+}
+EOF
+SLOUT="$(printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP" | bash "$SL")" || fail "statusline exited non-zero on fixture"
+case "$SLOUT" in *"▶🔍 Review Gate 6/10"*) : ;; *) fail "statusline fixture render: got '$SLOUT'" ;; esac
+case "$SLOUT" in *"🔁 1/3"*) : ;; *) fail "statusline loop modifier: got '$SLOUT'" ;; esac
+SLOUT2="$(printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP/nonexistent" | bash "$SL")" || fail "statusline exited non-zero without state"
+[ -z "$SLOUT2" ] || fail "statusline should print nothing without a state file: got '$SLOUT2'"
+rm -rf "$SLTMP"
+say "7. statusline fixture render checked"
+
 [ "$FAIL" -eq 0 ] && say "selftest: ALL GREEN" || say "selftest: FAILURES ABOVE"
 exit "$FAIL"

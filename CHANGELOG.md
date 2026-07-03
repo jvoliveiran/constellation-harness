@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-03
+
+### Added
+- **Workflow Progress HUD (ROADMAP 2.4)** — ambient visibility of which SDLC step is
+  running and how far along the pipeline is. One canonical per-track step map
+  (`templates/tracks.json`: ids, emojis, labels — copied to `.constellation/tracks.json`
+  by init and re-copied on `--refresh`) rendered three ways: a one-line **Progress
+  Banner** the orchestrator prints after every state save
+  (`🌌 planned 6/10 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · · │ feat/011-audit-log`),
+  an opt-in **statusline renderer** (`templates/statusline.sh`, mechanical — reads the
+  state file directly, silent when no workflow is running; init offers to wire it into
+  `.claude/settings.json`), and a visual **`/constellation:status`** (banner + per-step
+  table with gate verdicts). Fix loops render `🔁 loop N/3` anchored on the gate —
+  progress never moves backward; optional steps (cross-model plan review) are filtered
+  from the denominator per config; unknown step ids render `⚙️ <raw-id>` instead of
+  failing. Plan: `docs/plans/001-workflow-progress-hud.md`.
+- **`waitingOn` state field** — set to `"user"` whenever the workflow stops for a user
+  decision (open questions, escalated blockers, loop caps, merge confirmation); banner
+  and statusline render `⛔ awaiting your decision`. Foundation for ROADMAP 4.5 park
+  semantics.
+- **Selftest checks 6 & 7** — track-map drift (every step id the orchestrator saves
+  exists in `tracks.json` and vice versa) and a statusline fixture render (exact HUD
+  output for a known state; silence without a state file).
+
+### Changed
+- **Step ids normalized across all five tracks** — Tweak, Hotfix, Spike, and Discovery
+  now have explicit `→ Save state` ids (`devops-branch`, `engineer`, `lint-gate`,
+  `parallel-gate-1`/`review-gate`, `sdet`, `devops-pr`, `ship`;
+  `architect-feasibility`; `findings`); spikes and discovery now save (and clean up)
+  state like every other track. Fix loops keep `currentStep` on the gate step.
+- `/constellation:resume` announces the resumed workflow with the Progress Banner and
+  re-presents the pending question when `waitingOn: "user"`; the session-start
+  unfinished-workflow notice reports state as the banner.
+
 ## [0.8.0] - 2026-07-03
 
 ### Added

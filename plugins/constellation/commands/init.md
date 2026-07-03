@@ -10,7 +10,7 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 
 ## Arguments
 
-`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` (keep config and all other files untouched).
+`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json` and `scripts/statusline.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched).
 
 ## Procedure
 
@@ -37,6 +37,7 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 .constellation/
 ├── config.json              ← from templates/config.json, filled with detected values
 ├── project-map.md           ← from templates/project-map.md, sections generated (step 4)
+├── tracks.json              ← from templates/tracks.json, verbatim; canonical step map for the Progress HUD
 ├── memory/review-patterns.md ← from templates/review-patterns.md, verbatim
 ├── plans/archive/.gitkeep
 ├── spikes/.gitkeep
@@ -47,7 +48,8 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 │   ├── roadmap.md              ← from templates/roadmap.md, verbatim
 │   └── parking-lot.md          ← from templates/parking-lot.md, verbatim
 ├── scripts/
-│   └── opencode-review.sh    ← from templates/opencode-review.sh, verbatim (chmod +x); cross-model review adapter
+│   ├── opencode-review.sh    ← from templates/opencode-review.sh, verbatim (chmod +x); cross-model review adapter
+│   └── statusline.sh         ← from templates/statusline.sh, verbatim (chmod +x); Progress HUD statusline renderer
 ├── state/.gitkeep
 ├── metrics/.gitkeep
 └── .gitignore               ← from templates/gitignore, verbatim
@@ -95,6 +97,25 @@ If the project's remote is GitHub and `.github/workflows/` has no equivalent qua
 - `steps` defaults to `["code-review"]` (Gate 1 only). Adding `"plan-review"` also runs a
   cross-model critique of each plan before branching — mention it exists, but do not add
   it unless the user asks.
+
+### 5c. Statusline — Workflow Progress HUD (optional, recommended)
+
+The scaffold already placed `.constellation/scripts/statusline.sh` (it reads the workflow
+state + `tracks.json` and renders a one-line HUD: current SDLC step, progress `n/N`, loop
+and escalation modifiers, branch). Offer to wire it into the project's
+`.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": ".constellation/scripts/statusline.sh" } }
+```
+
+- Create the file or merge the key into the existing JSON.
+- If a `statusLine` is already configured, show the current value and ask before
+  replacing it — never overwrite silently.
+- If the user declines, skip — the Progress Banner and `/constellation:status` still
+  provide the HUD; the script stays available to wire later.
+- The script prints nothing while no workflow is running, so outside workflows the
+  statusline is simply empty.
 
 ### 6. Report
 

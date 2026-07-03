@@ -107,12 +107,16 @@ Scans the project and generates:
 .constellation/
 ├── config.json          lint/build/test commands, branching, GitHub account, stack skills
 ├── project-map.md       generated codebase map (agents read this instead of exploring blind)
+├── tracks.json          canonical SDLC step map per track (emojis, labels) — Progress HUD source of truth
 ├── memory/review-patterns.md   recurring review blockers (self-learning)
 ├── plans/ (+archive/)   implementation plans
 ├── spikes/  adrs/       research docs and decision records
+├── scripts/             opencode-review.sh (cross-model adapter), statusline.sh (Progress HUD)
 ├── state/  metrics/     workflow resume state + JSONL telemetry (gitignored)
 └── .gitignore
 ```
+
+Init also offers to wire `statusline.sh` into `.claude/settings.json` — a one-line workflow HUD in the statusline (see Quality machinery → Progress HUD).
 
 Commit `.constellation/` (state/metrics are gitignored) so teammates share the configuration. Re-run with `--refresh` to regenerate the project map.
 
@@ -186,6 +190,7 @@ Orchestrator (constellation:orchestrator skill)
 - **Ship step (closed SDLC loop)** — every PR gets a structured gate summary comment (audit trail), then merges per `merge.policy`: `"auto-unless-blockers"` (default) squash-merges autonomously when the review history was clean — CI green, threads resolved — and asks you first only when a 🔴 blocker ever appeared; `"always-ask"` for conservative repos. Post-merge, the main branch is pulled and build+test verified (alert + revert guidance on failure, never auto-revert). Human PR comments re-enter the flow: change requests loop Engineer → Lint → incremental Gate 1 → push + thread replies; question comments escalate to you. `/constellation:ship` runs the merge step manually.
 - **Cross-model validation (optional, off by default)** — when `crossModelValidation.enabled` is set, Gate 1 adds a third reviewer that runs a different model family (e.g. Gemini — free via Google AI Studio — or GPT, through the local [`opencode`](https://opencode.ai) CLI) over the same diff. Blocking merge: confirmed and Opus-only blockers loop as usual; a cross-model-only blocker **escalates to you** rather than auto-looping. With `"plan-review"` in `crossModelValidation.steps`, the Architect's plan also gets a cross-model critique before implementation — the Architect adjudicates each finding, disputes escalate to you. Infrastructure failures (opencode missing/slow/throttled) **skip and proceed** — they never block delivery. See [`docs/spikes/multi-llm-validation.md`](docs/spikes/multi-llm-validation.md).
 - **State & resume** — every milestone is saved to `.constellation/state/current-workflow.json`; interrupted workflows resume with `/constellation:resume`.
+- **Workflow Progress HUD** — always know which SDLC step is running and how far along the pipeline is. One canonical step map (`.constellation/tracks.json`) renders three ways: a one-line **Progress Banner** printed after every state save (`` 🌌 planned 6/10 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · · │ feat/011-audit-log ``), an optional **statusline** renderer (`.constellation/scripts/statusline.sh`, mechanical — reads state directly, wired by init on request), and `/constellation:status` as the zoom-in view. Fix loops show `🔁 loop N/3` anchored on the gate (progress never moves backward); a workflow stopped on a user decision shows `⛔ awaiting your decision` (`waitingOn` state field).
 - **Metrics** — every event appends to `.constellation/metrics/workflow-log.jsonl` for pattern analysis.
 
 ---
@@ -216,7 +221,7 @@ In SDLC order — project setup → previewing work → controlling a running wo
 |---|---|---|
 | `/constellation:init` | Onboards the current repo: generates `.constellation/` (config, project map, review memory, scripts) and detects commands/stack/account. Run **once per repo** before anything else; re-run with `--refresh` after harness upgrades to update scaffolded files. | `/constellation:init` |
 | `/constellation:dry-run` | Traces the exact workflow a request would trigger — track, agents, models, skills, gates — **without executing or modifying anything**. Use before committing to a large piece of work, or to sanity-check how a request will be classified. | `/constellation:dry-run add rate limiting to the login endpoint` |
-| `/constellation:status` | Shows where the current workflow stands: track, step, gates passed, review loops. Use **mid-workflow** to orient yourself, or at session start to see what's in flight. | `/constellation:status` |
+| `/constellation:status` | Shows where the current workflow stands as the visual Progress HUD: banner + per-step table (track, step, gates passed, review loops). Use **mid-workflow** to orient yourself, or at session start to see what's in flight. | `/constellation:status` |
 | `/constellation:skip-gate` | Skips the gate the workflow is currently blocked on (asks for confirmation, records the skip in metrics). Use **sparingly** — when a gate is stuck on something you've consciously decided to accept. | `/constellation:skip-gate` |
 | `/constellation:abort` | Stops the workflow **now**, saving state and keeping the branch + changes intact. Use when priorities shift mid-workflow — nothing is lost, resume later. | `/constellation:abort` |
 | `/constellation:resume` | Continues an interrupted workflow from saved state — after validating it (branch exists, plan present, PR still open); stale state is archived, never blindly trusted. Use at the start of a session when work was left unfinished. | `/constellation:resume` |

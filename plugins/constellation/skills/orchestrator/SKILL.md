@@ -32,6 +32,7 @@ Project layout reference: `.constellation/project-map.md`.
 - **NEVER** proceed with any investigation or work before selecting the agent.
 - **ALWAYS** check for a saved workflow state file (`.constellation/state/current-workflow.json`) on conversation start — if it exists, offer to resume from the saved step.
 - **ALWAYS** log workflow milestones to `.constellation/metrics/workflow-log.jsonl`.
+- **ALWAYS** print the [Progress Banner](#progress-banner) immediately after every state save — rendered from the state just written.
 
 ---
 
@@ -171,12 +172,12 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
 DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → DevOps (PR)
 ```
 
-1. No plan. DevOps creates `<type>/<description>`, hands to Engineer. **→ Save state**: `{ step: "engineer", track: "tweak" }`
-2. Engineer implements the original request, then Lint Gate (loop until pass).
-3. Parallel Gate 1 (Reviewer + Security). Blockers loop back through Engineer + Lint Gate until clean.
-4. SDET checks tests related **ONLY** to changed files; adds missing tests; runs them.
+1. No plan. DevOps creates `<type>/<description>`. **→ Save state**: `{ step: "devops-branch", track: "tweak" }` Hands to Engineer **immediately**. **→ Save state**: `{ step: "engineer" }`
+2. Engineer implements the original request, then Lint Gate (loop until pass). **→ Save state**: `{ step: "lint-gate" }`
+3. Parallel Gate 1 (Reviewer + Security). Blockers loop back through Engineer + Lint Gate until clean. **→ Save state**: `{ step: "parallel-gate-1" }`
+4. SDET checks tests related **ONLY** to changed files; adds missing tests; runs them. **→ Save state**: `{ step: "sdet" }`
 5. SDET commits (message derived from the original request). DevOps pushes, creates the PR
-   + gate summary comment, then the **Ship step** applies exactly as in Planned Work.
+   + gate summary comment **→ Save state**: `{ step: "devops-pr" }`, then the **Ship step** applies exactly as in Planned Work. **→ Save state**: `{ step: "ship", prNumber: N }`
    **→ Delete state file after ship.** **→ Log**: `{ event: "workflow-complete", track: "tweak" }` then `workflow-shipped`
 
 ### Hotfixes
@@ -185,11 +186,11 @@ DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security] → SDET �
 DevOps (branch) → Engineer → Lint Gate → Reviewer → SDET → Commit → DevOps (PR)
 ```
 
-- Branch `hotfix/<description>` from latest main. No plan. **No parallel gate — speed is the priority.**
-- Code Reviewer only (🔴 blockers loop back). **Exception**: if the fix touches auth or security-sensitive code, also invoke Security Analyst.
-- SDET runs **ONLY existing tests** related to the fix; new tests only if the bug was caused by a missing test. Commits with `fix:`.
-- DevOps pushes and creates the PR immediately (+ gate summary comment), then the **Ship
-  step** applies as in Planned Work — speed still favors auto-merge when the review was clean.
+- Branch `hotfix/<description>` from latest main. No plan. **No parallel gate — speed is the priority.** **→ Save state**: `{ step: "devops-branch", track: "hotfix" }` then, at Engineer handoff, `{ step: "engineer" }` and at the Lint Gate `{ step: "lint-gate" }`.
+- Code Reviewer only (🔴 blockers loop back). **Exception**: if the fix touches auth or security-sensitive code, also invoke Security Analyst. **→ Save state**: `{ step: "review-gate" }`
+- SDET runs **ONLY existing tests** related to the fix; new tests only if the bug was caused by a missing test. Commits with `fix:`. **→ Save state**: `{ step: "sdet" }`
+- DevOps pushes and creates the PR immediately (+ gate summary comment) **→ Save state**: `{ step: "devops-pr" }`, then the **Ship
+  step** applies as in Planned Work — speed still favors auto-merge when the review was clean. **→ Save state**: `{ step: "ship", prNumber: N }`
   **→ Delete state file after ship.** **→ Log**: `{ event: "workflow-complete", track: "hotfix" }` then `workflow-shipped`
 
 ### Spikes
@@ -198,10 +199,10 @@ DevOps (branch) → Engineer → Lint Gate → Reviewer → SDET → Commit → 
 Architect → Engineer → Document findings
 ```
 
-1. Architect defines the question and the timebox.
-2. Engineer explores, prototypes, documents findings in `.constellation/spikes/` — **NOT** production code.
-3. No review, testing, branching, or commit — spikes are throwaway. Findings feed a future plan.
-   **→ Log**: `{ event: "workflow-complete", track: "spike" }`
+1. Architect defines the question and the timebox. **→ Save state**: `{ step: "architect", track: "spike" }`
+2. Engineer explores, prototypes, documents findings in `.constellation/spikes/` — **NOT** production code. **→ Save state**: `{ step: "engineer" }`
+3. No review, testing, branching, or commit — spikes are throwaway. Findings feed a future plan. **→ Save state**: `{ step: "findings" }` while the findings document is being written.
+   **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "spike" }`
 
 ### Discovery
 
@@ -211,9 +212,9 @@ PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → pr
 
 1. The Product Manager leads: reviews the parking lot for fired triggers, brainstorms/narrows with the user, and produces product artifacts in `.constellation/product/` (PRD, roadmap update, parking-lot entries).
    **→ Save state**: `{ step: "product-manager", track: "discovery" }`
-2. If a PRD or project definition was produced, the Software Architect runs a lightweight feasibility pass (Feasibility contract) — flagging infeasible or disproportionate scope before it hardens into a roadmap commitment.
+2. If a PRD or project definition was produced, the Software Architect runs a lightweight feasibility pass (Feasibility contract) — flagging infeasible or disproportionate scope before it hardens into a roadmap commitment. **→ Save state**: `{ step: "architect-feasibility" }`
 3. No branch, no code, no gates — outputs are markdown product artifacts only. Implementation later enters **Planned Work** referencing the PRD (where the full PM × Architect pairing happens).
-   **→ Log**: `{ event: "workflow-complete", track: "discovery" }`
+   **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "discovery" }`
 
 ---
 
@@ -524,17 +525,65 @@ Location: `.constellation/state/current-workflow.json`
   "prNumber": null,
   "reviewLoopCount": 0,
   "preFixSha": null,
+  "waitingOn": null,
   "modelProfile": "medium",
   "startedAt": "<ISO timestamp>",
   "lastUpdatedAt": "<ISO timestamp>"
 }
 ```
 
-**Save points**: after track determination, after each agent step, after each gate pass/fail, before and after each fix loop.
+**Save points**: after track determination, after each agent step, after each gate pass/fail, before and after each fix loop. Every save is immediately followed by the [Progress Banner](#progress-banner).
+
+**Fix loops keep `currentStep` on the gate**: while blockers loop back through Engineer + Lint Gate, `currentStep` stays `parallel-gate-1` (or `review-gate` / `lint-gate` for its own retries) — the loop is visible via `reviewLoopCount` and `preFixSha`, and progress never moves backward.
+
+**`waitingOn`**: set to `"user"` whenever the workflow stops for a user decision — plan open questions, escalated blockers, loop-cap escalations, merge confirmation. Set back to `null` the moment the user answers. Purely presentational today (banner + statusline render ⛔); park semantics build on it later.
 
 **Resume**: on conversation start, if the state file exists, report the saved state and resume from `currentStep`.
 
 **Cleanup**: delete on workflow completion; keep on `/constellation:abort` (it is the resume point); delete (plus the branch) on an explicit user request to start fresh.
+
+---
+
+## Progress Banner
+
+A one-line visual of where the workflow is, printed in the conversation **immediately after every state save**, rendered from the state just written plus the track map (`.constellation/tracks.json` — the project copy of the plugin's canonical `templates/tracks.json`). The statusline (`.constellation/scripts/statusline.sh`, when wired) and `/constellation:status` render from the same two files — the three views can never disagree.
+
+### Format
+
+Wrap the banner in a code span so it renders literally:
+
+```
+🌌 <track> <n>/<N> │ <emoji>✓ … ▶<emoji> <Label> · … │ <modifiers> │ <branch>
+```
+
+- One `<emoji>✓` per completed step, `▶<emoji> <Label>` for the current step, one `·` per pending step — the glyphs always sum to `<N>`.
+- `<n>` = 1-based position of the current step; `<N>` = steps in this track after filtering optional steps.
+- Omit the `<branch>` segment before a branch exists; omit the modifier segment when no modifier applies.
+
+### Rendering rules
+
+1. **The pointer never moves backward.** The current step is the **furthest** step reached (`completedSteps` ∪ `currentStep`); during fix loops the banner stays anchored on the gate with the 🔁 modifier (see State Persistence — fix loops keep `currentStep` on the gate).
+2. **Optional steps**: include `plan-review` only when `crossModelValidation.enabled` and its `steps` include `"plan-review"` — the denominator reflects what this project actually runs.
+3. **`post-pr`** is an extra step (`extraSteps` in the track map): while current, render it appended after `devops-pr` (denominator +1). It disappears once the workflow returns to `ship`.
+4. **Unknown step id** (state written by another harness version): render `▶ ⚙️ <raw-id>` — never fail, never guess a position.
+
+### Modifiers (in this order, only when applicable)
+
+| Modifier | When |
+|---|---|
+| `⛔ awaiting your decision` | `waitingOn: "user"` |
+| `🔁 loop N/3 — <k> blockers → 🔨 fixing` | a fix pass is in flight (short form `🔁 loop N/3` once the gate is re-reviewing) |
+
+### Examples
+
+```
+🌌 planned 6/10 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · · │ feat/011-audit-log
+🌌 planned 6/10 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · · │ 🔁 loop 1/3 — 2 blockers → 🔨 fixing │ feat/011-audit-log
+🌌 tweak 4/7 │ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · │ fix/typo-in-readme
+🌌 planned 10/11 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ 🔍✓ 🧪✓ 🧭✓ 🚀✓ ▶💬 PR Feedback · │ ⛔ awaiting your decision │ feat/011-audit-log
+```
+
+The banner never replaces the mandatory handoff sentence (agent + model) — it precedes it.
 
 ---
 
@@ -645,7 +694,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 9. All work happens on feature branches — **never commit directly to the main branch**.
 10. Every completed workflow ends with a PR via the DevOps Engineer.
 11. Incremental diffs on review fix passes — never the full diff again.
-12. Save workflow state at every milestone; log metrics at every event.
+12. Save workflow state at every milestone; log metrics at every event; print the Progress Banner after every save.
 
 ---
 
@@ -661,3 +710,4 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 - Skip the Lint Gate — reviewers must never receive code that doesn't lint and build
 - Send the full diff on a fix pass
 - Forget to save workflow state or log metrics
+- Save state without printing the Progress Banner

@@ -53,7 +53,7 @@ Handle /constellation:dry-run BEFORE invoking any agent: trace the workflow path
 POLICY
 
 if [ -f "$STATE_FILE" ]; then
-  printf '\nUNFINISHED WORKFLOW DETECTED: %s exists. Report the saved state (track, step, completed steps) to the user and offer /constellation:resume before classifying any new request.\n' ".constellation/state/current-workflow.json"
+  printf '\nUNFINISHED WORKFLOW DETECTED: %s exists. Report the saved state to the user as the Progress Banner defined in the constellation:orchestrator skill (one line: track, step position, emoji chain, modifiers, branch) and offer /constellation:resume before classifying any new request.\n' ".constellation/state/current-workflow.json"
 fi
 
 exit 0
