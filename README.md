@@ -22,8 +22,11 @@ constellation-harness/                 (plugin marketplace)
     ├── constellation-stack-node/      OPT-IN — Node/NestJS/GraphQL/Prisma skills
     │   ├── skills/
     │   └── .claude-plugin/plugin.json
-    └── constellation-stack-frontend/  OPT-IN — frontend design skills
-        ├── skills/
+    ├── constellation-stack-frontend/  OPT-IN — frontend design skills
+    │   ├── skills/
+    │   └── .claude-plugin/plugin.json
+    └── constellation-stack-service/   OPT-IN — constellation-service boilerplate recipes
+        ├── skills/                    (layers on top of constellation-stack-node)
         └── .claude-plugin/plugin.json
 ```
 
@@ -53,9 +56,12 @@ The mental model: **install once per machine, then enable + init once per repo.*
 
 # Frontend stack pack — web UI repos
 /plugin install constellation-stack-frontend@constellation
+
+# Boilerplate pack — repos scaffolded from the constellation-service template
+/plugin install constellation-stack-service@constellation
 ```
 
-Installing all three is harmless — a plugin stays dormant until enabled in a project, so machine-wide install costs nothing.
+Installing all of them is harmless — a plugin stays dormant until enabled in a project, so machine-wide install costs nothing.
 
 ### 2. Activate per repo (two gates)
 
@@ -65,11 +71,22 @@ The harness never takes over sessions globally. Each repo opts in with two steps
 
 ```jsonc
 // Backend repo — .claude/settings.json
-{ "enabledPlugins": ["constellation@constellation", "constellation-stack-node@constellation"] }
+{ "enabledPlugins": { "constellation@constellation": true, "constellation-stack-node@constellation": true } }
 ```
 ```jsonc
 // Frontend repo — .claude/settings.json
-{ "enabledPlugins": ["constellation@constellation", "constellation-stack-frontend@constellation"] }
+{ "enabledPlugins": { "constellation@constellation": true, "constellation-stack-frontend@constellation": true } }
+```
+```jsonc
+// Repo scaffolded from the constellation-service boilerplate — .claude/settings.json
+// (ships pre-configured in the template; the boilerplate pack layers on the node pack)
+{
+  "enabledPlugins": {
+    "constellation@constellation": true,
+    "constellation-stack-node@constellation": true,
+    "constellation-stack-service@constellation": true
+  }
+}
 ```
 
 **b. Initialize** — even when enabled, the SessionStart hook stays **silent** until the repo contains `.constellation/config.json`. Run `/constellation:init` once per repo to opt in. It scans the codebase and **auto-detects the stack**, writing `config.stack` for you (verify it once on the first repo).
@@ -211,6 +228,7 @@ In SDLC order — project setup → previewing work → controlling a running wo
 **Core (`constellation`)**: `orchestrator`, `tdd-workflow`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`.
 **Stack pack (`constellation-stack-node`)**: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`.
 **Stack pack (`constellation-stack-frontend`)**: `frontend-design` (distinctive, production-grade UI aesthetics — typography, color, motion, composition).
+**Boilerplate pack (`constellation-stack-service`)**: `add-domain-entity`, `e2e-harness`, `terraform-deploy` — recipes for backends scaffolded from the [constellation-service](https://github.com/jvoliveiran/constellation-service) template. Layers on top of `constellation-stack-node`; enable both in derived repos.
 
 Agents load stack skills dynamically based on `config.stack` — the core stays stack-agnostic.
 

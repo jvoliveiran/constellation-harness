@@ -10,7 +10,7 @@
       "name": "constellation",
       "source": "./plugins/constellation",
       "description": "Core harness: orchestrator, 10 persona agents, MLP product discovery, TDD engineering workflow, quality gates, workflow commands, state and metrics.",
-      "version": "0.7.0"
+      "version": "0.8.0"
     },
     {
       "name": "constellation-stack-node",
@@ -22,6 +22,12 @@
       "name": "constellation-stack-frontend",
       "source": "./plugins/constellation-stack-frontend",
       "description": "Stack skill pack: distinctive, production-grade frontend design guidance (typography, color, motion, composition).",
+      "version": "0.1.0"
+    },
+    {
+      "name": "constellation-stack-service",
+      "source": "./plugins/constellation-stack-service",
+      "description": "Boilerplate skill pack for constellation-service–derived backends: add-domain-entity playbook, e2e test harness, Terraform/ECS deployment. Layers on top of constellation-stack-node.",
       "version": "0.1.0"
     }
   ]

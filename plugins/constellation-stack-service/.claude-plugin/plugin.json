@@ -1,0 +1,20 @@
+{
+  "name": "constellation-stack-service",
+  "displayName": "Constellation Stack Pack — constellation-service boilerplate",
+  "version": "0.1.0",
+  "description": "Boilerplate skill pack for backends scaffolded from the constellation-service template: add-domain-entity playbook (Prisma model → exemplar module → federation types → tests), e2e test harness usage, and Terraform/ECS Fargate deployment. Layers on top of constellation-stack-node — enable both.",
+  "author": {
+    "name": "João Oliveira",
+    "email": "jvoliveiran@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "boilerplate",
+    "nestjs",
+    "federation",
+    "prisma",
+    "terraform",
+    "ecs",
+    "skills"
+  ]
+}

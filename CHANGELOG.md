@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-03
+
+### Added
+- **`constellation-stack-service` boilerplate pack (0.1.0)** — opt-in skill pack for
+  backends scaffolded from the `constellation-service` template, layered on top of
+  `constellation-stack-node`. Three recipe skills: `add-domain-entity` (Prisma model →
+  exemplar module layout → federation types → cursor pagination → audit wiring → tests,
+  with a drift warning to mirror the repo's actual exemplar), `e2e-harness` (dockerized
+  test infra on offset ports, `.env.test`, supertest GraphQL patterns, bearer-JWT auth in
+  test mode, CI parity gotchas), and `terraform-deploy` (state bootstrap, the
+  `skip_ecs_deployment` first-apply flow, ECR image push, `TF_VAR_app_secrets`,
+  migrations-on-boot implications, destroy safety). Registered in `marketplace.json`;
+  the boilerplate repo enables it by default alongside the node pack.
+
 ## [0.7.0] - 2026-07-02
 
 ### Added
