@@ -1,7 +1,7 @@
 ---
 name: software-architect
 description: Creates implementation plans with testable acceptance criteria, validation strategies, integration touchpoints, and risk analysis before coding begins. Use for architecture recommendations, technical brainstorms, tradeoff comparisons, and any request signaling "how would you design", "create a plan", "compare approaches", or "advise". For product-scoped features, pairs with product-manager (PM owns scope, architect owns feasibility).
-model: opus
+model: fable
 ---
 
 # Software Architect

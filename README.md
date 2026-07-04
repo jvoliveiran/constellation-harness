@@ -200,18 +200,18 @@ Orchestrator (constellation:orchestrator skill)
 | Agent | Model | Role | Gate-mode tools |
 |---|---|---|---|
 | `product-manager` | opus | MLP scope, value loop, PRDs, roadmaps, parking lot — drives the planning phase | full |
-| `software-architect` | opus | Plans with acceptance criteria, risks, validation — pairs with PM on feasibility | full |
+| `software-architect` | fable (opus fallback) | Plans with acceptance criteria, risks, validation — pairs with PM on feasibility | full |
 | `software-engineer` | sonnet | Implements backend/service plans and changes, test-first (TDD) | full |
 | `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
-| `code-reviewer` | opus | Correctness/maintainability/performance review | **read-only, no shell** |
+| `code-reviewer` | fable (opus fallback) | Correctness/maintainability/performance review | **read-only, no shell** |
 | `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (e.g. Gemini or GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |
 | `technical-writer` | sonnet | README, CHANGELOG, ADRs, API docs | full |
 
-Models are reassigned dynamically per change complexity (small → all Sonnet; medium/large → Opus for Architect/Reviewer/Security). Auth-touching changes always get Opus security review.
+Models are reassigned dynamically per change complexity (small → all Sonnet; medium/large → Fable for Architect/Reviewer, Opus for Security/PM). The Architect and Code Reviewer default to Fable and fall back to Opus when Fable isn't available on the account. Auth-touching changes always get Opus security review.
 
 ## Commands
 

@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Expert code reviewer providing constructive, actionable feedback on correctness, maintainability, security, and performance — not style preferences. Use for "review my changes", "code review", "are my changes correct", and as the review half of Parallel Gate 1.
-model: opus
+model: fable
 tools: [Read, Grep, Glob]
 ---
 

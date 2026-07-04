@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Code Reviewer and Software Architect default to Fable** (agent front-matter +
+  orchestrator model heuristic for medium/large scopes), falling back to Opus when Fable
+  is unavailable on the account (respawn once with `model: opus`, never downgrade
+  further). Security Analyst and Product Manager stay on Opus; small-scope changes stay
+  all-Sonnet. Cross-model docs now say "Claude reviewers" instead of "Opus reviewers".
+
 ## [0.9.0] - 2026-07-03
 
 ### Added

@@ -114,14 +114,16 @@ Agent model assignments depend on the complexity of the current change. Before s
 | Scope | Lines Changed | Modules Touched | Model Assignment |
 |---|---|---|---|
 | **Small** | < 50 | 1 | Sonnet for all agents |
-| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer; Opus for Reviewer/Security/Architect/PM |
-| **Large** | > 200 | 4+ | Opus for Reviewer/Security/Architect/PM; Sonnet for Engineer/SDET/DevOps/Writer |
+| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer; **Fable** for Reviewer/Architect; Opus for Security/PM |
+| **Large** | > 200 | 4+ | **Fable** for Reviewer/Architect; Opus for Security/PM; Sonnet for Engineer/SDET/DevOps/Writer |
 
 The Product Manager defaults to Opus regardless of size — scope decisions are leverage, not labor.
 
+**Fable fallback**: the Code Reviewer and Software Architect default to Fable (their agent front-matter default). If spawning with `model: fable` fails because the model is unavailable (plan/entitlement error, unknown model), respawn the same agent once with `model: opus` — never downgrade further, never skip the agent.
+
 Overrides:
 - Auth, RBAC, or security-sensitive code → always Opus for Security Analyst.
-- Database schema modifications → always Opus for Code Reviewer.
+- Database schema modifications → always Fable (Opus fallback) for Code Reviewer.
 - User says *"use opus for all"* / *"use sonnet for all"* → obey.
 
 Apply by passing the `model` parameter on each Agent tool call. For sequential handoffs, state it: *"Invoking Software Engineer (Sonnet — small change, single module)."*
@@ -220,7 +222,7 @@ PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → pr
 
 ## Lint Gate
 
-Fast automated check between Engineer completion and the review gate. It exists because reviewers run on Opus and consume significant tokens — catch trivially fixable issues first.
+Fast automated check between Engineer completion and the review gate. It exists because reviewers run on premium models (Fable/Opus) and consume significant tokens — catch trivially fixable issues first.
 
 ### Procedure
 
@@ -274,7 +276,7 @@ Agent call 3 (ONLY if crossModelValidation.enabled and its steps include "code-r
           "Subagent mode: run the cross-model review, return the Cross-Model Review Result contract."
 ```
 
-The third reviewer runs **concurrently** with the two Opus reviewers (spawn all in the
+The third reviewer runs **concurrently** with the two Claude reviewers (spawn all in the
 same message). See [Cross-Model Validation](#cross-model-validation) for the merge rules.
 
 ### Gate 2 (QA) — spawn both in one message
@@ -382,8 +384,8 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 is `true`, `constellation:cross-model-reviewer` bridges to a different model family (e.g.
 Gemini or GPT via the local `opencode` CLI) at the steps listed in `crossModelValidation.steps`:
 
-- `"code-review"` → Gate 1 gains a **third reviewer** over the **same diff** the Opus
-  code-reviewer sees. Spawn it in the **same message** as the two Opus reviewers
+- `"code-review"` → Gate 1 gains a **third reviewer** over the **same diff** the Claude
+  code-reviewer sees. Spawn it in the **same message** as the two Claude reviewers
   (§Parallel Execution → Gate 1).
 - `"plan-review"` → the Architect's drafted plan gets a **cross-model critique** before
   the branch is created (Planned Work step 1b; rules below).
@@ -395,7 +397,7 @@ ONLY when it is enabled.
 ### The cross-model verdict can be PASS, BLOCKED, or SKIPPED
 
 - **SKIPPED** = infrastructure failure (opencode missing, `model_not_found`, timeout,
-  unparseable output). Treat as **no cross-model signal this pass** — proceed on the Opus
+  unparseable output). Treat as **no cross-model signal this pass** — proceed on the Claude
   reviews exactly as if the third reviewer were not configured. **Never a blocker.** Log
   `crossModelSkipped` with the reason. This is `onInfraFailure: skip` and is load-bearing:
   a slow/throttled model must never block delivery.
@@ -403,23 +405,23 @@ ONLY when it is enabled.
 
 ### Merge rules (blocking, with escalate-on-unconfirmed)
 
-The Opus reviewers remain authoritative and behave exactly as today. The cross-model
+The Claude reviewers remain authoritative and behave exactly as today. The cross-model
 reviewer covers the **same ground**, so its blockers are classified by confirmation:
 
 | 🔴 Blocker raised by | Meaning | Action |
 |---|---|---|
-| Cross-model **and** an Opus reviewer (same issue) | Confirmed | **Loop** Engineer (normal fix flow) |
-| An Opus reviewer only | Authoritative (unchanged from today) | **Loop** Engineer |
-| **Cross-model only** — no Opus reviewer raised it | Unconfirmed / disagreement | Per `onUnconfirmedBlocker`: **`escalate`** (default) → present to the user as an open question, do NOT auto-loop, do NOT increment the loop counter; **`loop`** → treat like a confirmed blocker |
+| Cross-model **and** a Claude reviewer (same issue) | Confirmed | **Loop** Engineer (normal fix flow) |
+| A Claude reviewer only | Authoritative (unchanged from today) | **Loop** Engineer |
+| **Cross-model only** — no Claude reviewer raised it | Unconfirmed / disagreement | Per `onUnconfirmedBlocker`: **`escalate`** (default) → present to the user as an open question, do NOT auto-loop, do NOT increment the loop counter; **`loop`** → treat like a confirmed blocker |
 
 **Escalation** presents the unconfirmed blocker(s) inline as open questions (both
-positions — what the cross-model flagged and that no Opus reviewer confirmed it) and waits
+positions — what the cross-model flagged and that no Claude reviewer confirmed it) and waits
 for the user: accept risk / send back to Engineer / abort. Reuse the same inline
 open-question flow as Architect open questions. Log `crossModelEscalated`.
 
-Confirmed and Opus-only blockers loop through the Engineer + Lint Gate as usual and honor
+Confirmed and Claude-only blockers loop through the Engineer + Lint Gate as usual and honor
 the **3-loop cap**. On fix passes, the cross-model reviewer gets the **incremental diff**
-plus the original blocker list, same as the Opus reviewers.
+plus the original blocker list, same as the Claude reviewers.
 
 ### Plan review (`steps` include `"plan-review"`) — Planned Work only
 
@@ -429,7 +431,7 @@ the plan content + the original request + the config (`model`, `effort`, `timeou
 *"Subagent mode: plan-review — critique the plan, return the contract."* The expected
 contract is the `Cross-Model Plan Review Result` (defined in the agent).
 
-There is no second Opus plan reviewer, so confirmation works differently from Gate 1:
+There is no second Claude plan reviewer, so confirmation works differently from Gate 1:
 the **Architect adjudicates** each cross-model 🔴 (agreement = Architect accepts, the
 analog of two models agreeing on a diff blocker):
 
@@ -672,9 +674,9 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 
 ### Example handoffs
 
-> *"This is an architecture question — invoking Software Architect (Opus — architectural decision)."*
+> *"This is an architecture question — invoking Software Architect (Fable — architectural decision)."*
 
-> *"Lint Gate passed. Triggering Parallel Gate 1 — spawning Code Reviewer (Opus) and Security Analyst (Opus) as parallel subagents."*
+> *"Lint Gate passed. Triggering Parallel Gate 1 — spawning Code Reviewer (Fable) and Security Analyst (Opus) as parallel subagents."*
 
 > *"Fixes applied. Re-triggering Parallel Gate 1 with incremental diff (fix delta only)."*
 
