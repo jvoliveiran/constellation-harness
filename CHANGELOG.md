@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-04
+
+### Added
+- **`/constellation:plans`** — portfolio overview of all plans in `.constellation/plans/`
+  in plan-number order: lifecycle status per plan (📝 draft / 👍 approved / 🔨
+  in-progress / ✅ completed / 📦 archived with `--archived`), open-question counts on
+  drafts, the in-flight plan flagged with its current workflow step, and actionable
+  signals (blocked drafts, completed plans past the 30-day archive window). Read-only.
+
 ### Changed
 - **All GitHub operations standardized on the gh CLI over HTTPS** — git remote operations
   (clone/push/pull) authenticate via gh's credential helper, never SSH keys or raw HTTP

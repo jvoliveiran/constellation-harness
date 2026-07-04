@@ -47,6 +47,7 @@ Users can issue these at any point during the workflow:
 | `/constellation:resume` | Resume from the saved state file. If it doesn't exist, report that there is nothing to resume. |
 | `/constellation:skip-gate` | Skip the current gate after explicit confirmation: "Are you sure you want to skip [gate]? This bypasses [reviewer/security/test] checks." Log the skip. |
 | `/constellation:status` | Show current state — track, step, gates passed, review loop count. Never interrupts the workflow. |
+| `/constellation:plans` | Portfolio overview of all plans in `.constellation/plans/` with lifecycle status, in plan-number order; flags the in-flight plan. Read-only, never interrupts. |
 
 ---
 
