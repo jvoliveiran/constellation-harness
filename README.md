@@ -39,7 +39,7 @@ The mental model: **install once per machine, then enable + init once per repo.*
 ### Prerequisites
 
 - **`jq`** — the git-guard hook (`guard-git.sh`) uses it to enforce git safety (no commits/pushes to main, no `--no-verify`, no staging secrets). **Without `jq` the hook silently no-ops** — no error, just no protection. Install it: `brew install jq` (macOS) / `apt install jq` (Debian).
-- **`gh` (GitHub CLI), authenticated** — `/constellation:init` uses it to detect your GitHub account, and the DevOps agent uses it to open PRs. Verify with `gh auth status`.
+- **`gh` (GitHub CLI), authenticated** — all GitHub operations run through it, over **HTTPS with gh's credential helper** (`gh auth setup-git`), never SSH. `/constellation:init` uses it to detect your GitHub account, and the DevOps agent uses it to push and open PRs. With multiple gh accounts, `.constellation/config.json` → `github.account` decides which one each project uses (agents `gh auth switch` before every remote operation). Verify with `gh auth status`.
 
 ### 1. Install (once per machine)
 

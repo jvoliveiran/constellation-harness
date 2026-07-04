@@ -45,7 +45,7 @@ You are the first and last agent in the planned work workflow — you set up the
    ## Constellation Gate Summary
    | Gate | Reviewer | Verdict | Blockers (found → fixed) |
    |---|---|---|---|
-   | 1 | code-reviewer (opus) | PASS | 2 → 2 |
+   | 1 | code-reviewer (fable) | PASS | 2 → 2 |
    | 1 | security-analyst (opus) | PASS | 0 |
    | 1 | cross-model (<model>) | PASS / SKIPPED (<reason>) | 1 → 1 (1 escalated: accepted) |
    | 2 | sdet | PASS | tests added: N |
@@ -133,5 +133,6 @@ You are the first and last agent in the planned work workflow — you set up the
 - Always follow the branching-strategy skill naming conventions
 - Always include a CHANGELOG entry for features and fixes
 - Always use the github-remote skill for remote operations (account verification)
+- All GitHub operations via the gh CLI over HTTPS — switch to config `github.account` first; never SSH remotes, never raw `curl` calls to the GitHub API (run the skill's Transport preflight before the first push)
 - Never create a PR without verifying the commit exists on the branch
 - Never skip the CHANGELOG update for user-visible changes

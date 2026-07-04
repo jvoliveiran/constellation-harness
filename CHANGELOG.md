@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **All GitHub operations standardized on the gh CLI over HTTPS** — git remote operations
+  (clone/push/pull) authenticate via gh's credential helper, never SSH keys or raw HTTP
+  API calls, so `.constellation/config.json` → `github.account` reliably controls which
+  account acts even with multiple gh accounts. github-remote skill gains a Transport
+  preflight (SSH→HTTPS remote conversion, per-repo account pin via
+  `git config credential.username <account>` so git pushes route to the configured
+  account regardless of the machine's active gh account, `gh auth setup-git`,
+  `gh config set git_protocol https`), a `Permission denied (publickey)` troubleshooting
+  entry, and two hard rules (no SSH remotes, no direct `curl` to the GitHub API);
+  `/constellation:init` asks which account to use when gh has several and offers the
+  SSH→HTTPS conversion + pin; DevOps agent hard rules updated to match.
 - **Code Reviewer and Software Architect default to Fable** (agent front-matter +
   orchestrator model heuristic for medium/large scopes), falling back to Opus when Fable
   is unavailable on the account (respawn once with `model: opus`, never downgrade

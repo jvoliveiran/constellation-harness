@@ -22,6 +22,47 @@ The account to use is defined in the project's `.constellation/config.json` unde
 
 ---
 
+## Transport — HTTPS via gh, never SSH
+
+All GitHub operations go through the `gh` CLI, and all git remote operations (clone,
+push, pull, fetch) go over **HTTPS authenticated by gh's credential helper**. Never SSH.
+
+Why: the credential helper serves the credentials of the **currently active gh account**,
+so `gh auth switch` + HTTPS routes every operation to the account the project configured.
+SSH keys and per-account host aliases (`git@github.com-work:…`) sit outside gh entirely —
+they silently ignore `github.account` and break when keys rotate.
+
+**Transport preflight** — run once before the first remote git operation of a session:
+
+```bash
+# 1. Remote must be HTTPS — convert if it is SSH (git@… or ssh://…)
+git remote get-url origin
+git remote set-url origin https://github.com/OWNER/REPO.git   # only when SSH
+
+# 2. Pin the repo to the configured account (git pushes route to <account>'s
+#    token regardless of which gh account is currently active)
+git config credential.username <account>
+
+# 3. gh must own git credentials (idempotent; per machine)
+gh auth setup-git
+
+# 4. gh-created clones/remotes default to HTTPS
+gh config set git_protocol https
+```
+
+`gh repo clone` and `gh pr checkout` already produce HTTPS remotes once `git_protocol`
+is `https` — the conversion in step 1 is only needed for repos cloned by other means.
+
+**The pin (step 2) covers git; `gh` commands still follow the active account.** With the
+pin set, `git push`/`pull`/`fetch` always act as `<account>` even if the user's daily
+default is a different gh account. `gh pr *` / `gh api` calls do NOT read the pin — they
+use the active account, which is why Switch-Then-Act below stays mandatory for every gh
+command. If the account was switched during a workflow on a machine whose daily default
+is a different account, mention at workflow end that the active gh account was left on
+`<account>` (`gh auth switch` restores it).
+
+---
+
 ## Verifying Authentication State
 
 Before any remote operation:
@@ -78,17 +119,13 @@ gh repo list [OWNER --limit 50]
 
 ### Pushing Changes
 
-`gh` manages authentication via the credential helper set up by `gh auth setup-git`. Switch accounts before pushing:
+`gh` manages authentication via the credential helper set up by `gh auth setup-git` (see
+Transport preflight). Switch accounts before pushing — the helper serves the active
+account's credentials:
 
 ```bash
 gh auth switch --user <account>
 git push origin BRANCH_NAME
-```
-
-If the credential helper is not configured, run once per account (after switching to it):
-
-```bash
-gh auth setup-git
 ```
 
 ### Creating a Pull Request
@@ -186,6 +223,12 @@ gh auth switch --hostname github.com --user <account>
 git push origin BRANCH_NAME                    # retry
 ```
 
+### `Permission denied (publickey)`
+
+The remote is SSH — gh credentials never enter the picture. Run the Transport preflight:
+convert the remote to HTTPS (`git remote set-url origin https://github.com/OWNER/REPO.git`),
+ensure `gh auth setup-git`, then retry.
+
 ### `gh auth switch` — account not found
 
 The account is not authenticated. Run `gh auth login --hostname github.com`, then verify with `gh auth status` and retry.
@@ -198,3 +241,5 @@ The account is not authenticated. Run `gh auth login --hostname github.com`, the
 - **Always verify the switch** with `gh api user --jq '.login'` before the intended command
 - **Never hardcode tokens or credentials** — `gh` manages authentication
 - **Never run `gh repo clone`, `git push`, or `gh pr create` before confirming the active account**
+- **Never operate over SSH remotes** — HTTPS via the gh credential helper only; convert SSH remotes before pushing (Transport preflight)
+- **Never call the GitHub HTTP API directly** (`curl https://api.github.com/…`) — use `gh api` / the dedicated `gh` subcommands, which authenticate as the switched account

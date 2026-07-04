@@ -10,7 +10,7 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 
 ## Arguments
 
-`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json` and `scripts/statusline.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched).
+`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json` and `scripts/statusline.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
 
 ## Procedure
 
@@ -22,7 +22,8 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 ### 2. Detect project facts
 
 - **Package manager & commands**: read the project manifest (`package.json`, `pyproject.toml`, `go.mod`, …). For Node: extract real `lint`, `build`, `test` script names; detect npm/pnpm/yarn from lockfiles. For other ecosystems, use their conventional equivalents. If no lint/build/test commands can be detected, ask the user for them.
-- **GitHub account**: run `gh api user --jq .login` (fall back to asking the user if `gh` is not authenticated).
+- **GitHub account**: run `gh api user --jq .login` (fall back to asking the user if `gh` is not authenticated). If `gh auth status` shows **multiple accounts**, ask the user which one this project should use — the configured `github.account` is what every agent switches to (`gh auth switch`) before any remote operation.
+- **Remote transport**: all GitHub operations run through the gh CLI over HTTPS (gh's credential helper routes them to the configured account). Check `git remote get-url origin` — if it is SSH (`git@…` or `ssh://…`), offer to convert it: `git remote set-url origin https://github.com/OWNER/REPO.git`, then ensure `gh auth setup-git` and `gh config set git_protocol https`. Always pin the repo to the configured account — `git config credential.username <account>` — so git pushes route to that account's token even when the machine's daily-default gh account is a different one. If the user declines the conversion, warn that pushes will use SSH keys outside gh's account control and `github.account` will not apply to git pushes.
 - **Main branch**: `git remote show origin` (HEAD branch) or default `main`.
 - **Schema artifact**: look for a generated API schema (e.g. `src/schema.gql`, `schema.graphql`, `openapi.yaml`). Set `schemaPath` if found, else `null`.
 - **Stack**: detect frameworks from dependencies and map to available stack skill names. Only list skills whose technology is actually present:
