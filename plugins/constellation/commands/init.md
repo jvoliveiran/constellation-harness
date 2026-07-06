@@ -41,6 +41,7 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 ├── tracks.json              ← from templates/tracks.json, verbatim; canonical step map for the Progress HUD
 ├── memory/review-patterns.md ← from templates/review-patterns.md, verbatim
 ├── plans/archive/.gitkeep
+├── improvements/.gitkeep       ← DX Analyst findings (complexity-reduction backlog)
 ├── spikes/.gitkeep
 ├── adrs/.gitkeep
 ├── designs/.gitkeep            ← design rationale docs from ui-ux-designer (frontend projects)

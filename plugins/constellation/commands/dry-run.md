@@ -14,7 +14,7 @@ Trace the workflow that WOULD run for the request in `$ARGUMENTS` — without in
 
 ```
 Track: <track>
-Steps: <pipeline, e.g. Architect → DevOps → Engineer → Lint Gate → Gate 1 (Reviewer+Security) → Gate 2 (SDET+Writer) → Architect verify → Commit → DevOps PR>
+Steps: <pipeline, e.g. Architect → DevOps → Engineer → Lint Gate → Gate 1 (Reviewer+Security+DX advisory) → Gate 2 (SDET+Writer) → Architect verify → Commit → DevOps PR>
 Model profile: <Small|Medium|Large> (<reason>)
 Agents: <each agent with its assigned model>
 Skills: <stack skills from .constellation/config.json that agents would load>

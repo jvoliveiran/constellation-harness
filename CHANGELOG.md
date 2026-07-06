@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **DX Analyst agent (`dx-analyst`)** — a read-only, advisory Developer Experience
+  reviewer focused on reducing overall app complexity: duplicated code, unnecessary
+  dependencies, redundant env vars, clone-to-running setup friction, and over-complicated
+  test strategies (heavy mocking of cross-app dependencies where a fake/contract test
+  would be simpler). Runs in Parallel Gate 1 alongside Code Reviewer + Security Analyst
+  (first pass only, never on fix passes, skipped on hotfixes) and **never blocks**:
+  findings are persisted by the orchestrator as markdown improvement files in
+  `.constellation/improvements/NNN-<slug>.md` (front-matter: status/category/effort/
+  source/date) — a backlog picked up later as Tweaks or Planned Work. A malformed or
+  failed DX return logs `dxSkipped` and the gate proceeds. `/constellation:init` now
+  scaffolds `.constellation/improvements/`; state gains `gate1Results.dx`; gate metrics
+  gain `dxImprovements`.
+
 ## [0.10.0] - 2026-07-04
 
 ### Added

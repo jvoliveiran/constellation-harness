@@ -13,7 +13,7 @@ constellation-harness/                 (plugin marketplace)
 ├── .claude-plugin/marketplace.json
 └── plugins/
     ├── constellation/                 CORE — universal harness
-    │   ├── agents/                    10 persona subagents
+    │   ├── agents/                    11 persona subagents
     │   ├── commands/                  /constellation:* workflow commands
     │   ├── skills/                    orchestrator + generic delivery skills
     │   ├── templates/                 files scaffolded by /constellation:init
@@ -164,6 +164,7 @@ Orchestrator (constellation:orchestrator skill)
           ├── Sequential: Architect, DevOps, Engineer
           └── Parallel gates (single-message Agent spawns):
                ├── Gate 1: Code Reviewer + Security Analyst   (read-only, enforced)
+               │           + DX Analyst                       (read-only, advisory)
                └── Gate 2: SDET + Technical Writer            (may modify files)
 ```
 
@@ -172,8 +173,8 @@ Orchestrator (constellation:orchestrator skill)
 | Track | Pipeline | Trigger |
 |---|---|---|
 | **Discovery** | PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts in `.constellation/product/` | product ideas, PRDs, roadmaps, prioritization, or `discovery: …` |
-| **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → PR + gate summary → Ship (merge + verify) | 3+ files / new module / architecture, or `plan: …` |
-| **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → PR + gate summary → Ship | bounded 1-2 file change, or `tweak: …` |
+| **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security + DX] → [SDET + Writer] → Architect verify → Commit → PR + gate summary → Ship (merge + verify) | 3+ files / new module / architecture, or `plan: …` |
+| **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security + DX] → SDET → Commit → PR + gate summary → Ship | bounded 1-2 file change, or `tweak: …` |
 | **Hotfix** | DevOps branch → Engineer → Lint Gate → Reviewer → SDET → Commit → PR + gate summary → Ship | production broken, or `hotfix: …` |
 | **Spike** | Architect → Engineer → findings doc in `.constellation/spikes/` | research, or `spike: …` |
 
@@ -184,6 +185,7 @@ Orchestrator (constellation:orchestrator skill)
 - **TDD as the engineering process** — both engineer agents follow the `tdd-workflow` skill: RED (validated failing test) → GREEN (minimal implementation) → REFACTOR, with checkpoint commits on the feature branch. Production code is never written before a failing test. Integration/E2E coverage stays with SDET in Gate 2.
 - **Lint Gate** — project lint + build (+ schema compatibility when `schemaPath` is configured) runs before any reviewer, so expensive Opus reviewers never see code that doesn't compile.
 - **Parallel gates** — reviewers are spawned concurrently in a single message; blockers from both are merged into one fix list.
+- **DX advisory pass** — the DX Analyst runs alongside Gate 1 (first pass only, skipped on hotfixes) hunting complexity: duplicated code, unnecessary dependencies, redundant env vars, local-setup friction, and over-mocked cross-app test setups. It never blocks — each finding is filed as a markdown improvement in `.constellation/improvements/` (with category, evidence, simplification, effort) to be picked up later as a tweak or plan.
 - **Incremental review** — fix passes send reviewers only the fix delta plus the original blocker list, not the whole diff again.
 - **Review memory** — recurring blocker patterns accumulate in `.constellation/memory/review-patterns.md`; the Engineer self-checks against them before each gate, reducing loops over time.
 - **Fix policy** — `review.fixPolicy` controls what the Engineer must fix after review: `"blockers"` (default) or `"blockers+suggestions"` (suggestions join the first fix pass only). Nits piggyback: mandatory when the first pass had any blocker/suggestion, otherwise at the Engineer's discretion — they never trigger or block a loop.
@@ -207,6 +209,7 @@ Orchestrator (constellation:orchestrator skill)
 | `code-reviewer` | fable (opus fallback) | Correctness/maintainability/performance review | **read-only, no shell** |
 | `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (e.g. Gemini or GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
+| `dx-analyst` | sonnet | Complexity reduction — duplication, dependencies, env vars, local setup, test-strategy simplicity; advisory, files improvements to `.constellation/improvements/` | **read-only, no shell** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |
 | `technical-writer` | sonnet | README, CHANGELOG, ADRs, API docs | full |

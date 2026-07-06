@@ -79,6 +79,7 @@ Explicit overrides: *"hotfix: …"* / *"discovery: …"* / *"spike: …"* / *"tw
 | `constellation:ui-ux-designer` | design-led frontend work — dashboards, landing pages, redesigns, visual polish, design systems. Signals: *"design", "redesign", "beautify", "landing page", "dashboard layout", "make it look", "hero section", "pricing page"* |
 | `constellation:code-reviewer` | review staged or locally committed changes. Signals: *"review code changes", "check my changes", "code review"* |
 | `constellation:security-analyst` | security review/audit, vulnerabilities, hardening. Signals: *"security review", "is this secure", "OWASP", "harden", "attack surface"* |
+| `constellation:dx-analyst` | complexity reduction and developer experience — advisory only. Signals: *"simplify", "reduce complexity", "too complicated", "DX review", "duplicated code", "do we need this dependency", "local setup"* |
 | `constellation:sdet` | add/review/improve tests, explore untested paths. Signals: *"add tests", "run tests", "are we testing", "test this"* |
 | `constellation:devops-engineer` | branches, push, PRs, CI/CD, releases, CHANGELOG. Signals: *"create a branch", "push", "create PR", "deploy", "changelog"* |
 | `constellation:technical-writer` | documentation, README, ADRs. Signals: *"update docs", "document this", "write an ADR"* |
@@ -115,8 +116,8 @@ Agent model assignments depend on the complexity of the current change. Before s
 | Scope | Lines Changed | Modules Touched | Model Assignment |
 |---|---|---|---|
 | **Small** | < 50 | 1 | Sonnet for all agents |
-| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer; **Fable** for Reviewer/Architect; Opus for Security/PM |
-| **Large** | > 200 | 4+ | **Fable** for Reviewer/Architect; Opus for Security/PM; Sonnet for Engineer/SDET/DevOps/Writer |
+| **Medium** | 50–200 | 2–3 | Sonnet for Engineer/SDET/DevOps/Writer/DX; **Fable** for Reviewer/Architect; Opus for Security/PM |
+| **Large** | > 200 | 4+ | **Fable** for Reviewer/Architect; Opus for Security/PM; Sonnet for Engineer/SDET/DevOps/Writer/DX |
 
 The Product Manager defaults to Opus regardless of size — scope decisions are leverage, not labor.
 
@@ -138,8 +139,8 @@ All tracks minimize human intervention — agents hand off **automatically** unl
 ### Planned Work
 
 ```
-Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security] → [SDET + Writer] → Architect verify → Commit → DevOps (PR)
-                                                      ↑ parallel gate 1        ↑ parallel gate 2
+Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security + DX] → [SDET + Writer] → Architect verify → Commit → DevOps (PR)
+                                                      ↑ parallel gate 1             ↑ parallel gate 2
 ```
 
 1. Planning:
@@ -156,7 +157,7 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
    **→ Save state**: `{ step: "lint-gate" }`
 5. **Lint Gate** (see below). Loop with Engineer until it passes, then trigger Parallel Gate 1.
    **→ Save state**: `{ step: "parallel-gate-1" }`
-6. **Parallel Gate 1 — Review**: spawn Code Reviewer + Security Analyst **in a single message**. Either has 🔴 blockers → merge all blockers into one list, hand to Engineer, re-run Lint Gate, re-trigger gate (loop until both pass). Neither → proceed.
+6. **Parallel Gate 1 — Review**: spawn Code Reviewer + Security Analyst + DX Analyst **in a single message**. Reviewer or Security has 🔴 blockers → merge all blockers into one list, hand to Engineer, re-run Lint Gate, re-trigger gate (loop until both pass). The DX Analyst is **advisory** — its improvements are persisted to `.constellation/improvements/` and never block, loop, or join the fix list (see [Merging results](#merging-results)). Neither blocking reviewer blocked → proceed.
    **→ Save state**: `{ step: "parallel-gate-2" }` **→ Log**: `{ event: "gate1-pass", reviewLoops: N }`
 7. **Parallel Gate 2 — QA**: spawn SDET + Technical Writer **in a single message**. SDET failures → fix and re-run SDET only (Writer does not re-run). Both pass → proceed.
    **→ Save state**: `{ step: "architect-verify" }` **→ Log**: `{ event: "gate2-pass" }`
@@ -172,12 +173,12 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
 ### Tweaks
 
 ```
-DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security] → SDET → Commit → DevOps (PR)
+DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security + DX] → SDET → Commit → DevOps (PR)
 ```
 
 1. No plan. DevOps creates `<type>/<description>`. **→ Save state**: `{ step: "devops-branch", track: "tweak" }` Hands to Engineer **immediately**. **→ Save state**: `{ step: "engineer" }`
 2. Engineer implements the original request, then Lint Gate (loop until pass). **→ Save state**: `{ step: "lint-gate" }`
-3. Parallel Gate 1 (Reviewer + Security). Blockers loop back through Engineer + Lint Gate until clean. **→ Save state**: `{ step: "parallel-gate-1" }`
+3. Parallel Gate 1 (Reviewer + Security + DX). Blockers loop back through Engineer + Lint Gate until clean; DX improvements are persisted, never block. **→ Save state**: `{ step: "parallel-gate-1" }`
 4. SDET checks tests related **ONLY** to changed files; adds missing tests; runs them. **→ Save state**: `{ step: "sdet" }`
 5. SDET commits (message derived from the original request). DevOps pushes, creates the PR
    + gate summary comment **→ Save state**: `{ step: "devops-pr" }`, then the **Ship step** applies exactly as in Planned Work. **→ Save state**: `{ step: "ship", prNumber: N }`
@@ -270,15 +271,20 @@ Agent call 2: subagent_type: constellation:security-analyst, model: <heuristic>
   * When the diff touches the dependency manifest/lockfile, pre-run the project's audit
     (e.g. `npm audit --json 2>/dev/null | head -c 20000`; never fail the gate on audit
     exit codes) and paste the output — the security-analyst has no shell.
-Agent call 3 (ONLY if crossModelValidation.enabled and its steps include "code-review"):
+Agent call 3 (first gate pass ONLY — never on fix passes):
+  subagent_type: constellation:dx-analyst, model: sonnet
+  prompt: <diff> + <plan reference> + <list of existing .constellation/improvements/ files with titles> +
+          "Subagent mode: DX-review the changes for complexity reduction, return the DX Review Result contract."
+Agent call 4 (ONLY if crossModelValidation.enabled and its steps include "code-review"):
   subagent_type: constellation:cross-model-reviewer, model: sonnet
   prompt: <diff> + <plan reference> + <review memory> +
           crossModelValidation config (model, effort, timeoutSec) +
           "Subagent mode: run the cross-model review, return the Cross-Model Review Result contract."
 ```
 
-The third reviewer runs **concurrently** with the two Claude reviewers (spawn all in the
-same message). See [Cross-Model Validation](#cross-model-validation) for the merge rules.
+All gate agents run **concurrently** (spawn all in the same message). The DX Analyst is
+**advisory** — see [Merging results](#merging-results) rule 10; the cross-model reviewer
+follows [Cross-Model Validation](#cross-model-validation).
 
 ### Gate 2 (QA) — spawn both in one message
 
@@ -320,6 +326,15 @@ Every gate subagent MUST return a structured result:
 - **NITS**: [💭 findings]
 - **DEPENDENCY_AUDIT**: [audit summary, or "no new dependencies"]
 - **PATTERNS**: [new recurring patterns, or "none"]
+```
+
+**DX Analyst** (advisory — VERDICT is always `ADVISORY`, never PASS/BLOCKED)
+```
+## DX Review Result
+- **VERDICT**: ADVISORY
+- **IMPROVEMENTS**: [🧹 findings with title, category, evidence, simplification, effort — or "none"]
+- **ALREADY_FILED**: [existing improvement files the diff relates to, or "none"]
+- **SETUP_PATH**: [clone-to-running assessment, or "not assessed"]
 ```
 
 **SDET**
@@ -364,8 +379,31 @@ Every gate subagent MUST return a structured result:
 8. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
 9. Re-reviews verify blockers were addressed; only unresolved or new **blockers** keep
    looping. All `PASS` → present remaining suggestions/nits as informational output and proceed.
+10. **DX Analyst results are advisory — persist, never gate.** Its improvements never
+    join the fix list, never trigger a fix pass, never touch `hadBlockers` or
+    `reviewLoopCount`, and the DX Analyst is **not re-spawned on fix passes** (app-level
+    complexity findings don't change with a fix delta). For each `IMPROVEMENTS` entry not
+    already covered by an existing file, write
+    `.constellation/improvements/NNN-<slug>.md` (NNN = next number in the directory):
 
-A subagent return that does not match its output contract (no parsable `VERDICT`) is re-requested **once**; if still malformed, treat it as `BLOCKED` — never as a pass.
+    ```markdown
+    ---
+    status: open
+    category: duplication | dependencies | env-vars | local-setup | test-strategy
+    effort: S | M | L
+    source: <plan file or branch that surfaced it>
+    date-created: DD-MM-YYYY
+    ---
+    # <Title>
+    **Evidence**: …
+    **Simplification**: …
+    ```
+
+    Mention the filed improvements in the gate summary (one line each). They are picked
+    up later as Tweaks (S/M) or Planned Work (L) when the user asks — improvements are
+    a backlog, not a queue the workflow drains automatically.
+
+A subagent return that does not match its output contract (no parsable `VERDICT`) is re-requested **once**; if still malformed, treat it as `BLOCKED` — never as a pass. **Exception — DX Analyst**: a malformed or failed DX return is logged (`dxSkipped`) and the gate proceeds; an advisory agent must never block delivery.
 
 ### Rules
 
@@ -374,7 +412,7 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 - Always re-run the **entire gate** after fixes — not just the agent that found blockers.
 - Use incremental diffs on fix passes; full diff only on the first pass.
 - Always include review memory in reviewer prompts.
-- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions). The code-reviewer and security-analyst have **no shell**; the diff (and dependency-audit output when relevant) is supplied in their prompts.
+- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions). The code-reviewer, security-analyst, and dx-analyst have **no shell**; the diff (and dependency-audit output when relevant) is supplied in their prompts. The orchestrator — not the dx-analyst — writes the improvement files.
 - SDET in Gate 2 CAN modify code (adding tests) — safe because Gate 1 already approved the implementation.
 
 ---
@@ -385,8 +423,8 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 is `true`, `constellation:cross-model-reviewer` bridges to a different model family (e.g.
 Gemini or GPT via the local `opencode` CLI) at the steps listed in `crossModelValidation.steps`:
 
-- `"code-review"` → Gate 1 gains a **third reviewer** over the **same diff** the Claude
-  code-reviewer sees. Spawn it in the **same message** as the two Claude reviewers
+- `"code-review"` → Gate 1 gains an **additional blocking reviewer** over the **same diff**
+  the Claude code-reviewer sees. Spawn it in the **same message** as the other gate agents
   (§Parallel Execution → Gate 1).
 - `"plan-review"` → the Architect's drafted plan gets a **cross-model critique** before
   the branch is created (Planned Work step 1b; rules below).
@@ -399,7 +437,7 @@ ONLY when it is enabled.
 
 - **SKIPPED** = infrastructure failure (opencode missing, `model_not_found`, timeout,
   unparseable output). Treat as **no cross-model signal this pass** — proceed on the Claude
-  reviews exactly as if the third reviewer were not configured. **Never a blocker.** Log
+  reviews exactly as if the cross-model reviewer were not configured. **Never a blocker.** Log
   `crossModelSkipped` with the reason. This is `onInfraFailure: skip` and is load-bearing:
   a slow/throttled model must never block delivery.
 - **PASS / BLOCKED** = a real verdict → feed into the merge below.
@@ -521,7 +559,7 @@ Location: `.constellation/state/current-workflow.json`
   "originalRequest": "implement the audit log feature",
   "currentStep": "parallel-gate-1",
   "completedSteps": ["architect", "devops-branch", "engineer", "lint-gate"],
-  "gate1Results": { "reviewer": null, "security": null, "crossModel": null },
+  "gate1Results": { "reviewer": null, "security": null, "dx": null, "crossModel": null },
   "gate2Results": { "sdet": null, "writer": null },
   "planReviewResult": null,
   "hadBlockers": false,
@@ -611,7 +649,7 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
 |---|---|
 | `workflow-start` | Track determined |
 | `lint-gate-pass` / `lint-gate-fail` | After the Lint Gate (include error summary on fail) |
-| `gate1-pass` / `gate1-blocked` | After Gate 1 (include loop/blocker count) |
+| `gate1-pass` / `gate1-blocked` | After Gate 1 (include loop/blocker count, plus `dxImprovements: N` filed or `dxSkipped` with the reason) |
 | `gate2-pass` | After Gate 2 |
 | `workflow-complete` | PR created (include full summary) |
 | `pr-comments-addressed` | Post-PR round done (include `threads`, `loops`) |
@@ -677,7 +715,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 
 > *"This is an architecture question — invoking Software Architect (Fable — architectural decision)."*
 
-> *"Lint Gate passed. Triggering Parallel Gate 1 — spawning Code Reviewer (Fable) and Security Analyst (Opus) as parallel subagents."*
+> *"Lint Gate passed. Triggering Parallel Gate 1 — spawning Code Reviewer (Fable), Security Analyst (Opus), and DX Analyst (Sonnet, advisory) as parallel subagents."*
 
 > *"Fixes applied. Re-triggering Parallel Gate 1 with incremental diff (fix delta only)."*
 
@@ -689,6 +727,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 1. All Engineer code changes pass the **Lint Gate** before review.
 2. All code changes get a Code Reviewer review.
 3. Security Analyst runs **ALWAYS** alongside Code Reviewer in Gate 1 (except Hotfixes).
+3b. DX Analyst runs alongside them on the **first** Gate 1 pass (except Hotfixes — speed first). It is advisory: improvements are filed to `.constellation/improvements/`, never blocked on, never re-run on fix passes.
 4. SDET runs **ALWAYS** after reviews pass.
 5. 🔴 Blockers **ALWAYS** loop back: Engineer → Lint Gate → re-trigger the entire gate. **All fix loops are capped at 3** (lint gate retries, review-gate loops) — beyond that, escalate to the user; never loop indefinitely.
 6. Engineer only triggers the Lint Gate when no blocker fixes are pending.
