@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-08
+
 ### Added
 - **`grafana-cloud` core skill** — Grafana Cloud as the observability backend for all
   projects, with Loki as the primary distributed-logging store. Covers the free-tier
