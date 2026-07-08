@@ -25,8 +25,12 @@ constellation-harness/                 (plugin marketplace)
     ├── constellation-stack-frontend/  OPT-IN — frontend design skills
     │   ├── skills/
     │   └── .claude-plugin/plugin.json
-    └── constellation-stack-service/   OPT-IN — constellation-service boilerplate recipes
-        ├── skills/                    (layers on top of constellation-stack-node)
+    ├── constellation-stack-service/   OPT-IN — constellation-service boilerplate recipes
+    │   ├── skills/                    (layers on top of constellation-stack-node)
+    │   └── .claude-plugin/plugin.json
+    └── constellation-stack-infra/     OPT-IN — cloud infrastructure (Terraform, OCI/AWS)
+        ├── agents/                    cloud-architect persona subagent
+        ├── skills/
         └── .claude-plugin/plugin.json
 ```
 
@@ -59,6 +63,9 @@ The mental model: **install once per machine, then enable + init once per repo.*
 
 # Boilerplate pack — repos scaffolded from the constellation-service template
 /plugin install constellation-stack-service@constellation
+
+# Infrastructure pack — cloud architecture + reusable Terraform modules (OCI-first, AWS)
+/plugin install constellation-stack-infra@constellation
 ```
 
 Installing all of them is harmless — a plugin stays dormant until enabled in a project, so machine-wide install costs nothing.
@@ -87,6 +94,11 @@ The harness never takes over sessions globally. Each repo opts in with two steps
     "constellation-stack-service@constellation": true
   }
 }
+```
+```jsonc
+// Repo that owns cloud infrastructure (Terraform modules / environments) — .claude/settings.json
+// Composable: add the infra pack alongside a stack pack in repos that carry both app and infra code.
+{ "enabledPlugins": { "constellation@constellation": true, "constellation-stack-infra@constellation": true } }
 ```
 
 **b. Initialize** — even when enabled, the SessionStart hook stays **silent** until the repo contains `.constellation/config.json`. Run `/constellation:init` once per repo to opt in. It scans the codebase and **auto-detects the stack**, writing `config.stack` for you (verify it once on the first repo).
@@ -213,6 +225,9 @@ Orchestrator (constellation:orchestrator skill)
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |
 | `technical-writer` | sonnet | README, CHANGELOG, ADRs, API docs | full |
+| `cloud-architect`* | fable (opus fallback) | Cloud solutions as reusable Terraform module building blocks — AWS + OCI, OCI Always Free first | full |
+
+\* Ships in the `constellation-stack-infra` pack (subagent_type `constellation-stack-infra:cloud-architect`), not the core plugin — available only where that pack is enabled.
 
 Models are reassigned dynamically per change complexity (small → all Sonnet; medium/large → Fable for Architect/Reviewer, Opus for Security/PM). The Architect and Code Reviewer default to Fable and fall back to Opus when Fable isn't available on the account. Auth-touching changes always get Opus security review.
 
@@ -234,10 +249,11 @@ In SDLC order — project setup → previewing work → controlling a running wo
 
 ## Skills
 
-**Core (`constellation`)**: `orchestrator`, `tdd-workflow`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`.
+**Core (`constellation`)**: `orchestrator`, `tdd-workflow`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`, `grafana-cloud` (Grafana Cloud free tier + OpenTelemetry pipeline for logs/metrics/traces — Loki as the primary distributed-logging store).
 **Stack pack (`constellation-stack-node`)**: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`.
 **Stack pack (`constellation-stack-frontend`)**: `frontend-design` (distinctive, production-grade UI aesthetics — typography, color, motion, composition).
 **Boilerplate pack (`constellation-stack-service`)**: `add-domain-entity`, `e2e-harness`, `terraform-deploy` — recipes for backends scaffolded from the [constellation-service](https://github.com/jvoliveiran/constellation-service) template. Layers on top of `constellation-stack-node`; enable both in derived repos.
+**Infrastructure pack (`constellation-stack-infra`)**: `terraform-module-design` (reusable building-block modules with contract interfaces), `terraform-environments` (remote state, directory-per-env, promotion via version pins), `oci-container-platform` (Docker + databases on the OCI Always Free tier — the Lightsail equivalent at $0), `cloud-accessory-services` (secrets, certificates, DNS, registries, backups, AWS↔OCI mapping). Loaded by the pack's `cloud-architect` agent.
 
 Agents load stack skills dynamically based on `config.stack` — the core stays stack-agnostic.
 

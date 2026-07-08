@@ -1,0 +1,23 @@
+{
+  "name": "constellation-stack-infra",
+  "displayName": "Constellation Stack Pack — Infrastructure (Terraform, OCI/AWS)",
+  "version": "0.1.0",
+  "description": "Infrastructure pack for the Constellation Harness: a Cloud Architect agent (deep AWS + OCI experience) that designs cloud solutions as reusable Terraform modules — building blocks engineers compose (container runtime, database, secrets, certificates, DNS) — with multi-environment support. OCI Always Free is the default provider target; AWS on request.",
+  "author": {
+    "name": "João Oliveira",
+    "email": "jvoliveiran@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "infrastructure",
+    "terraform",
+    "iac",
+    "oci",
+    "oracle-cloud",
+    "aws",
+    "docker",
+    "modules",
+    "agents",
+    "skills"
+  ]
+}
