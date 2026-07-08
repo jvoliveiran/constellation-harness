@@ -10,7 +10,7 @@
       "name": "constellation",
       "source": "./plugins/constellation",
       "description": "Core harness: orchestrator, 11 persona agents, MLP product discovery, TDD engineering workflow, quality gates, workflow commands, state and metrics.",
-      "version": "0.11.0"
+      "version": "0.12.0"
     },
     {
       "name": "constellation-stack-node",
@@ -28,6 +28,12 @@
       "name": "constellation-stack-service",
       "source": "./plugins/constellation-stack-service",
       "description": "Boilerplate skill pack for constellation-service–derived backends: add-domain-entity playbook, e2e test harness, Terraform/ECS deployment. Layers on top of constellation-stack-node.",
+      "version": "0.1.0"
+    },
+    {
+      "name": "constellation-stack-infra",
+      "source": "./plugins/constellation-stack-infra",
+      "description": "Infrastructure pack: Cloud Architect agent (AWS + OCI) designing cloud solutions as reusable Terraform module building blocks, with skills for module design, multi-environment state, the OCI Always Free container platform, and accessory services (secrets, certificates, DNS).",
       "version": "0.1.0"
     }
   ]

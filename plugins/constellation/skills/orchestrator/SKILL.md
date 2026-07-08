@@ -83,6 +83,7 @@ Explicit overrides: *"hotfix: …"* / *"discovery: …"* / *"spike: …"* / *"tw
 | `constellation:sdet` | add/review/improve tests, explore untested paths. Signals: *"add tests", "run tests", "are we testing", "test this"* |
 | `constellation:devops-engineer` | branches, push, PRs, CI/CD, releases, CHANGELOG. Signals: *"create a branch", "push", "create PR", "deploy", "changelog"* |
 | `constellation:technical-writer` | documentation, README, ADRs. Signals: *"update docs", "document this", "write an ADR"* |
+| `constellation-stack-infra:cloud-architect` | cloud infrastructure design and reusable Terraform modules — only in projects with the `constellation-stack-infra` plugin enabled. Signals: *"design the infrastructure", "terraform module", "deploy to OCI/AWS", "provision", "IaC", "cloud architecture", "free tier"* |
 
 ### Choosing the Engineer
 
@@ -96,7 +97,7 @@ Explicit overrides: *"hotfix: …"* / *"discovery: …"* / *"spike: …"* / *"tw
 ### Tiebreaker for ambiguous requests (first yes wins)
 
 0. Product question — WHAT to build, for whom, why, in what order (value, scope, prioritization)? → Product Manager
-1. Architectural decision unmade OR technical investigation requested? → Architect
+1. Architectural decision unmade OR technical investigation requested? → Architect (cloud infrastructure / Terraform work → Cloud Architect, when the infra pack is enabled)
 2. Plan ready to implement OR bug fix? → Engineer (per [Choosing the Engineer](#choosing-the-engineer))
 3. Staged, uncommitted changes to review? → Code Reviewer
 4. Security concern? → Security Analyst
@@ -121,7 +122,7 @@ Agent model assignments depend on the complexity of the current change. Before s
 
 The Product Manager defaults to Opus regardless of size — scope decisions are leverage, not labor.
 
-**Fable fallback**: the Code Reviewer and Software Architect default to Fable (their agent front-matter default). If spawning with `model: fable` fails because the model is unavailable (plan/entitlement error, unknown model), respawn the same agent once with `model: opus` — never downgrade further, never skip the agent.
+**Fable fallback**: the Code Reviewer, the Software Architect, and the Cloud Architect (infra pack) default to Fable (their agent front-matter default). If spawning with `model: fable` fails because the model is unavailable (plan/entitlement error, unknown model), respawn the same agent once with `model: opus` — never downgrade further, never skip the agent.
 
 Overrides:
 - Auth, RBAC, or security-sensitive code → always Opus for Security Analyst.

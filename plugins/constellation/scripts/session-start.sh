@@ -33,6 +33,7 @@ AGENTS (spawn via the Agent tool using the listed subagent_type)
 | SDET | constellation:sdet | add/run/improve tests, coverage gaps, test audits |
 | DevOps Engineer | constellation:devops-engineer | branches, push, PRs, releases, CHANGELOG, CI/CD |
 | Technical Writer | constellation:technical-writer | docs, README, ADRs, API documentation |
+| Cloud Architect | constellation-stack-infra:cloud-architect | cloud infrastructure design, reusable Terraform modules, "deploy to OCI/AWS", provisioning, IaC (only when the constellation-stack-infra plugin is enabled) |
 
 WORKFLOW TRACK — decide before picking the first agent
 1. Production broken RIGHT NOW and the user says so → Hotfix

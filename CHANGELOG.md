@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-08
+
+### Added
+- **`grafana-cloud` core skill** — Grafana Cloud as the observability backend for all
+  projects, with Loki as the primary distributed-logging store. Covers the free-tier
+  budget (metrics series, logs/traces ingest, retention) and its levers, the
+  OpenTelemetry pipeline (OTLP direct to the cloud gateway by default, Grafana Alloy
+  when host-level telemetry or centralized credentials are wanted), non-negotiable
+  resource attributes (`service.name`, `deployment.environment.name`), the Loki
+  labels-vs-structured-metadata cardinality rule, log↔trace↔metric correlation wiring,
+  sampling/batching guardrails, baseline alerting (error rate, p95, telemetry absence),
+  and dashboards/alerts as code via the Grafana Terraform provider. Complements the
+  stack packs' app-level observability skills (which own *what* to log); the infra
+  pack's `cloud-accessory-services` now points application observability at it.
+- **`constellation-stack-infra` plugin (0.1.0)** — new opt-in infrastructure pack, the
+  first stack pack to ship its own agent. **Cloud Architect**
+  (`constellation-stack-infra:cloud-architect`, Fable with Opus fallback): deep AWS + OCI
+  experience, architects cloud solutions as a catalog of reusable Terraform modules that
+  engineers compose like building blocks (container runtime + database + secrets +
+  certificates + DNS), with OCI Always Free as the default provider target. Four skills:
+  `terraform-module-design` (one-capability modules, contract variables/outputs, git-ref
+  semver pinning, example-driven testing), `terraform-environments` (directory-per-env
+  roots, OCI Object Storage / S3 remote state, promotion by moving version pins, no
+  workspaces-as-environments), `oci-container-platform` (the Lightsail equivalent at $0:
+  Ampere A1 docker-host + containerized Postgres or Always Free Autonomous DB, with the
+  free-tier budget and arm64/capacity/reclamation/user_data gotchas), and
+  `cloud-accessory-services` (secrets via reference-not-value patterns, TLS via Caddy or
+  managed certs, DNS, OCIR/ECR, backups, AWS↔OCI service mapping). The core plugin's
+  orchestrator routing table, session-start policy, and Fable-fallback rule gain the new
+  agent, conditional on the pack being enabled.
+
 ## [0.11.0] - 2026-07-06
 
 ### Added
