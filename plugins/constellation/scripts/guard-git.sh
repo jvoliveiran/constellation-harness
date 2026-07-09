@@ -16,18 +16,25 @@ case "$CMD" in *git*) ;; *) exit 0 ;; esac
 MAIN_BRANCH=$(jq -r '.branching.mainBranch // "main"' "$CONFIG" 2>/dev/null)
 [ -n "$MAIN_BRANCH" ] && [ "$MAIN_BRANCH" != "null" ] || MAIN_BRANCH=main
 
+# Subcommand anchor: `git`, its global options (`-C <path>`, `-c k=v`, `--paginate`, …),
+# then whitespace before the subcommand. Prepend this to `<subcmd>` so the rules match the
+# subcommand POSITION only — not the word appearing in a branch name, path, or -m message
+# (e.g. `git branch feat/record-merge-commit` is not a commit; `git checkout x-push` is not
+# a push). Option tokens and their optional argument stop at command separators (| ; &).
+GIT_SUB='git([[:space:]]+-[^[:space:]|;&]+([[:space:]]+[^-][^[:space:]|;&]*)?)*[[:space:]]+'
+
 deny() {
   echo "constellation guard: $1" >&2
   exit 2
 }
 
 # Rule: never bypass hooks
-if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\b(commit|push)\b[^|;&]*--no-verify'; then
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}(commit|push)\b[^|;&]*--no-verify"; then
   deny "--no-verify is not allowed — fix the underlying issue instead of bypassing hooks."
 fi
 
 # Rule: never push to the main branch (incl. force push)
-if printf '%s' "$CMD" | grep -Eq "git[^|;&]*\bpush\b[^|;&]*[[:space:]:]${MAIN_BRANCH}([[:space:]]|\$)"; then
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push\b[^|;&]*[[:space:]:]${MAIN_BRANCH}([[:space:]]|\$)"; then
   deny "pushing directly to '${MAIN_BRANCH}' is not allowed — all changes go through feature branches and PRs."
 fi
 
@@ -35,7 +42,7 @@ fi
 # at the steps that come after the quality gates. TDD checkpoint commits stay local.
 # Fail-open on unreadable state (resume's validation owns that problem).
 STATE="$PROJECT_DIR/.constellation/state/current-workflow.json"
-if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bpush\b' && [ -f "$STATE" ]; then
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)" && [ -f "$STATE" ]; then
   STEP=$(jq -r '.currentStep // empty' "$STATE" 2>/dev/null)
   case "$STEP" in
     devops-pr|ship|post-pr|"") ;;
@@ -44,7 +51,7 @@ if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bpush\b' && [ -f "$STATE" ]; then
 fi
 
 # Rule: never commit on the main branch
-if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bcommit\b'; then
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}commit([[:space:]]|\$)"; then
   CURRENT_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null)
   if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" = "$MAIN_BRANCH" ]; then
     deny "committing on '${MAIN_BRANCH}' is not allowed — create a feature branch first (branching-strategy skill)."
@@ -52,7 +59,7 @@ if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\bcommit\b'; then
 fi
 
 # Rule: never stage secrets
-if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\badd\b'; then
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}add([[:space:]]|\$)"; then
   if printf '%s' "$CMD" | grep -Eq '\.env(\.[A-Za-z0-9_-]+)?\b' \
      && ! printf '%s' "$CMD" | grep -Eq '\.env\.(example|sample|template|test)\b'; then
     deny "staging .env files is not allowed — secrets never enter version control."
@@ -62,7 +69,7 @@ if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\badd\b'; then
   fi
   # Sweep staging (git add -A / --all / .) can pull in secrets without naming them —
   # scan what would actually be staged before allowing.
-  if printf '%s' "$CMD" | grep -Eq 'git[^|;&]*\badd\b[^|;&]*(-[A-Za-z]*A|--all\b|[[:space:]]\.([[:space:]]|$))'; then
+  if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}add\b[^|;&]*(-[A-Za-z]*A|--all\b|[[:space:]]\.([[:space:]]|\$))"; then
     SUSPECTS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | cut -c4- \
       | grep -E '(^|/)\.env(\.[A-Za-z0-9_-]+)?$|id_rsa|id_ed25519|\.pem$|credentials\.json$|service-account.*\.json$' \
       | grep -Ev '\.env\.(example|sample|template|test)$')
