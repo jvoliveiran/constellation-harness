@@ -28,6 +28,28 @@ deny() {
   exit 2
 }
 
+# Resolve the repo a `git commit` actually targets, so the commit-on-main rule checks the
+# right branch instead of always the session project. Honors a global `git -C <dir>` and a
+# leading `cd <dir>`; only trusts ABSOLUTE paths (a relative path can't be resolved without
+# the tool's live cwd) and otherwise falls back to PROJECT_DIR — the conservative default.
+# The prefix is cut at the `commit` subcommand token so commit's own `-C <commit>`
+# (message reuse) is never mistaken for a directory.
+commit_target_dir() {
+  local cmd="$1" prefix d
+  prefix=$(printf '%s' "$cmd" | sed -E 's/[[:space:]]+commit([[:space:];|&].*|$)//')
+  d=$(printf '%s' "$prefix" | grep -oE -- '-C[[:space:]]+[^[:space:]|;&]+' | tail -n1 | sed -E 's/^-C[[:space:]]+//')
+  if [ -z "$d" ]; then
+    d=$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+([^[:space:]|;&]+).*/\1/p')
+  fi
+  # Strip one layer of surrounding quotes so a literal quoted path resolves; an unexpanded
+  # variable (e.g. "$H") survives as a non-absolute string and falls through to the default.
+  d=${d#[\"\']}; d=${d%[\"\']}
+  case "$d" in
+    /*) printf '%s' "$d" ;;
+    *)  printf '%s' "$PROJECT_DIR" ;;
+  esac
+}
+
 # Rule: never bypass hooks
 if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}(commit|push)\b[^|;&]*--no-verify"; then
   deny "--no-verify is not allowed — fix the underlying issue instead of bypassing hooks."
@@ -50,9 +72,10 @@ if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)" && [ -f "$STAT
   esac
 fi
 
-# Rule: never commit on the main branch
+# Rule: never commit on the main branch (of the repo the commit actually targets)
 if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}commit([[:space:]]|\$)"; then
-  CURRENT_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null)
+  TARGET_DIR=$(commit_target_dir "$CMD")
+  CURRENT_BRANCH=$(git -C "$TARGET_DIR" branch --show-current 2>/dev/null)
   if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" = "$MAIN_BRANCH" ]; then
     deny "committing on '${MAIN_BRANCH}' is not allowed — create a feature branch first (branching-strategy skill)."
   fi
