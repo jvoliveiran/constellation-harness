@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-10
+
+### Fixed
+- **Git guard: anchor rules to the subcommand position** (#2) — the guard rules
+  matched `git[^|;&]*\bSUB\b`, whose `[^|;&]*` greedily consumed everything between
+  `git` and the keyword, so `commit`/`push`/`add` matched *anywhere* in a command
+  (inside branch names, `-m` messages, paths) rather than only as the git subcommand —
+  producing false denials such as blocking creation of a branch named
+  `docs/002-record-merge-commit`. A shared `GIT_SUB` anchor now consumes `git` plus its
+  global options (`-C <path>`, `-c k=v`, `--paginate`, …) up to the subcommand, applied
+  to all six rules; real `git commit`/`push` on main and secret-staging protection are
+  unchanged.
+- **Git guard: check the target repo's branch in the commit-on-main guard** (#3) — the
+  commit rule always resolved the current branch against `CLAUDE_PROJECT_DIR` (the
+  session project), so a `git commit` aimed at a *different* repo (via `git -C <dir>` or
+  a leading `cd <dir>`) was judged against the session project's branch — wrongly
+  blocking a commit to another repo's feature branch while the session project sat on
+  `main`. A new `commit_target_dir()` resolves the repo the commit actually targets
+  (honoring `git -C` and a leading `cd`, trusting only absolute paths), and the rule
+  checks that repo's branch. Plain `git commit` and `-C`/`cd` commits targeting a repo
+  on `main` are still blocked.
+
 ## [0.12.0] - 2026-07-08
 
 ### Added
