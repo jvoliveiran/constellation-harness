@@ -10,7 +10,7 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 
 ## Arguments
 
-`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json` and `scripts/statusline.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
+`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json`, `scripts/statusline.sh`, and `scripts/sync-artifacts.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
 
 ## Procedure
 
@@ -51,7 +51,8 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 │   └── parking-lot.md          ← from templates/parking-lot.md, verbatim
 ├── scripts/
 │   ├── opencode-review.sh    ← from templates/opencode-review.sh, verbatim (chmod +x); cross-model review adapter
-│   └── statusline.sh         ← from templates/statusline.sh, verbatim (chmod +x); Progress HUD statusline renderer
+│   ├── statusline.sh         ← from templates/statusline.sh, verbatim (chmod +x); Progress HUD statusline renderer
+│   └── sync-artifacts.sh     ← from templates/sync-artifacts.sh, verbatim (chmod +x); artifact-only commit helper (the one sanctioned commit on main)
 ├── state/.gitkeep
 ├── metrics/.gitkeep
 └── .gitignore               ← from templates/gitignore, verbatim
@@ -124,4 +125,4 @@ and escalation modifiers, branch). Offer to wire it into the project's
 - Summarize the generated config (commands, account, main branch, stack skills).
 - If a stack was detected, recommend installing/enabling the matching stack plugin (`constellation-stack-node` for backend Node, `constellation-stack-frontend` for web UIs) if it isn't already.
 - Remind the user: the harness activates in this project on the next session start (or immediately for the rest of this session — treat the orchestrator routing policy as active from now on).
-- Suggest committing `.constellation/` (minus the gitignored `state/` and `metrics/`) so teammates share the same configuration.
+- **Commit the scaffolding**: run `.constellation/scripts/sync-artifacts.sh`. It stages only `.constellation/` (the gitignored `state/` and `metrics/` stay out), commits `chore(constellation): sync harness artifacts` — allowed even on the main branch, the git guard's one sanctioned exception — and on main pushes only when that is provably artifact-only. Never leave the scaffold untracked; if the push is rejected (branch protection), tell the user the commit is local and offer a chore PR.

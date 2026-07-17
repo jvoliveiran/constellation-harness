@@ -206,7 +206,7 @@ Architect → Engineer → Document findings
 
 1. Architect defines the question and the timebox. **→ Save state**: `{ step: "architect", track: "spike" }`
 2. Engineer explores, prototypes, documents findings in `.constellation/spikes/` — **NOT** production code. **→ Save state**: `{ step: "engineer" }`
-3. No review, testing, branching, or commit — spikes are throwaway. Findings feed a future plan. **→ Save state**: `{ step: "findings" }` while the findings document is being written.
+3. No review, testing, or branching — spike *code* is throwaway. The findings document is not: once written, run `.constellation/scripts/sync-artifacts.sh` to commit it (artifact-only, allowed on the main branch). Findings feed a future plan. **→ Save state**: `{ step: "findings" }` while the findings document is being written.
    **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "spike" }`
 
 ### Discovery
@@ -218,7 +218,7 @@ PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → pr
 1. The Product Manager leads: reviews the parking lot for fired triggers, brainstorms/narrows with the user, and produces product artifacts in `.constellation/product/` (PRD, roadmap update, parking-lot entries).
    **→ Save state**: `{ step: "product-manager", track: "discovery" }`
 2. If a PRD or project definition was produced, the Software Architect runs a lightweight feasibility pass (Feasibility contract) — flagging infeasible or disproportionate scope before it hardens into a roadmap commitment. **→ Save state**: `{ step: "architect-feasibility" }`
-3. No branch, no code, no gates — outputs are markdown product artifacts only. Implementation later enters **Planned Work** referencing the PRD (where the full PM × Architect pairing happens).
+3. No branch, no code, no gates — outputs are markdown product artifacts only. Commit them before closing: run `.constellation/scripts/sync-artifacts.sh` (artifact-only, allowed on the main branch). Implementation later enters **Planned Work** referencing the PRD (where the full PM × Architect pairing happens).
    **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "discovery" }`
 
 ---
@@ -403,6 +403,11 @@ Every gate subagent MUST return a structured result:
     Mention the filed improvements in the gate summary (one line each). They are picked
     up later as Tweaks (S/M) or Planned Work (L) when the user asks — improvements are
     a backlog, not a queue the workflow drains automatically.
+
+    Improvement files filed during a workflow ride the final workflow commit (the
+    `git-commit` skill's `git add -A` sweeps them). Filed *outside* a workflow (an
+    ad-hoc DX review), finish by running `.constellation/scripts/sync-artifacts.sh`
+    so they never sit untracked.
 
 A subagent return that does not match its output contract (no parsable `VERDICT`) is re-requested **once**; if still malformed, treat it as `BLOCKED` — never as a pass. **Exception — DX Analyst**: a malformed or failed DX return is logged (`dxSkipped`) and the gate proceeds; an advisory agent must never block delivery.
 
@@ -734,10 +739,11 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 6. Engineer only triggers the Lint Gate when no blocker fixes are pending.
 7. **No human confirmation between agent handoffs** — agents proceed automatically unless a plan has open questions.
 8. Every completed workflow ends with a commit via the `constellation:git-commit` skill.
-9. All work happens on feature branches — **never commit directly to the main branch**.
+9. All work happens on feature branches — **never commit directly to the main branch**. Single sanctioned exception: the artifact-only sync commit made by `.constellation/scripts/sync-artifacts.sh` (stages `.constellation/` exclusively).
 10. Every completed workflow ends with a PR via the DevOps Engineer.
 11. Incremental diffs on review fix passes — never the full diff again.
 12. Save workflow state at every milestone; log metrics at every event; print the Progress Banner after every save.
+13. **Artifact hygiene**: no track ends with uncommitted `.constellation` files (`state/` and `metrics/` are gitignored). Branch tracks sweep them into the final commit; branchless tracks (Spike, Discovery) and ad-hoc artifact writes end with `.constellation/scripts/sync-artifacts.sh`. The git guard mechanically blocks any `git push` while harness artifacts sit uncommitted.
 
 ---
 
@@ -746,7 +752,8 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 - Answer the request yourself before invoking an agent
 - Reinterpret or compress the user's request before passing it on
 - Default to Software Engineer when architectural ambiguity exists
-- Allow commits directly to the main branch
+- Allow commits directly to the main branch (the artifact-only `sync-artifacts.sh` commit is the sole exception)
+- End a track with `.constellation` artifacts (plans, improvements, spikes, ADRs, product docs) left untracked or unstaged
 - Spawn parallel subagents in separate messages
 - Proceed past a parallel gate before **all** subagents have returned
 - Re-run only one subagent after blocker fixes — always the entire gate

@@ -65,3 +65,4 @@ Create a single, well-structured commit for all remaining changes at the end of 
 - **Lowercase description**, **no trailing period**, **max 72 characters** total.
 - **Verify before commit**: ensure the project's lint, build, and test commands (`.constellation/config.json` → `commands`) all pass first.
 - **Sensitive files**: never stage `.env`, credentials, API keys, or secrets — unstage them if present.
+- **Harness artifacts are part of the change**: `.constellation/` files created during the workflow (the plan, improvement files, ADRs, spike findings) are intentionally included by `git add -A` — never unstage them. The git guard blocks the push if they are left uncommitted. For artifact-only commits *outside* a workflow (including on the main branch), use `.constellation/scripts/sync-artifacts.sh` instead of this skill.
