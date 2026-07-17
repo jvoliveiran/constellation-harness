@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-17
+
+### Added
+- **Artifact hygiene — harness artifacts can no longer sit untracked.** Harness
+  markdown (plans, improvements, spikes, ADRs, product docs) was accumulating
+  unstaged because it is often born on the main branch — where the git guard
+  blocks both `git commit` and `git push` — and the only commit rule fired inside
+  a feature-branch workflow. Three layers close the gap:
+  - **`sync-artifacts.sh`** (new template, scaffolded to
+    `.constellation/scripts/`, re-copied on `--refresh`): a scoped artifact
+    committer and the one sanctioned commit-on-main path. It stages
+    `.constellation/` exclusively (the gitignored `state/` and `metrics/` stay
+    out), refuses to run while unrelated changes are staged, and on the main
+    branch pushes only when every commit ahead of upstream is provably
+    artifact-only — so it can never smuggle code past the branch/PR workflow.
+  - **Git guard: artifact-hygiene push rule** — `git push` is mechanically
+    denied while the target repo has untracked or modified `.constellation`
+    files, with the fix (stage into the workflow commit, or run
+    `sync-artifacts.sh`) in the deny message. The commit-on-main denial now
+    points at the script for artifact-only commits. `commit_target_dir()` was
+    generalized to `git_target_dir(cmd, subcommand)` so the push rule checks
+    the repo the push actually targets.
+  - **SessionStart artifact check** — the bootstrap hook now reports uncommitted
+    `.constellation` files at session start and prompts a sync (or a
+    `/constellation:init --refresh` when the script is not yet installed).
+- **Selftest §8/§9** — fixture tests for `sync-artifacts.sh` (commits artifacts
+  only, respects the state/metrics gitignore, idempotent, refuses mixed staging)
+  and for the guard's artifact-hygiene push rule (blocked while dirty, allowed
+  once committed).
+
+### Changed
+- **Orchestrator: branchless tracks now commit their artifacts.** Spike findings
+  and Discovery product artifacts end with a `sync-artifacts.sh` run instead of
+  being left untracked; DX improvement files filed outside a workflow get the
+  same treatment. New Mandatory Workflow Rule 13 (artifact hygiene) and a
+  matching "never do" entry; Rule 9 documents the sanctioned artifact-commit
+  exception.
+- **`/constellation:init`** scaffolds `scripts/sync-artifacts.sh` and finishes by
+  actually committing the scaffold with it, instead of merely suggesting a
+  commit.
+- **git-commit skill**: harness artifacts created during the workflow are
+  explicitly part of the final `git add -A` sweep — never unstaged.
+
 ## [0.12.1] - 2026-07-10
 
 ### Fixed

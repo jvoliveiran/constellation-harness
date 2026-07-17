@@ -57,4 +57,17 @@ if [ -f "$STATE_FILE" ]; then
   printf '\nUNFINISHED WORKFLOW DETECTED: %s exists. Report the saved state to the user as the Progress Banner defined in the constellation:orchestrator skill (one line: track, step position, emoji chain, modifiers, branch) and offer /constellation:resume before classifying any new request.\n' ".constellation/state/current-workflow.json"
 fi
 
+# Artifact hygiene: harness artifacts must never sit untracked between sessions
+# (state/ and metrics/ are gitignored and never counted).
+if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  DIRTY_COUNT=$(git -C "$PROJECT_DIR" status --porcelain -uall -- .constellation 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${DIRTY_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+    if [ -x "$PROJECT_DIR/.constellation/scripts/sync-artifacts.sh" ]; then
+      printf '\nUNCOMMITTED HARNESS ARTIFACTS: %s file(s) under .constellation/ are untracked or modified. Offer to run .constellation/scripts/sync-artifacts.sh (artifact-only commit — allowed even on the main branch) so plans/improvements/ADRs do not accumulate unstaged.\n' "$DIRTY_COUNT"
+    else
+      printf '\nUNCOMMITTED HARNESS ARTIFACTS: %s file(s) under .constellation/ are untracked or modified, and .constellation/scripts/sync-artifacts.sh is missing. Offer to run /constellation:init --refresh to install it, then run it to commit the artifacts.\n' "$DIRTY_COUNT"
+    fi
+  fi
+fi
+
 exit 0

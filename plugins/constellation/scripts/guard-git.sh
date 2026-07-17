@@ -28,15 +28,15 @@ deny() {
   exit 2
 }
 
-# Resolve the repo a `git commit` actually targets, so the commit-on-main rule checks the
-# right branch instead of always the session project. Honors a global `git -C <dir>` and a
+# Resolve the repo a git subcommand actually targets, so per-repo rules check the right
+# repo instead of always the session project. Honors a global `git -C <dir>` and a
 # leading `cd <dir>`; only trusts ABSOLUTE paths (a relative path can't be resolved without
 # the tool's live cwd) and otherwise falls back to PROJECT_DIR — the conservative default.
-# The prefix is cut at the `commit` subcommand token so commit's own `-C <commit>`
+# The prefix is cut at the subcommand token so e.g. commit's own `-C <commit>`
 # (message reuse) is never mistaken for a directory.
-commit_target_dir() {
-  local cmd="$1" prefix d
-  prefix=$(printf '%s' "$cmd" | sed -E 's/[[:space:]]+commit([[:space:];|&].*|$)//')
+git_target_dir() {
+  local cmd="$1" sub="$2" prefix d
+  prefix=$(printf '%s' "$cmd" | sed -E "s/[[:space:]]+${sub}([[:space:];|&].*|\$)//")
   d=$(printf '%s' "$prefix" | grep -oE -- '-C[[:space:]]+[^[:space:]|;&]+' | tail -n1 | sed -E 's/^-C[[:space:]]+//')
   if [ -z "$d" ]; then
     d=$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+([^[:space:]|;&]+).*/\1/p')
@@ -72,12 +72,27 @@ if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)" && [ -f "$STAT
   esac
 fi
 
+# Rule: artifacts ship with the work — never push while harness artifacts sit
+# uncommitted in the target repo. Catches plans/improvements/spikes/ADRs/product files
+# that would otherwise be stranded untracked (state/ and metrics/ are gitignored and
+# never counted). Fix: stage them into the workflow commit, or run
+# .constellation/scripts/sync-artifacts.sh (artifact-only commit, allowed on main).
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)"; then
+  TARGET_DIR=$(git_target_dir "$CMD" push)
+  if [ -f "$TARGET_DIR/.constellation/config.json" ]; then
+    DIRTY=$(git -C "$TARGET_DIR" status --porcelain -uall -- .constellation 2>/dev/null | head -20)
+    if [ -n "$DIRTY" ]; then
+      deny "uncommitted .constellation artifacts exist — include them in the workflow commit (git add -A) or run .constellation/scripts/sync-artifacts.sh before pushing: $(printf '%s' "$DIRTY" | tr '\n' ' ')"
+    fi
+  fi
+fi
+
 # Rule: never commit on the main branch (of the repo the commit actually targets)
 if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}commit([[:space:]]|\$)"; then
-  TARGET_DIR=$(commit_target_dir "$CMD")
+  TARGET_DIR=$(git_target_dir "$CMD" commit)
   CURRENT_BRANCH=$(git -C "$TARGET_DIR" branch --show-current 2>/dev/null)
   if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" = "$MAIN_BRANCH" ]; then
-    deny "committing on '${MAIN_BRANCH}' is not allowed — create a feature branch first (branching-strategy skill)."
+    deny "committing on '${MAIN_BRANCH}' is not allowed — create a feature branch first (branching-strategy skill). For .constellation artifacts only, run .constellation/scripts/sync-artifacts.sh — the one sanctioned commit on ${MAIN_BRANCH}."
   fi
 fi
 

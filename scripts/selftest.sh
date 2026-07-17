@@ -100,5 +100,67 @@ SLOUT2="$(printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP/nonexistent" | bas
 rm -rf "$SLTMP"
 say "7. statusline fixture render checked"
 
+# 8. sync-artifacts fixture — the artifact committer must commit .constellation/ only,
+#    respect the state/metrics gitignore, be idempotent, and refuse mixed staging.
+SA="$ROOT/plugins/constellation/templates/sync-artifacts.sh"
+SATMP="$(mktemp -d)"
+(
+  set -e
+  cd "$SATMP"
+  git init -q -b main .
+  git config user.email selftest@constellation && git config user.name selftest
+  mkdir -p .constellation/plans .constellation/state
+  printf 'state/\nmetrics/\n' > .constellation/.gitignore
+  echo '{}' > .constellation/config.json
+  echo plan > .constellation/plans/001-x.md
+  echo state > .constellation/state/wf.json
+  echo code > app.ts
+  bash "$SA" >/dev/null 2>&1                                            || exit 1  # first sync commits
+  git ls-files --error-unmatch .constellation/plans/001-x.md >/dev/null 2>&1 || exit 2  # plan committed
+  ! git ls-files --error-unmatch .constellation/state/wf.json >/dev/null 2>&1 || exit 3  # state stays out
+  ! git ls-files --error-unmatch app.ts >/dev/null 2>&1                 || exit 4  # code stays out
+  N1="$(git rev-list --count HEAD)"
+  bash "$SA" >/dev/null 2>&1                                            || exit 5  # clean rerun ok
+  [ "$(git rev-list --count HEAD)" = "$N1" ]                            || exit 6  # …and no-op
+  git add app.ts
+  echo more > .constellation/plans/002-y.md
+  ! bash "$SA" >/dev/null 2>&1                                          || exit 7  # mixed staging refused
+) ; SARC=$?
+case "$SARC" in
+  0) : ;;
+  1) fail "sync-artifacts: first run did not commit" ;;
+  2) fail "sync-artifacts: plan file not committed" ;;
+  3) fail "sync-artifacts: gitignored state/ was committed" ;;
+  4) fail "sync-artifacts: file outside .constellation/ was committed" ;;
+  5) fail "sync-artifacts: clean rerun exited non-zero" ;;
+  6) fail "sync-artifacts: clean rerun created an empty commit" ;;
+  7) fail "sync-artifacts: mixed staging was not refused" ;;
+  *) fail "sync-artifacts: fixture setup failed (rc=$SARC)" ;;
+esac
+rm -rf "$SATMP"
+say "8. sync-artifacts fixture checked"
+
+# 9. git guard artifact hygiene — push must be blocked while .constellation artifacts
+#    sit uncommitted, and allowed again once they are committed.
+GG="$ROOT/plugins/constellation/scripts/guard-git.sh"
+GGTMP="$(mktemp -d)"
+(
+  set -e
+  cd "$GGTMP"
+  git init -q -b main .
+  git config user.email selftest@constellation && git config user.name selftest
+  mkdir -p .constellation
+  echo '{}' > .constellation/config.json
+  echo plan > .constellation/untracked-plan.md
+)
+GGIN='{"tool_input":{"command":"git push origin feat/x"}}'
+printf '%s' "$GGIN" | CLAUDE_PROJECT_DIR="$GGTMP" bash "$GG" >/dev/null 2>&1
+[ $? -eq 2 ] || fail "guard: push not blocked with uncommitted .constellation artifacts"
+( cd "$GGTMP" && git add .constellation && git commit -qm 'chore: artifacts' )
+printf '%s' "$GGIN" | CLAUDE_PROJECT_DIR="$GGTMP" bash "$GG" >/dev/null 2>&1
+[ $? -eq 0 ] || fail "guard: push blocked even though artifacts are committed"
+rm -rf "$GGTMP"
+say "9. git guard artifact hygiene checked"
+
 [ "$FAIL" -eq 0 ] && say "selftest: ALL GREEN" || say "selftest: FAILURES ABOVE"
 exit "$FAIL"
