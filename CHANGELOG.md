@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-27
+
+### Added
+- **`/constellation:tasks` + task-spec convention.** Task specs — work items filed
+  by other agents, tools, or humans before they become plans — now have a home
+  (`.constellation/tasks/`, scaffolded by init with an `archive/`) and a
+  lightweight front-matter convention (`status: inbox | refined | done | dropped`,
+  optional `source:`, and a `plan:` field linking the plan a task was refined
+  into) so listing them is mechanical instead of forensic. The new
+  `/constellation:tasks` command mirrors `/constellation:plans`: a read-only
+  table sorted inbox-first, with refined tasks showing their linked plan and the
+  plan's own lifecycle status inline, plus actionable signals (inbox queue
+  awaiting refinement, tasks whose plan completed, broken plan links). A new
+  orchestrator **Task Lifecycle** section makes the flow part of the protocol:
+  the ideal path is task → plan — the Architect flips the task to `refined` when
+  the plan is written and to `done` when the plan completes; the Technical
+  Writer archives `done`/`dropped` tasks in the same 30-day sweep as plans.
+
 ## [0.13.0] - 2026-07-17
 
 ### Added

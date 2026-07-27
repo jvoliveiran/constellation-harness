@@ -10,7 +10,7 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 
 ## Arguments
 
-`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json`, `scripts/statusline.sh`, and `scripts/sync-artifacts.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
+`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json`, `scripts/statusline.sh`, and `scripts/sync-artifacts.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also backfill any scaffold directories from step 3 that are missing (e.g. `tasks/` in repos initialized before it existed) — directories only, never overwriting files. Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
 
 ## Procedure
 
@@ -41,6 +41,7 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 ├── tracks.json              ← from templates/tracks.json, verbatim; canonical step map for the Progress HUD
 ├── memory/review-patterns.md ← from templates/review-patterns.md, verbatim
 ├── plans/archive/.gitkeep
+├── tasks/archive/.gitkeep      ← task-spec inbox (other agents/tools file work here; refined into plans)
 ├── improvements/.gitkeep       ← DX Analyst findings (complexity-reduction backlog)
 ├── spikes/.gitkeep
 ├── adrs/.gitkeep

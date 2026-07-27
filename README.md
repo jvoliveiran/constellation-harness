@@ -122,6 +122,7 @@ Scans the project and generates:
 ├── tracks.json          canonical SDLC step map per track (emojis, labels) — Progress HUD source of truth
 ├── memory/review-patterns.md   recurring review blockers (self-learning)
 ├── plans/ (+archive/)   implementation plans
+├── tasks/ (+archive/)   task-spec inbox — other agents/tools file work here, refined into plans
 ├── spikes/  adrs/       research docs and decision records
 ├── scripts/             opencode-review.sh (cross-model adapter), statusline.sh (Progress HUD)
 ├── state/  metrics/     workflow resume state + JSONL telemetry (gitignored)
@@ -241,6 +242,7 @@ In SDLC order — project setup → previewing work → controlling a running wo
 | `/constellation:dry-run` | Traces the exact workflow a request would trigger — track, agents, models, skills, gates — **without executing or modifying anything**. Use before committing to a large piece of work, or to sanity-check how a request will be classified. | `/constellation:dry-run add rate limiting to the login endpoint` |
 | `/constellation:status` | Shows where the current workflow stands as the visual Progress HUD: banner + per-step table (track, step, gates passed, review loops). Use **mid-workflow** to orient yourself, or at session start to see what's in flight. | `/constellation:status` |
 | `/constellation:plans` | Portfolio overview of **all** plans with lifecycle status (📝 draft / 👍 approved / 🔨 in-progress / ✅ completed / 📦 archived), in plan-number order, flagging the in-flight one and drafts blocked on open questions. Use to orient across work items, pick what to run next, or spot stale drafts. | `/constellation:plans --archived` |
+| `/constellation:tasks` | Portfolio overview of **all** task specs in `.constellation/tasks/` — the inbox where other agents/tools file work before it becomes a plan (📥 inbox / 🔗 refined / ✅ done / 🚫 dropped). Refined tasks link the plan they became, with the plan's own status inline. Use to see what's waiting for refinement — the ideal flow is task → plan. | `/constellation:tasks --archived` |
 | `/constellation:skip-gate` | Skips the gate the workflow is currently blocked on (asks for confirmation, records the skip in metrics). Use **sparingly** — when a gate is stuck on something you've consciously decided to accept. | `/constellation:skip-gate` |
 | `/constellation:abort` | Stops the workflow **now**, saving state and keeping the branch + changes intact. Use when priorities shift mid-workflow — nothing is lost, resume later. | `/constellation:abort` |
 | `/constellation:resume` | Continues an interrupted workflow from saved state — after validating it (branch exists, plan present, PR still open); stale state is archived, never blindly trusted. Use at the start of a session when work was left unfinished. | `/constellation:resume` |
