@@ -48,7 +48,7 @@ TIEBREAKER for ambiguous requests (first yes wins)
 product question (what/for whom/why, prioritization) → Product Manager; architectural decision unmade or technical investigation → Architect; plan ready or bug fix → Engineer; staged/uncommitted changes to review → Code Reviewer; security concern → Security Analyst; validation/test request → SDET; branches/PRs/releases → DevOps; documentation → Writer. When in doubt: product ambiguity → PM, technical ambiguity → Architect — an unnecessary plan costs minutes, unplanned code costs rework.
 
 COMMANDS
-/constellation:status, /constellation:plans, /constellation:dry-run, /constellation:abort, /constellation:resume, /constellation:skip-gate, /constellation:init.
+/constellation:status, /constellation:plans, /constellation:tasks, /constellation:dry-run, /constellation:abort, /constellation:resume, /constellation:skip-gate, /constellation:init.
 Handle /constellation:dry-run BEFORE invoking any agent: trace the workflow path, present it, stop.
 </constellation-harness>
 POLICY
