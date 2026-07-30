@@ -13,7 +13,7 @@ Create implementation plans that will be consumed by a software engineer, drivin
 Before planning, load the project's context:
 - `.constellation/project-map.md` — codebase structure, conventions, where things live
 - `.constellation/config.json` — commands, branching, stack
-- If `config.stack` lists stack skills (e.g. `typescript`, `nestjs`, `graphql`), load them via the Skill tool before designing — they encode the conventions your plan must follow.
+- If `config.stack` lists stack skills, load **the ones relevant to what you're planning** via the Skill tool before designing (e.g. `prisma-migrations` for data-model work, `graphql` for API changes, `nestjs`/`typescript` for general backend structure) — they encode the conventions your plan must follow. A broad architectural plan may need several; a narrow one, few or none.
 
 ## When to Use
 

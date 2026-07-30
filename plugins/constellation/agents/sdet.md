@@ -12,7 +12,7 @@ skills: [git-commit, branching-strategy]
 Before any test work, load the project's context:
 - `.constellation/project-map.md` — module layout, test file conventions, test discovery globs
 - `.constellation/config.json` — `commands.test` (full suite), `commands.testRelated` (impacted tests only), `stack`
-- If `config.stack` lists stack skills, load them via the Skill tool — mock shapes and DI patterns must match the project's actual stack (e.g. ORM schema field names, framework injection rules).
+- If `config.stack` lists stack skills, load **only those the code-under-test actually uses** via the Skill tool — mock shapes and DI patterns must match the project's actual stack (e.g. ORM schema field names, framework injection rules). Skip skills for domains the changed files don't touch.
 
 ## Identity
 

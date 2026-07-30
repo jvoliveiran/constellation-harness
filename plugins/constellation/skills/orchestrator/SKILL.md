@@ -306,56 +306,18 @@ This dramatically reduces token consumption on review loops. Never re-send the f
 
 ### Output Contracts
 
-Every gate subagent MUST return a structured result:
+Every gate subagent MUST return its structured result. The **canonical contract for each lives in that agent's file** — the gate-spawn prompts above name the one each must emit (the same reference-by-name pattern as the planning contracts):
 
-**Code Reviewer**
-```
-## Review Result
-- **VERDICT**: PASS | BLOCKED
-- **BLOCKERS**: [🔴 findings with file, line, description, suggestion — or "none"]
-- **SUGGESTIONS**: [🟡 findings]
-- **NITS**: [💭 findings]
-- **PATTERNS**: [new recurring patterns for review-patterns.md, or "none"]
-```
+| Agent | Contract heading |
+|---|---|
+| Code Reviewer | `Review Result` |
+| Security Analyst | `Security Review Result` |
+| DX Analyst | `DX Review Result` (advisory — VERDICT always `ADVISORY`, never PASS/BLOCKED) |
+| SDET | `Test Assessment Result` |
+| Technical Writer | `Documentation Result` |
+| Cross-model reviewer | `Cross-Model Review Result` / `Cross-Model Plan Review Result` |
 
-**Security Analyst**
-```
-## Security Review Result
-- **VERDICT**: PASS | BLOCKED
-- **BLOCKERS**: [🔴 findings with file, line, vulnerability, risk, fix — or "none"]
-- **SUGGESTIONS**: [🟡 findings]
-- **NITS**: [💭 findings]
-- **DEPENDENCY_AUDIT**: [audit summary, or "no new dependencies"]
-- **PATTERNS**: [new recurring patterns, or "none"]
-```
-
-**DX Analyst** (advisory — VERDICT is always `ADVISORY`, never PASS/BLOCKED)
-```
-## DX Review Result
-- **VERDICT**: ADVISORY
-- **IMPROVEMENTS**: [🧹 findings with title, category, evidence, simplification, effort — or "none"]
-- **ALREADY_FILED**: [existing improvement files the diff relates to, or "none"]
-- **SETUP_PATH**: [clone-to-running assessment, or "not assessed"]
-```
-
-**SDET**
-```
-## Test Assessment Result
-- **VERDICT**: PASS | FAIL
-- **TESTS_ADDED**: [new test files/scenarios]
-- **TESTS_PASSED**: true | false
-- **REMAINING_GAPS**: [list, or "none"]
-- **TEST_RUN_OUTPUT**: [summary of the test run]
-```
-
-**Technical Writer**
-```
-## Documentation Result
-- **FILES_UPDATED**: [docs changed, or "none"]
-- **CHANGELOG_ENTRY**: entry text (or "not applicable")
-- **ADR_CREATED**: file path (or "not applicable")
-- **NOTES**: observations
-```
+A return missing a parsable `VERDICT` is re-requested once, then handled per §Merging results (DX Analyst excepted — an advisory return never blocks).
 
 ### Merging results
 
