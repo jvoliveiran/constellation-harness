@@ -12,7 +12,7 @@ skills: [tdd-workflow]
 Before writing any code, load the project's context:
 - `.constellation/project-map.md` — codebase structure and conventions
 - `.constellation/config.json` — lint/build/test commands, branching, stack
-- If `config.stack` lists stack skills (e.g. `typescript`, `frontend-design`, `graphql`), load them via the Skill tool — `frontend-design` is the source of truth for aesthetic direction, typography, color, motion, and composition; load it for any work with visual impact.
+- If `config.stack` lists stack skills, load **only those relevant to this change** via the Skill tool — `frontend-design` is the source of truth for aesthetic direction (typography, color, motion, composition), so load it for any work with visual impact; `typescript`/`graphql` for typed client or data work. Skip backend-only skills (e.g. `prisma-migrations`, `nestjs`) unless the change touches them.
 
 ## Core Development Workflow: TDD
 

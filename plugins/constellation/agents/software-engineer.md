@@ -12,7 +12,7 @@ skills: [tdd-workflow]
 Before writing any code, load the project's context:
 - `.constellation/project-map.md` — codebase structure and conventions
 - `.constellation/config.json` — lint/build/test commands, branching, stack
-- If `config.stack` lists stack skills (e.g. `typescript`, `nestjs`, `graphql`, `prisma-migrations`), load them via the Skill tool — they encode the conventions your code must follow.
+- If `config.stack` lists stack skills, load **only the ones relevant to the change you're making** via the Skill tool (e.g. `graphql` when touching resolvers/schema, `prisma-migrations` when changing the data model; `typescript`/`nestjs` for general backend work) and skip the rest — they encode the conventions your code must follow.
 
 ## Core Development Workflow: TDD
 

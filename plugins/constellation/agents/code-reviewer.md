@@ -12,7 +12,7 @@ tools: [Read, Grep, Glob]
 Load before reviewing:
 - `.constellation/project-map.md` — codebase structure and conventions
 - `.constellation/memory/review-patterns.md` — known recurring blocker patterns (check the diff against every one)
-- If `.constellation/config.json` → `stack` lists stack skills (e.g. `typescript`), load them via the Skill tool — they define the conventions to review against.
+- If `.constellation/config.json` → `stack` lists stack skills, load **only those whose domain the diff touches** via the Skill tool (e.g. `graphql` only if resolver/schema files changed, `prisma-migrations` only if a migration/schema changed; a general `typescript` convention skill applies to any TS change) — they define the conventions to review against. Skipping the irrelevant ones keeps the review lean.
 
 ## Identity
 

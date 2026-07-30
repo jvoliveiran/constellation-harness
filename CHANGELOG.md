@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Token-consumption trims (no behavior change).** Two edits cut context weight
+  without altering the workflow:
+  - **Scoped stack-skill loading.** The Architect, Software Engineer, Frontend
+    Engineer, SDET, and Code Reviewer previously loaded *every* skill listed in
+    `config.stack` on each spawn (a Node project's `typescript` + `nestjs` +
+    `graphql` + `prisma-migrations` ≈ 11k tokens). They now load **only the
+    skill(s) whose domain the diff/plan actually touches** — e.g. `graphql` only
+    when resolver/schema files change, `prisma-migrations` only for data-model
+    work — mirroring the already-scoped `security-analyst`. Largest per-spawn
+    saving in the harness.
+  - **De-duplicated gate output contracts.** The orchestrator's `Output
+    Contracts` block restated the six gate contracts verbatim; each contract's
+    canonical copy already lives in its agent file (which the selftest enforces).
+    The orchestrator now references them by name in a compact table — the same
+    reference-by-name pattern the planning contracts already use — shrinking the
+    per-workflow orchestrator load by ~40 lines. Selftest contract-drift check
+    still green.
+
 ## [0.14.0] - 2026-07-27
 
 ### Added
