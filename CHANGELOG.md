@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Orchestrator: progressive disclosure for cold-path sections (no behavior
+  change).** Three sections that rarely apply to a default-config workflow moved
+  from the always-loaded SKILL.md into on-demand reference files under the
+  skill's `references/` directory, each replaced by a short stub that says when
+  to read the full file:
+  - **Cross-Model Validation** (~75 lines) → `references/cross-model-validation.md`
+    — off by default (`crossModelValidation.enabled: false`); read only when
+    enabled, at Gate 1 / plan-review time.
+  - **Post-PR Phase** (~20 lines) → `references/post-pr.md` — read only on the
+    human-feedback re-entry path. The stub keeps the `step: "post-pr"` save
+    annotation, so the track-map drift check still sees every step id.
+  - **Task Lifecycle** (~22 lines) → `references/task-lifecycle.md` — read only
+    when a workflow picks up, completes, or drops a task spec.
+  Net: the per-workflow orchestrator load drops ~5.5 KB (~1.4k tokens); all
+  invariants stay in the stubs (SKIPPED never blocks, contract names, step ids)
+  and the selftest (contract drift, track-map drift) stays green.
+
 ## [0.14.1] - 2026-07-30
 
 ### Changed
