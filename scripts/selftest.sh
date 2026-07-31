@@ -52,7 +52,7 @@ say "4. contract drift checked"
 # 5. Orchestrator ↔ config template coherence: every config key the orchestrator
 #    documents exists in the template.
 TPL="$ROOT/plugins/constellation/templates/config.json"
-for key in commands branching schemaPath stack review merge crossModelValidation github; do
+for key in commands branching schemaPath stack review merge ci crossModelValidation github; do
   jq -e --arg k "$key" 'has($k)' "$TPL" >/dev/null 2>&1 || fail "config template missing key: $key"
 done
 say "5. config template coherence checked"
@@ -161,6 +161,29 @@ printf '%s' "$GGIN" | CLAUDE_PROJECT_DIR="$GGTMP" bash "$GG" >/dev/null 2>&1
 [ $? -eq 0 ] || fail "guard: push blocked even though artifacts are committed"
 rm -rf "$GGTMP"
 say "9. git guard artifact hygiene checked"
+
+# 10. git guard destructive-discard rules — work-discarding commands must be blocked
+#     while the tree is dirty (the rogue-'git checkout -- .' incident) and allowed
+#     when clean; branch switches and --staged restores stay allowed even when dirty.
+GDTMP="$(mktemp -d)"
+(
+  cd "$GDTMP"
+  git init -q -b main . && git config user.email selftest@constellation && git config user.name selftest
+  mkdir -p .constellation && echo '{}' > .constellation/config.json
+  git add -A && git commit -qm init
+)
+gd() { printf '{"tool_input":{"command":"%s"}}' "$1" | CLAUDE_PROJECT_DIR="$GDTMP" bash "$GG" >/dev/null 2>&1; echo $?; }
+[ "$(gd 'git checkout -- .')" = 0 ] || fail "guard: discard blocked on a CLEAN tree"
+echo dirty > "$GDTMP/f.txt"
+[ "$(gd 'git checkout -- .')" = 2 ]              || fail "guard: 'checkout -- .' not blocked on dirty tree"
+[ "$(gd 'git reset --hard')" = 2 ]               || fail "guard: 'reset --hard' not blocked on dirty tree"
+[ "$(gd 'git clean -fd')" = 2 ]                  || fail "guard: 'clean -fd' not blocked on dirty tree"
+[ "$(gd 'git restore src/app.ts')" = 2 ]         || fail "guard: worktree 'restore' not blocked on dirty tree"
+[ "$(gd 'git restore --staged f.txt')" = 0 ]     || fail "guard: 'restore --staged' (unstage only) was blocked"
+[ "$(gd 'git checkout -b feat/x')" = 0 ]         || fail "guard: branch creation blocked on dirty tree"
+[ "$(gd 'git checkout main')" = 0 ]              || fail "guard: branch switch blocked on dirty tree"
+rm -rf "$GDTMP"
+say "10. git guard destructive-discard checked"
 
 [ "$FAIL" -eq 0 ] && say "selftest: ALL GREEN" || say "selftest: FAILURES ABOVE"
 exit "$FAIL"
