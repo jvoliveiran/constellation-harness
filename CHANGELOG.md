@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Git guard: destructive-discard rules.** The PreToolUse guard now blocks
+  work-discarding git commands — `git checkout -- <pathspec>` / `git checkout .`,
+  worktree `git restore`, `git reset --hard`, and `git clean -f` — **while the
+  target repo has uncommitted changes**. On a clean tree they pass (nothing to
+  lose), and branch switches, `restore --staged` (unstage only), and `clean -n`
+  dry runs stay allowed even when dirty. Closes the gap where a subagent's
+  `git checkout -- .` could wipe a parallel peer's uncommitted work (the incident
+  that forced a full docs-task redo). Selftest gains a dedicated fixture (check 10).
+- **Orchestrator: checkpoint before Gate 2.** Both Gate 2 agents (SDET +
+  Technical Writer) write files concurrently, so the orchestrator now requires a
+  clean tree (checkpoint commit) before spawning the gate, and the parallel-
+  execution rules state the no-discard policy the guard enforces mechanically.
 - **Ship step: CI-infrastructure local fallback** (`ci.localFallback`, default
   `true`). When `gh pr checks` fails because CI **never ran the code** —
   billing/spending-limit errors, runners never started — the Ship step now runs
