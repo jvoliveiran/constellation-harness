@@ -52,7 +52,7 @@ say "4. contract drift checked"
 # 5. Orchestrator ↔ config template coherence: every config key the orchestrator
 #    documents exists in the template.
 TPL="$ROOT/plugins/constellation/templates/config.json"
-for key in commands branching schemaPath stack review merge crossModelValidation github; do
+for key in commands branching schemaPath stack review merge ci crossModelValidation github; do
   jq -e --arg k "$key" 'has($k)' "$TPL" >/dev/null 2>&1 || fail "config template missing key: $key"
 done
 say "5. config template coherence checked"
