@@ -66,7 +66,12 @@ You are the first and last agent in the planned work workflow — you set up the
 ### 4. Merge & Post-Merge Verify (Ship step — only when the orchestrator instructs)
 
 1. Verify preconditions via github-remote — ALL must hold, otherwise report and stop:
-   - CI green: `gh pr checks PR_NUMBER` (use `--watch` if checks are still running)
+   - CI green: `gh pr checks PR_NUMBER` (use `--watch` if checks are still running).
+     **Infra fallback** (`config.ci.localFallback`, default true): checks failed because
+     CI never ran the code (billing/spending limit, runners never started) → run the
+     configured lint/build/test locally; all green satisfies this precondition — report
+     `ciFallback: local` to the orchestrator. A check that ran and failed on the code
+     is a real red: never fall back, stop.
    - No unresolved review threads
    - Branch up to date with the main branch
 2. Squash-merge: `gh pr merge PR_NUMBER --squash --delete-branch`

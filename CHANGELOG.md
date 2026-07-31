@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Ship step: CI-infrastructure local fallback** (`ci.localFallback`, default
+  `true`). When `gh pr checks` fails because CI **never ran the code** —
+  billing/spending-limit errors, runners never started — the Ship step now runs
+  the configured lint/build/test locally and proceeds on green, recording
+  `ciFallback: "local"` in state, the `workflow-shipped` event, and the merge
+  report. A check that ran and failed on the code is a real red and never falls
+  back. Ends the recurring stall where billing-blocked CI froze otherwise-green
+  autonomous merges. New config key `ci` (template + selftest coherence check).
+- **Parallel gates: empty-diff preflight.** The orchestrator refuses to spawn a
+  review gate on an empty diff — premium reviewers never receive a placeholder.
+  First pass empty → reconcile (committed? right branch/base?); fix pass empty →
+  the Engineer changed nothing, the blocker list goes back instead of a re-review.
+
 ## [0.14.1] - 2026-07-30
 
 ### Changed

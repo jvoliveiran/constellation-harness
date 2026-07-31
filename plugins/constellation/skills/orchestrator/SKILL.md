@@ -20,6 +20,7 @@ All project-specific values come from `.constellation/config.json`:
 | `stack` | Stack skill names agents should load (e.g. from the `constellation-stack-node` plugin) |
 | `review.fixPolicy` | What review findings the Engineer must fix: `"blockers"` (default) or `"blockers+suggestions"`. Nits follow the piggyback rule (§Merging results). Absent → `"blockers"`. |
 | `merge.policy` | `"auto-unless-blockers"` (default): clean-review PRs merge autonomously, blocker-history PRs ask the user. `"always-ask"`: every merge is confirmed. See [Ship](#ship--merge-policy). Absent → `"auto-unless-blockers"`. |
+| `ci.localFallback` | `true` (default): when CI is blocked by **infrastructure** (billing/spending limit, runners never started) rather than failing on the code, run the configured lint/build/test locally and let Ship proceed on green, recording `ciFallback: "local"`. `false` → always require real CI. Absent → `true`. |
 | `crossModelValidation` | Optional cross-model validation via local `opencode` — code review at Gate 1 and/or plan critique before branching, per its `steps` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
 
 Project layout reference: `.constellation/project-map.md`.
@@ -251,6 +252,7 @@ Parallel gates spawn multiple subagents via the **Agent tool in a single message
 2. **Determine diff scope**:
    - **First pass**: full `git diff <mainBranch>...HEAD`.
    - **Fix pass**: `git diff <PRE_FIX_SHA>...HEAD` (the fix delta only), plus the original blocker list so reviewers can verify each item.
+   - **Empty-diff preflight**: if the captured diff is empty, do NOT spawn the gate — premium reviewers must never receive a placeholder. First pass empty → stop and reconcile (is the work committed? right branch? right base?). Fix pass empty → the Engineer changed nothing; send the blocker list back instead of re-reviewing.
 3. **Spawn all gate subagents in one message**, each with the proper `subagent_type` and `model`. Include in each prompt:
    - The diff output (full or incremental)
    - The plan reference or original request
@@ -472,6 +474,14 @@ Executed by the DevOps Engineer (its §4); the orchestrator decides **auto vs. a
 not merge): CI green (`gh pr checks`, `--watch` while running), zero unresolved review
 threads, branch up to date with the main branch, no outstanding fix-list items per
 `review.fixPolicy`.
+
+**CI-infrastructure fallback** (`ci.localFallback`, default `true`): when checks fail
+because CI **never ran the code** — billing/spending-limit errors, runners unavailable,
+the job never started — that is an infra failure, not a red build. Run the configured
+`lint` + `build` + `test` locally; all green → the CI precondition is satisfied. Record
+`ciFallback: "local"` in state, include it in the `workflow-shipped` log event, and say
+so in the merge report. A check that ran and **failed on the code never falls back** —
+that is a real red and stops the merge.
 
 **Decision — `merge.policy` in config:**
 

@@ -20,6 +20,9 @@
   "merge": {
     "policy": "auto-unless-blockers"
   },
+  "ci": {
+    "localFallback": true
+  },
   "crossModelValidation": {
     "enabled": false,
     "model": "google/gemini-3-flash-preview",
