@@ -55,6 +55,32 @@ if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}(commit|push)\b[^|;&]*--no-verify"; 
   deny "--no-verify is not allowed — fix the underlying issue instead of bypassing hooks."
 fi
 
+# Rule: never discard uncommitted work — the destructive forms of checkout/restore/
+# reset/clean wipe changes that may belong to another agent in the pipeline (a parallel
+# gate peer's in-flight edits, the Engineer's pre-commit work). Blocked only while the
+# target repo is dirty — on a clean tree there is nothing to lose. Branch switches and
+# `restore --staged` (unstage only) stay allowed. Fix: commit or stash first.
+DISCARD="" ; DISCARD_SUB=""
+if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}checkout\b[^|;&]*[[:space:]]--([[:space:]]|\$)"; then
+  DISCARD="git checkout -- <pathspec>" ; DISCARD_SUB=checkout
+elif printf '%s' "$CMD" | grep -Eq "${GIT_SUB}checkout[[:space:]]+\.([[:space:]]|\$)"; then
+  DISCARD="git checkout ." ; DISCARD_SUB=checkout
+elif printf '%s' "$CMD" | grep -Eq "${GIT_SUB}restore([[:space:]]|\$)" \
+  && { ! printf '%s' "$CMD" | grep -Eq "${GIT_SUB}restore\b[^|;&]*--staged" \
+       || printf '%s' "$CMD" | grep -Eq "${GIT_SUB}restore\b[^|;&]*(--worktree\b|[[:space:]]-W\b)"; }; then
+  DISCARD="git restore (worktree)" ; DISCARD_SUB=restore
+elif printf '%s' "$CMD" | grep -Eq "${GIT_SUB}reset\b[^|;&]*--hard\b"; then
+  DISCARD="git reset --hard" ; DISCARD_SUB=reset
+elif printf '%s' "$CMD" | grep -Eq "${GIT_SUB}clean\b[^|;&]*(-[A-Za-z]*f|--force\b)"; then
+  DISCARD="git clean -f" ; DISCARD_SUB=clean
+fi
+if [ -n "$DISCARD" ]; then
+  TARGET_DIR=$(git_target_dir "$CMD" "$DISCARD_SUB")
+  if [ -n "$(git -C "$TARGET_DIR" status --porcelain -uall 2>/dev/null | head -1)" ]; then
+    deny "${DISCARD} discards uncommitted work — another agent's in-flight changes may be in this tree. Commit or stash first (TDD checkpoint commit), then retry."
+  fi
+fi
+
 # Rule: never push to the main branch (incl. force push)
 if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push\b[^|;&]*[[:space:]:]${MAIN_BRANCH}([[:space:]]|\$)"; then
   deny "pushing directly to '${MAIN_BRANCH}' is not allowed — all changes go through feature branches and PRs."
