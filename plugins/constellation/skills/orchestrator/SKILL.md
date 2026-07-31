@@ -289,6 +289,8 @@ follows [Cross-Model Validation](#cross-model-validation).
 
 ### Gate 2 (QA) — spawn both in one message
 
+**Before spawning**: checkpoint-commit any uncommitted work on the feature branch (`git status --porcelain` must be clean). Both Gate 2 agents write files concurrently — a dirty tree at spawn time is work one of them can clobber.
+
 ```
 Agent call 1: subagent_type: constellation:sdet,             model: <heuristic>
   prompt: <diff> + <plan reference> + "Subagent mode: assess coverage, implement missing tests, return the Test Assessment Result contract."
@@ -377,6 +379,7 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 
 - Always spawn parallel subagents in a **single message** — never sequentially.
 - Never proceed until **all** subagents in a gate have returned.
+- **No agent ever discards uncommitted work** (`git checkout -- .`, `git reset --hard`, `git clean -f`, worktree `restore`) — in a parallel gate that work may be a peer's. Commit or stash first; the git guard blocks these mechanically while the tree is dirty.
 - Always re-run the **entire gate** after fixes — not just the agent that found blockers.
 - Use incremental diffs on fix passes; full diff only on the first pass.
 - Always include review memory in reviewer prompts.
