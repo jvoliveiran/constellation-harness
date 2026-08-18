@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Token accounting per task/plan.** The orchestrator now tracks how many tokens
+  each workflow consumes: a `tokens` counter in the workflow state file is seeded
+  at `workflow-start` from the harness's remaining-budget reminder
+  (`<total_tokens>`), refreshed at every state save, folded across session
+  boundaries on `/constellation:resume`, and emitted as `tokensSpent` on the
+  `workflow-complete`, `workflow-shipped`, and `workflow-aborted` events.
+  `/constellation:metrics` reports average tokens per completed task/plan
+  (overall and per-track), average cost through ship, the top-3 most expensive
+  plans, and two new signals (token-hungry track, ship overhead). Missing values
+  are omitted, never estimated — token accounting never blocks a workflow step.
+
 ## [0.15.0] - 2026-07-31
 
 ### Added

@@ -23,5 +23,6 @@ Resume an interrupted workflow.
      post-merge verify + state cleanup instead of resuming.
 3. Load the `constellation:orchestrator` skill if not already loaded.
 4. Report where the workflow left off: print the Progress Banner (orchestrator skill § Progress Banner), then track, plan, branch, completed steps, current step, review loop count. If `waitingOn` is `"user"`, re-present the pending question before continuing — that is what the workflow stopped for.
-5. Continue the workflow from `currentStep` following the orchestrator protocol — including re-running any gate that was mid-flight (a gate with partial results re-runs in full).
-6. Keep updating the state file at each milestone as usual.
+5. **Fold token accounting across the session boundary** (orchestrator skill § Token accounting): when the state carries a `tokens` object, set `tokens.accumulated += tokens.sessionStart − tokens.lastKnownRemaining`, then reset `sessionStart` and `lastKnownRemaining` to the current remaining-budget value. State written before token accounting existed has no `tokens` object — seed one fresh; never block the resume on it.
+6. Continue the workflow from `currentStep` following the orchestrator protocol — including re-running any gate that was mid-flight (a gate with partial results re-runs in full).
+7. Keep updating the state file at each milestone as usual.
