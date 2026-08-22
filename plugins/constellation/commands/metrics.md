@@ -32,6 +32,17 @@ jq -rs '{blockers: [.[] | .data.crossModelBlockers // 0] | add, escalated: [.[] 
 
 # Ship outcomes
 jq -rs '[.[] | select(.event=="workflow-shipped")] | {shipped: length, auto: [.[] | select(.data.merge=="auto")] | length, verifyFails: [.[] | select(.data.postMergeVerify=="fail")] | length}' "$LOG"
+
+# Token cost per completed task/plan: overall average + per-track (workflow-complete carries tokensSpent)
+jq -rs '[.[] | select(.event=="workflow-complete" and .data.tokensSpent != null)]
+  | if length == 0 then "no token data yet" else
+      {avgTokensPerWorkflow: (map(.data.tokensSpent) | add / length | round), n: length,
+       byTrack: (group_by(.track) | map({track: .[0].track, avg: (map(.data.tokensSpent) | add / length | round), n: length}))}
+    end' "$LOG"
+
+# Full cost through ship (adds post-PR + ship spend), and the 3 most expensive plans
+jq -rs '[.[] | select(.event=="workflow-shipped" and .data.tokensSpent != null) | .data.tokensSpent] | if length == 0 then "no data" else {avgThroughShip: (add / length | round), max: max} end' "$LOG"
+jq -rs '[.[] | select(.event=="workflow-complete" and .data.tokensSpent != null)] | sort_by(-.data.tokensSpent) | .[:3] | map({plan: (.plan // "—"), track, tokens: .data.tokensSpent})' "$LOG"
 ```
 
 Also compute per-track averages where sample size allows (≥3 workflows).
@@ -39,6 +50,11 @@ Also compute per-track averages where sample size allows (≥3 workflows).
 ## 2. Report
 
 Present one compact table (metric, value, sample size) followed by a **Signals** section.
+Token metrics get their own rows: **avg tokens per completed task/plan** (overall and
+per-track where n ≥ 3), avg through ship, and the top-3 most expensive plans. Format
+token counts human-readable (`480k`, `1.2M`). Workflows logged before token accounting
+existed have no `tokensSpent` — report the token sample size (`n`) alongside, never
+treat missing values as zero.
 Only fire a signal when its threshold is met — no padding:
 
 | Signal | Threshold | Suggested action |
@@ -50,6 +66,8 @@ Only fire a signal when its threshold is met — no padding:
 | Cross-model signal | any escalated blocker user-accepted | Genuine defect Opus missed — evidence for keeping it on |
 | Infra skipping often | crossModelSkipped / workflows > 0.3 | Raise `timeoutSec` or check opencode auth/model |
 | Post-merge verify failures | any | Investigate immediately — gates passed but main broke: gap in gate coverage |
+| Token-hungry track | a track's avg `tokensSpent` > 2× overall avg (both n ≥ 3) | Inspect that track's review loops and diff sizes — fix loops ride premium reviewers; check incremental diffs are used on fix passes |
+| Ship overhead | avgThroughShip > 1.5× avg per workflow-complete | Post-PR/ship phase is consuming disproportionate tokens — inspect post-PR comment rounds |
 
 ## 3. A/B reporting mode (`/constellation:metrics ab`)
 

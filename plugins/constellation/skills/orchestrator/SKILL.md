@@ -466,12 +466,15 @@ Location: `.constellation/state/current-workflow.json`
   "preFixSha": null,
   "waitingOn": null,
   "modelProfile": "medium",
+  "tokens": { "sessionStart": 14900000, "lastKnownRemaining": 14200000, "accumulated": 0 },
   "startedAt": "<ISO timestamp>",
   "lastUpdatedAt": "<ISO timestamp>"
 }
 ```
 
 **Save points**: after track determination, after each agent step, after each gate pass/fail, before and after each fix loop. Every save is immediately followed by the [Progress Banner](#progress-banner).
+
+**`tokens`**: the per-workflow token counter — see [Token accounting](#token-accounting) for how it is seeded, refreshed at every save, carried across sessions on resume, and turned into `tokensSpent` on the completion events.
 
 **Fix loops keep `currentStep` on the gate**: while blockers loop back through Engineer + Lint Gate, `currentStep` stays `parallel-gate-1` (or `review-gate` / `lint-gate` for its own retries) — the loop is visible via `reviewLoopCount` and `preFixSha`, and progress never moves backward.
 
@@ -538,7 +541,8 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
   "plan": "011-add-audit-log.md",
   "data": {
     "totalSteps": 9, "reviewLoops": 2, "gate1Blockers": 3, "gate2Blockers": 0,
-    "testsAdded": 5, "lintGateRetries": 1, "modelProfile": "medium", "schemaBreakingChanges": false
+    "testsAdded": 5, "lintGateRetries": 1, "modelProfile": "medium", "schemaBreakingChanges": false,
+    "tokensSpent": 480000
   }
 }
 ```
@@ -549,13 +553,24 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
 | `lint-gate-pass` / `lint-gate-fail` | After the Lint Gate (include error summary on fail) |
 | `gate1-pass` / `gate1-blocked` | After Gate 1 (include loop/blocker count, plus `dxImprovements: N` filed or `dxSkipped` with the reason) |
 | `gate2-pass` | After Gate 2 |
-| `workflow-complete` | PR created (include full summary) |
+| `workflow-complete` | PR created (include full summary + `tokensSpent`) |
 | `pr-comments-addressed` | Post-PR round done (include `threads`, `loops`) |
-| `workflow-shipped` | Merged + post-merge verified (include `prNumber`, `merge: "auto"\|"confirmed"`, `hadBlockers`, `postMergeVerify: "pass"\|"fail"`) |
-| `workflow-aborted` | User aborts |
+| `workflow-shipped` | Merged + post-merge verified (include `prNumber`, `merge: "auto"\|"confirmed"`, `hadBlockers`, `postMergeVerify: "pass"\|"fail"`, `tokensSpent`) |
+| `workflow-aborted` | User aborts (include `tokensSpent`) |
 | `gate-skipped` | User skips a gate |
 
-These reveal recurring blocker patterns, lint-gate savings, average review loops, and track usage.
+These reveal recurring blocker patterns, lint-gate savings, average review loops, track usage, and token cost per completed task/plan.
+
+### Token accounting
+
+Completion events carry `tokensSpent` — the tokens the workflow consumed — so `/constellation:metrics` can report average token cost per completed task/plan. The only token signal visible in-session is the remaining budget the harness prints in system reminders (`<total_tokens>N tokens left</total_tokens>`); spend is therefore measured as a delta of that value, tracked in the state file's `tokens` object:
+
+1. **At `workflow-start`**: seed `tokens` from the most recent reminder value — `{ sessionStart: N, lastKnownRemaining: N, accumulated: 0 }`.
+2. **At every state save**: refresh `tokens.lastKnownRemaining` with the latest reminder value.
+3. **On resume in a new session** (the current remaining value is not a plausible continuation of `sessionStart` — a new session resets the budget): fold the finished session in — `accumulated += sessionStart − lastKnownRemaining` — then reset both `sessionStart` and `lastKnownRemaining` to the current remaining value.
+4. **When logging `workflow-complete`, `workflow-shipped`, or `workflow-aborted`**: compute `tokensSpent = accumulated + (sessionStart − <current remaining>)` and include it in the event's `data`. `workflow-shipped` reports the same counter re-computed at ship time, so it additionally captures post-PR and ship-step spend.
+
+Honesty rules: the delta covers everything the session consumed while the workflow was in flight (orchestrator + all subagents, and any unrelated conversation in between), and it is sampled at save points — treat it as a close approximation, not an invoice. If no reminder value is available, **omit** `tokensSpent` rather than estimating; the metrics command skips nulls. Never let token accounting block a workflow step — a missing or implausible value is dropped silently.
 
 ---
 
