@@ -17,6 +17,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (overall and per-track), average cost through ship, the top-3 most expensive
   plans, and two new signals (token-hungry track, ship overhead). Missing values
   are omitted, never estimated — token accounting never blocks a workflow step.
+- **`/constellation:improvements` + improvement lifecycle.** DX Analyst findings
+  (`.constellation/improvements/`) were write-only — filed at Gate 1 but listed
+  by no command. They now mirror the tasks convention: a new read-only portfolio
+  command groups improvements by category (recurring complexity themes surface
+  on top), showing status, effort, source, and age, with actionable signals
+  (category clusters worth a combined tweak, tweak-sized S-effort picks, stale
+  or broken promotions). The front-matter `status` grows from bare `open` to
+  `open | promoted | done | dropped` plus a `promoted-to:` link — when the user
+  acts on an improvement it is promoted to a tweak branch (S/M) or a task/plan
+  (L), keeping improvements a linked backlog rather than merging them into the
+  task inbox (different semantics: backlog vs commitment queue). The link lives
+  on the improvement side only, same as task → plan. `/constellation:tasks` and
+  `/constellation:status` cross-link the open-improvement count for
+  discoverability.
 
 ## [0.15.0] - 2026-07-31
 
