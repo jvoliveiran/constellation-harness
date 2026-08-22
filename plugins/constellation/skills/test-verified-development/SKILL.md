@@ -1,13 +1,15 @@
 ---
-name: tdd-workflow
-description: Test-driven development workflow — the core software development process for all engineer agents. Use when writing new features, fixing bugs, or refactoring code. Enforces RED → GREEN → REFACTOR at the unit level with checkpoint commits and coverage verification.
+name: test-verified-development
+description: Test-verified development workflow — the core software development process for all engineer agents. Use when writing new features, fixing bugs, or refactoring code. Implementation and tests land together; every test is then proven able to fail (the VERIFY gate) before the change is accepted, with checkpoint commits and coverage verification.
 ---
 
-# Test-Driven Development Workflow
+# Test-Verified Development Workflow
 
-This skill is the **core development process** for the Software Engineer and Frontend Engineer agents. All production code changes follow TDD: tests are written and validated as failing BEFORE any implementation code is written.
+This skill is the **core development process** for the Software Engineer and Frontend Engineer agents. Implementation and unit tests are written together, guided by the plan's acceptance criteria — and no change is complete until every new test has been **proven able to fail** for the intended reason. A test that has never failed has never proven it tests anything; this workflow makes that proof a mechanical gate instead of a process ritual.
 
-Scope note: this skill covers **unit-level TDD** — the red/green/refactor cycle around functions, components, and modules. Integration and E2E testing are deliberately out of scope here; they belong to the SDET agent (Parallel Gate 2), which assesses scenario-level coverage after implementation.
+Design is not this skill's job: for planned work the approved plan already fixed the architecture, contracts, and edge cases — implement to it directly rather than letting test order shape the design.
+
+Scope note: this skill covers **unit-level testing** — functions, components, and modules. Integration and E2E testing are deliberately out of scope here; they belong to the SDET agent (Parallel Gate 2), which assesses scenario-level coverage after implementation.
 
 ## When to Activate
 
@@ -19,32 +21,36 @@ Scope note: this skill covers **unit-level TDD** — the red/green/refactor cycl
 
 ## Core Principles
 
-### 1. Tests BEFORE Code
-ALWAYS write tests first, then implement code to make tests pass. Do not edit production code until a valid RED state is confirmed.
+### 1. Tests Ship WITH the Code
+Every production change lands together with the unit tests that cover it — same working session, same checkpoint commit. Derive the test cases from the plan's acceptance criteria (or the bug report) before implementing, so the tests assert required behavior, not whatever the implementation happens to do.
 
-### 2. Coverage Requirements
+### 2. Every Test Is Proven Able to Fail
+After tests pass, the **VERIFY gate** (Step 4) removes or breaks the production change and confirms the tests fail for the intended reason. A test that passes both with and without the implementation is tautological — rewrite it. This check is mandatory for every feature and bug fix.
+
+### 3. Coverage Requirements
 - Minimum 80% unit coverage on the code touched by the change (respect the project's configured thresholds when stricter)
 - All edge cases covered
 - Error scenarios tested
 - Boundary conditions verified
 
-### 3. Test Scope
+### 4. Test Scope
 Unit tests: individual functions and utilities, component logic, pure functions, helpers. Run them with the project's test commands from `.constellation/config.json` (`commands.test`, `commands.testRelated`).
 
-### 4. Git Checkpoints
-- If the repository is under Git, create a checkpoint commit after each TDD stage on the feature branch
-- Do not squash or rewrite these checkpoint commits until the workflow is complete — the PR is squash-merged into main (see the branching-strategy skill), so the branch history carries the TDD evidence while main still receives a single commit
+### 5. Git Checkpoints
+- If the repository is under Git, create a checkpoint commit after each stage on the feature branch
+- Do not squash or rewrite these checkpoint commits until the workflow is complete — the PR is squash-merged into main (see the branching-strategy skill), so the branch history carries the verification evidence while main still receives a single commit
 - Each checkpoint commit message must describe the stage and the exact evidence captured
 - Count only commits created on the current active branch for the current task — never treat commits from other branches or earlier unrelated work as checkpoint evidence
 - Before treating a checkpoint as satisfied, verify the commit is reachable from the current `HEAD` on the active branch
 - The preferred compact sequence:
-  - one commit for failing test added and RED validated
-  - one commit for minimal fix applied and GREEN validated
-  - one optional commit for refactor complete
+  - one commit for implementation + tests, GREEN and VERIFY validated (`feat:`/`fix:`)
+  - one optional commit for refactor complete (`refactor:`)
 
-## TDD Workflow Steps
+## Workflow Steps
 
-### Step 1: Write User Journeys
+### Step 1: Derive Test Cases from the Behavior
+Start from the acceptance criteria (planned work) or the reproduction (bug fix). For features without formal criteria, write the user journey first:
+
 ```
 As a [role], I want to [action], so that [benefit]
 
@@ -53,73 +59,52 @@ As a user, I want to search for markets semantically,
 so that I can find relevant markets even without exact keywords.
 ```
 
-### Step 2: Generate Test Cases
-For each user journey, create comprehensive test cases:
+Then enumerate the test cases the change must satisfy:
 
 ```typescript
 describe('Semantic Search', () => {
-  it('returns relevant markets for query', async () => {
-    // Test implementation
-  })
-
-  it('handles empty query gracefully', async () => {
-    // Test edge case
-  })
-
-  it('falls back to substring search when cache unavailable', async () => {
-    // Test fallback behavior
-  })
-
-  it('sorts results by similarity score', async () => {
-    // Test sorting logic
-  })
+  it('returns relevant markets for query', async () => {})
+  it('handles empty query gracefully', async () => {})
+  it('falls back to substring search when cache unavailable', async () => {})
+  it('sorts results by similarity score', async () => {})
 })
 ```
 
-### Step 3: Run Tests (They Should Fail) — the RED Gate
-Run the relevant tests with the project's test command. **This step is mandatory and is the RED gate for all production changes.**
+This list is the contract for the implementation — it comes from the requirements, never from the finished code.
 
-Before modifying business logic or other production code, verify a valid RED state via one of these paths:
-- **Runtime RED**:
-  - The relevant test target compiles successfully
-  - The new or changed test is actually executed
-  - The result is RED
-- **Compile-time RED**:
-  - The new test newly instantiates, references, or exercises the buggy code path
-  - The compile failure is itself the intended RED signal
+### Step 2: Implement Code and Tests Together
+Write the implementation and fill in the test cases in the same session. Keep the implementation minimal — only what the acceptance criteria demand (YAGNI). For a bug fix, the test that reproduces the bug is part of this step, not optional.
 
-In either case:
-- The failure is caused by the intended business-logic bug, undefined behavior, or missing implementation
-- The failure is NOT caused only by unrelated syntax errors, broken test setup, missing dependencies, or unrelated regressions
+### Step 3: Run Tests — the GREEN Gate
+Run the relevant test target with the project's test command. All new and existing tests must pass. Fix failures before proceeding — do not weaken assertions to get to green.
 
-A test that was only written but not compiled and executed does not count as RED.
+### Step 4: Prove the Tests — the VERIFY Gate
+**This step is mandatory and is what makes the tests trustworthy.** With tests green, demonstrate they would catch the absence (or breakage) of the change:
 
-**Do not edit production code until this RED state is confirmed.**
+1. Temporarily remove the production change, keeping the tests in the tree:
+   ```bash
+   git stash push -u -- <production files touched by the change>
+   ```
+   (`-u` so newly created files are stashed too; test files are NOT included in the pathspec)
+2. Rerun the same relevant test target. The new tests **must fail**, and fail for the intended reason:
+   - a behavioral assertion mismatch caused by the missing feature or the resurfaced bug, or
+   - a compile/import failure because the test exercises code that no longer exists
+   - NOT unrelated syntax errors, broken test setup, missing dependencies, or unrelated regressions
+3. Restore the change and confirm green again:
+   ```bash
+   git stash pop
+   ```
+   Rerun the target once — it must return to GREEN.
 
-Checkpoint commit after RED is validated:
-- `test: add reproducer for <feature or bug>`
-- This commit serves as the RED validation checkpoint if the reproducer was compiled, executed, and failed for the intended reason
+When stashing is impractical (e.g. the change is interleaved with pre-existing code in one file), instead temporarily invert or break the key logic of the change (a manual mutation), confirm the tests fail, then restore it exactly and confirm GREEN.
 
-### Step 4: Implement Code
-Write **minimal** code to make tests pass:
+A test suite that stays green in step 2 is tautological or asserts too little — rewrite the tests and repeat the gate. Do not proceed to commit until VERIFY has passed.
 
-```typescript
-// Implementation guided by tests
-export async function searchMarkets(query: string) {
-  // Implementation here
-}
-```
+### Step 5: Checkpoint Commit
+Commit implementation + tests together once GREEN and VERIFY are validated:
 
-Stage the minimal fix now but defer the checkpoint commit until GREEN is validated in Step 5.
-
-### Step 5: Run Tests Again — the GREEN Gate
-Rerun the same relevant test target after the fix and confirm the previously failing test is now GREEN.
-
-Only after a valid GREEN result may you proceed to refactor.
-
-Checkpoint commit after GREEN is validated:
-- `fix: <feature or bug>` (or `feat: <feature>` for new functionality)
-- The commit serves as the GREEN validation checkpoint if the same relevant test target was rerun and passed
+- `feat: <feature>` or `fix: <bug>`
+- The commit body records the VERIFY evidence, e.g. `verified: 4 new tests fail without the implementation (assertion mismatches in search.service.spec.ts)`
 
 ### Step 6: Refactor
 Improve code quality while keeping tests green:
@@ -299,30 +284,32 @@ Before every checkpoint commit: the relevant tests pass and lint is clean.
 
 ## Best Practices
 
-1. **Write Tests First** — always TDD
-2. **One Assert Per Test** — focus on single behavior
-3. **Descriptive Test Names** — explain what's tested
-4. **Arrange-Act-Assert** — clear test structure
-5. **Mock External Dependencies** — isolate unit tests
-6. **Test Edge Cases** — null, undefined, empty, large
-7. **Test Error Paths** — not just happy paths
-8. **Keep Tests Fast** — unit tests < 50ms each
-9. **Clean Up After Tests** — no side effects
-10. **Review Coverage Reports** — identify gaps
+1. **Derive Tests from Requirements** — acceptance criteria, not the finished code
+2. **Prove Every Test Can Fail** — the VERIFY gate is not optional
+3. **One Assert Per Test** — focus on single behavior
+4. **Descriptive Test Names** — explain what's tested
+5. **Arrange-Act-Assert** — clear test structure
+6. **Mock External Dependencies** — isolate unit tests
+7. **Test Edge Cases** — null, undefined, empty, large
+8. **Test Error Paths** — not just happy paths
+9. **Keep Tests Fast** — unit tests < 50ms each
+10. **Clean Up After Tests** — no side effects
+11. **Review Coverage Reports** — identify gaps
 
 ## Quality Checklist
 
 Self-check before handing off to the Lint Gate:
 
 - [ ] All public functions/components touched by the change have unit tests
-- [ ] Every test failed (RED) before its implementation existed
+- [ ] Test cases were derived from acceptance criteria / the bug report, not from the implementation
+- [ ] Every new test was proven to fail without the change (VERIFY gate), for the intended reason
 - [ ] Edge cases covered (null, empty, invalid, boundaries)
 - [ ] Error paths tested — not just the happy path
 - [ ] External dependencies mocked at the boundary
 - [ ] Tests are independent (no shared state, no ordering)
 - [ ] Assertions are specific and meaningful — a wrong value fails them
 - [ ] Coverage is 80%+ on the changed code
-- [ ] RED/GREEN/REFACTOR checkpoint commits exist on the branch
+- [ ] Checkpoint commit(s) with VERIFY evidence exist on the branch
 
 ## Success Metrics
 
@@ -330,8 +317,8 @@ Self-check before handing off to the Lint Gate:
 - All tests passing (green)
 - No skipped or disabled tests
 - Fast test execution (< 30s for unit tests)
-- RED → GREEN → REFACTOR evidence captured in checkpoint commits
+- VERIFY evidence captured in checkpoint commit messages
 
 ---
 
-**Remember**: tests are not optional. They are the safety net that enables confident refactoring, rapid development, and production reliability. The RED gate is what makes a test trustworthy — a test that has never failed has never proven it tests anything.
+**Remember**: tests are not optional. They are the safety net that enables confident refactoring, rapid development, and production reliability. The VERIFY gate is what makes a test trustworthy — a test that has never failed has never proven it tests anything.

@@ -9,7 +9,7 @@ description: Create a single conventional commit for all staged changes, derivin
 
 Create a single, well-structured commit for all remaining changes at the end of a workflow run. The commit message follows the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification.
 
-**Relationship to TDD checkpoint commits**: engineers following the `tdd-workflow` skill create `test:` / `fix:` / `refactor:` checkpoint commits on the feature branch during development — those are expected and must NOT be squashed or rewritten. This skill governs the final consolidating commit for everything not yet committed (docs, CHANGELOG, remaining test additions). The PR is squash-merged (see branching-strategy), so the main branch still receives exactly one commit.
+**Relationship to checkpoint commits**: engineers following the `test-verified-development` skill create `feat:`/`fix:` (implementation + tests, with VERIFY evidence) and optional `refactor:` checkpoint commits on the feature branch during development — those are expected and must NOT be squashed or rewritten. This skill governs the final consolidating commit for everything not yet committed (docs, CHANGELOG, remaining test additions). The PR is squash-merged (see branching-strategy), so the main branch still receives exactly one commit.
 
 ---
 
@@ -57,8 +57,8 @@ Create a single, well-structured commit for all remaining changes at the end of 
 
 ## Rules
 
-- **Single final commit**: all changes not already captured in TDD checkpoint commits go into one final commit. If nothing remains uncommitted, skip the commit — do not create an empty one.
-- **Never rewrite TDD checkpoints**: no squash, no rebase of `test:`/`fix:`/`refactor:` checkpoint commits — squash happens at PR merge.
+- **Single final commit**: all changes not already captured in checkpoint commits go into one final commit. If nothing remains uncommitted, skip the commit — do not create an empty one.
+- **Never rewrite checkpoints**: no squash, no rebase of `feat:`/`fix:`/`refactor:` checkpoint commits — squash happens at PR merge.
 - **Feature branch only**: never commit directly to the main branch.
 - **No push**: pushing is handled by the DevOps Engineer.
 - **No amend**: always create a new commit.

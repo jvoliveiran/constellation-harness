@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-22
+
+### Changed
+- **TDD replaced by test-verified development.** Prompted by Böckeler's
+  ["TDD in the Agent Loop"](https://martinfowler.com/articles/exploring-gen-ai/tdd-in-the-agent-loop.html)
+  findings (no quality gain from agent TDD, 3–8.5x token overhead, test-first
+  ordering shaping design worse than upfront planning — which Constellation's
+  architect plans already provide), the engineers' core workflow no longer
+  mandates RED → GREEN → REFACTOR. The renamed `test-verified-development`
+  skill (was `tdd-workflow`) keeps what test-first was actually buying and
+  makes it mechanical: test cases are derived from acceptance criteria (never
+  from the finished code), implementation and tests land together (GREEN), and
+  a mandatory **VERIFY gate** then proves every new test can fail — stash the
+  production change (`git stash push -u`), confirm the tests fail for the
+  intended reason, restore, confirm green again. Tautological tests are caught
+  by construction instead of by ritual. Checkpoint commits simplify from three
+  (`test:`/`fix:`/`refactor:`) to two (`feat:`/`fix:` carrying VERIFY evidence
+  in the body, optional `refactor:`). Coverage floor (80%), edge-case
+  checklist, and mocking rules are unchanged; SDET keeps integration/E2E in
+  Gate 2. Updated across both engineer agents, orchestrator rule 0, the
+  git-commit skill, the post-PR flow, product-manager BDD wording, the
+  stack-service `add-domain-entity` playbook, and the git guard messages.
+
 ## [0.16.0] - 2026-08-22
 
 ### Added

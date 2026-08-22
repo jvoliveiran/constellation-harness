@@ -652,7 +652,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 
 ## Mandatory Workflow Rules
 
-0. Engineers (backend and frontend) follow the **`constellation:tdd-workflow` skill** for all code changes — RED → GREEN → REFACTOR with checkpoint commits on the feature branch. Production code is never written before a validated failing test.
+0. Engineers (backend and frontend) follow the **`constellation:test-verified-development` skill** for all code changes — implementation and tests land together, then every new test is proven able to fail (VERIFY gate) with checkpoint commits on the feature branch. No change is accepted on tests that never failed.
 1. All Engineer code changes pass the **Lint Gate** before review.
 2. All code changes get a Code Reviewer review.
 3. Security Analyst runs **ALWAYS** alongside Code Reviewer in Gate 1 (except Hotfixes).

@@ -8,7 +8,7 @@ feedback (see the stub in SKILL.md). State is already at `post-pr` on entry.
    - **Change request** → joins the fix list.
    - **Question / discussion** → escalate to the user with a drafted answer — never guess
      an answer on the human's behalf, never mark it addressed silently.
-3. Software Engineer implements the change requests (TDD) → **Lint Gate** → **Gate 1
+3. Software Engineer implements the change requests (test-verified) → **Lint Gate** → **Gate 1
    incremental** (fix delta + the comment list as the blocker context; same 3-loop cap;
    cross-model participates if enabled — a blocker here sets `hadBlockers`).
 4. Push. DevOps replies on each addressed thread referencing the fix commit, resolves the

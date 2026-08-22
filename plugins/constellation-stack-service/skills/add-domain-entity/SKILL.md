@@ -11,7 +11,7 @@ Apply this skill when creating a new domain concept (a new Prisma model with its
 
 **Drift warning.** This playbook describes the boilerplate's conventions. The project may have renamed or evolved the exemplar module (`src/person/` at scaffold time — `.constellation/project-map.md` marks the current one). Before writing anything, read the exemplar **as it exists in this repo** and mirror *it*, not this document, wherever they disagree.
 
-**Process.** This skill defines the order of concerns, not the process — TDD still governs (`tdd-workflow` skill): each step's logic gets its failing test first. Stack conventions come from `nestjs`, `graphql`, `graphql-federation`, and `prisma-migrations` — this playbook only adds the boilerplate-specific wiring.
+**Process.** This skill defines the order of concerns, not the process — test-verified development still governs (`test-verified-development` skill): each step's logic lands with unit tests that are then proven able to fail (VERIFY gate). Stack conventions come from `nestjs`, `graphql`, `graphql-federation`, and `prisma-migrations` — this playbook only adds the boilerplate-specific wiring.
 
 ## Step 0 — Read the exemplar
 
