@@ -355,11 +355,12 @@ A return missing a parsable `VERDICT` is re-requested once, then handled per §M
 
     ```markdown
     ---
-    status: open
+    status: open                      # open | promoted | done | dropped
     category: duplication | dependencies | env-vars | local-setup | test-strategy
     effort: S | M | L
     source: <plan file or branch that surfaced it>
     date-created: DD-MM-YYYY
+    promoted-to: <task/plan file or branch>   # required once promoted
     ---
     # <Title>
     **Evidence**: …
@@ -369,6 +370,15 @@ A return missing a parsable `VERDICT` is re-requested once, then handled per §M
     Mention the filed improvements in the gate summary (one line each). They are picked
     up later as Tweaks (S/M) or Planned Work (L) when the user asks — improvements are
     a backlog, not a queue the workflow drains automatically.
+    `/constellation:improvements` lists the portfolio.
+
+    **Promotion path** — when the user decides to act on an improvement, the domains
+    link instead of merging: S/M → picked up directly as a Tweak (record the branch in
+    `promoted-to:`); L → refined into a task spec or plan (record that file). Set
+    `status: promoted` at pick-up, `done` when the promoted work ships, `dropped` (with
+    a one-line reason in the body) when the user declines it. The improvement file is
+    the only side that links (`promoted-to:`) — tasks and plans never point back, same
+    as the task → plan convention.
 
     Improvement files filed during a workflow ride the final workflow commit (the
     `git-commit` skill's `git add -A` sweeps them). Filed *outside* a workflow (an

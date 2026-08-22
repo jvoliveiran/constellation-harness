@@ -85,5 +85,8 @@ Tasks — 4 active (2 inbox · 1 refined · 1 done) · 1 dropped
   - `→ N inbox tasks awaiting refinement — pick one and ask for a plan (task → plan is the ideal flow)`
   - `→ <task> links <plan> which is ✅ completed — flip the task to done`
   - `→ <task> links <plan> which does not exist — fix its plan: field`
+- Cross-link: when `.constellation/improvements/` has files with `status: open` (or no
+  status), append one line after the signals:
+  `also: N open improvements — /constellation:improvements`.
 
 This command reports; it never refines, drops, or archives anything.
