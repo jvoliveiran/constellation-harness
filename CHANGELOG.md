@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-22
+
 ### Added
 - **Token accounting per task/plan.** The orchestrator now tracks how many tokens
   each workflow consumes: a `tokens` counter in the workflow state file is seeded
