@@ -195,7 +195,7 @@ Orchestrator (constellation:orchestrator skill)
 
 ### Quality machinery
 
-- **TDD as the engineering process** — both engineer agents follow the `tdd-workflow` skill: RED (validated failing test) → GREEN (minimal implementation) → REFACTOR, with checkpoint commits on the feature branch. Production code is never written before a failing test. Integration/E2E coverage stays with SDET in Gate 2.
+- **Test-verified development as the engineering process** — both engineer agents follow the `test-verified-development` skill: test cases derived from acceptance criteria, implementation and tests landing together (GREEN), then a mandatory VERIFY gate that temporarily removes the change and proves every new test fails for the intended reason — with checkpoint commits carrying the evidence on the feature branch. No change ships on tests that never failed. Integration/E2E coverage stays with SDET in Gate 2.
 - **Lint Gate** — project lint + build (+ schema compatibility when `schemaPath` is configured) runs before any reviewer, so expensive Opus reviewers never see code that doesn't compile.
 - **Parallel gates** — reviewers are spawned concurrently in a single message; blockers from both are merged into one fix list.
 - **DX advisory pass** — the DX Analyst runs alongside Gate 1 (first pass only, skipped on hotfixes) hunting complexity: duplicated code, unnecessary dependencies, redundant env vars, local-setup friction, and over-mocked cross-app test setups. It never blocks — each finding is filed as a markdown improvement in `.constellation/improvements/` (with category, evidence, simplification, effort) to be picked up later as a tweak or plan.
@@ -216,8 +216,8 @@ Orchestrator (constellation:orchestrator skill)
 |---|---|---|---|
 | `product-manager` | opus | MLP scope, value loop, PRDs, roadmaps, parking lot — drives the planning phase | full |
 | `software-architect` | fable (opus fallback) | Plans with acceptance criteria, risks, validation — pairs with PM on feasibility | full |
-| `software-engineer` | sonnet | Implements backend/service plans and changes, test-first (TDD) | full |
-| `frontend-engineer` | sonnet | Implements UI work test-first (TDD) — components, state, accessibility, design quality | full |
+| `software-engineer` | sonnet | Implements backend/service plans and changes with verified tests | full |
+| `frontend-engineer` | sonnet | Implements UI work with verified tests — components, state, accessibility, design quality | full |
 | `ui-ux-designer` | opus | Design-led frontend work — dashboards, landing pages, redesigns | full |
 | `code-reviewer` | fable (opus fallback) | Correctness/maintainability/performance review | **read-only, no shell** |
 | `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (e.g. Gemini or GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
@@ -252,7 +252,7 @@ In SDLC order — project setup → previewing work → controlling a running wo
 
 ## Skills
 
-**Core (`constellation`)**: `orchestrator`, `tdd-workflow`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`, `grafana-cloud` (Grafana Cloud free tier + OpenTelemetry pipeline for logs/metrics/traces — Loki as the primary distributed-logging store).
+**Core (`constellation`)**: `orchestrator`, `test-verified-development`, `git-commit`, `branching-strategy`, `release-notes`, `dependency-management`, `github-remote`, `grafana-cloud` (Grafana Cloud free tier + OpenTelemetry pipeline for logs/metrics/traces — Loki as the primary distributed-logging store).
 **Stack pack (`constellation-stack-node`)**: `typescript`, `nestjs`, `graphql`, `graphql-federation`, `prisma-migrations`, `observability`, `error-handling`, `security-checklist`, `schema-compatibility`.
 **Stack pack (`constellation-stack-frontend`)**: `frontend-design` (distinctive, production-grade UI aesthetics — typography, color, motion, composition).
 **Boilerplate pack (`constellation-stack-service`)**: `add-domain-entity`, `e2e-harness`, `terraform-deploy` — recipes for backends scaffolded from the [constellation-service](https://github.com/jvoliveiran/constellation-service) template. Layers on top of `constellation-stack-node`; enable both in derived repos.

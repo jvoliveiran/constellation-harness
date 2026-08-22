@@ -77,7 +77,7 @@ fi
 if [ -n "$DISCARD" ]; then
   TARGET_DIR=$(git_target_dir "$CMD" "$DISCARD_SUB")
   if [ -n "$(git -C "$TARGET_DIR" status --porcelain -uall 2>/dev/null | head -1)" ]; then
-    deny "${DISCARD} discards uncommitted work — another agent's in-flight changes may be in this tree. Commit or stash first (TDD checkpoint commit), then retry."
+    deny "${DISCARD} discards uncommitted work — another agent's in-flight changes may be in this tree. Commit or stash first (checkpoint commit), then retry."
   fi
 fi
 
@@ -87,7 +87,7 @@ if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push\b[^|;&]*[[:space:]:]${MAIN_BRAN
 fi
 
 # Rule: gates before remote — while a workflow is mid-pipeline, pushing is allowed only
-# at the steps that come after the quality gates. TDD checkpoint commits stay local.
+# at the steps that come after the quality gates. Checkpoint commits stay local.
 # Fail-open on unreadable state (resume's validation owns that problem).
 STATE="$PROJECT_DIR/.constellation/state/current-workflow.json"
 if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)" && [ -f "$STATE" ]; then
