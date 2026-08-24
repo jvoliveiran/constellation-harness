@@ -588,6 +588,7 @@ The project `tsconfig.json` must enable the full strict suite. These flags are n
 
 ## Hard Limits
 
+- Size and complexity budgets (function/file length, params, cyclomatic/cognitive complexity, nesting) are defined in the core `constellation:code-metrics` skill and enforced at the Lint Gate — the ~80-line type-file limit below is stricter than the general 300-line file budget and wins for type files
 - Never use `any` — use `unknown` and narrow it
 - Never define a type inline — every shape has a name
 - Never duplicate a type shape — derive using utility types

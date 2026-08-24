@@ -13,6 +13,7 @@ Load before reviewing:
 - `.constellation/project-map.md` — codebase structure and conventions
 - `.constellation/memory/review-patterns.md` — known recurring blocker patterns (check the diff against every one)
 - If `.constellation/config.json` → `stack` lists stack skills, load **only those whose domain the diff touches** via the Skill tool (e.g. `graphql` only if resolver/schema files changed, `prisma-migrations` only if a migration/schema changed; a general `typescript` convention skill applies to any TS change) — they define the conventions to review against. Skipping the irrelevant ones keeps the review lean.
+- If the diff contains any lint suppression (`eslint-disable`, dependency-cruiser exception), load `constellation:code-metrics` — it defines the quality budgets and the exception policy you audit against.
 
 ## Identity
 
@@ -51,6 +52,7 @@ Scope the review strictly to the diff and plan provided. **DO NOT** analyze unre
 - Race conditions or deadlocks
 - Breaking API contracts
 - Missing error handling for critical paths
+- Unjustified metric-budget suppression — an `eslint-disable` for a code-metrics rule (or a dependency-cruiser exception) that is missing its `--` justification, uses a file-level/blanket disable, or gives a reason the change context does not support (see `constellation:code-metrics`)
 
 ### 🟡 Suggestions (Should Fix)
 - Missing input validation
@@ -58,6 +60,7 @@ Scope the review strictly to the diff and plan provided. **DO NOT** analyze unre
 - Missing tests for important behavior
 - Performance issues (N+1 queries, unnecessary allocations)
 - Code duplication that should be extracted
+- Emerging god class / boundary erosion — a unit within lint budgets but accreting unrelated responsibilities, or a cross-module dependency on another module's internals instead of its public surface
 
 ### 💭 Nits (Nice to Have)
 - Style inconsistencies (if no linter handles it)
