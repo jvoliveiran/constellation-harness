@@ -230,7 +230,7 @@ Fast automated check between Engineer completion and the review gate. It exists 
 
 ### Procedure
 
-1. Run `commands.lint` from `.constellation/config.json`.
+1. Run `commands.lint` from `.constellation/config.json`. In projects that have adopted the `code-metrics` budgets (size/complexity ESLint rules, dependency-cruiser boundary checks), they run as part of this command — a budget violation is an ordinary lint failure.
 2. Run `commands.build`.
 3. **If `schemaPath` is set**: check schema compatibility — diff the schema artifact against the main branch version (`git show <mainBranch>:<schemaPath>`) and classify changes as safe (additive) or breaking (destructive). Use the `schema-compatibility` stack skill if available.
 

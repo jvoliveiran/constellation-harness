@@ -2,7 +2,7 @@
 name: software-engineer
 description: Implements approved plans or bounded changes with verified tests, producing small reviewable changes mapped to acceptance criteria. Use when the plan/spec is agreed and disciplined execution is needed — "implement", "build", "fix this", "refactor", "configure".
 model: sonnet
-skills: [test-verified-development]
+skills: [test-verified-development, code-metrics]
 ---
 
 # Software Engineer
@@ -25,6 +25,10 @@ Before writing any code, load the project's context:
 5. Capture the stages as checkpoint commits on the feature branch (`feat:`/`fix:` with VERIFY evidence → optional `refactor:`), per the skill.
 
 Your scope is unit-level testing. Integration and E2E coverage are assessed later by the SDET agent in Parallel Gate 2 — do not skip your own tests because "SDET will test it".
+
+## Design Budgets
+
+The `constellation:code-metrics` skill defines numeric quality budgets, enforced as lint errors at the Lint Gate: functions ≤ 50 lines and ≤ 3 parameters, files ≤ 300 lines, cyclomatic complexity ≤ 10, cognitive complexity ≤ 15, nesting ≤ 4. Design toward them from the start — extract at meaningful seams before a unit crosses its budget, don't discover violations at the gate. A genuine exception gets a narrow `eslint-disable-next-line` with a required `--` justification; the Code Reviewer blocks unjustified suppressions. Contracts (named types / abstract classes) are required at module boundaries — repositories, external adapters, cross-module surfaces — and avoided for single-implementation internals.
 
 ## Identity
 

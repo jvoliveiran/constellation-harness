@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-24
+
+### Added
+- **Code-metrics budgets + boundary rules (new `code-metrics` core skill).**
+  Targets the failure modes agent-written code drifts toward — god classes,
+  long complex functions, files with no separation of concerns — with numeric
+  budgets enforced mechanically rather than rhetorically (the lesson from the
+  TDD replacement: rules in prompts drift, rules in gates hold). Functions
+  ≤ 50 lines (≤ 80 for `.tsx` components) and ≤ 3 parameters, files ≤ 300
+  lines, cyclomatic complexity ≤ 10, cognitive complexity ≤ 15 (SonarJS),
+  nesting ≤ 4 — all as ESLint **errors** run by the existing Lint Gate (no new
+  gate), with test files exempt from length budgets. The structural half is
+  dependency-cruiser rules: no circular dependencies, domain never imports
+  infrastructure, no cross-module imports of internals. Contracts (named
+  types / abstract classes) are required at module boundaries — repositories,
+  external adapters, cross-module surfaces — and explicitly discouraged for
+  single-implementation internals (over-abstraction stays DX Analyst
+  territory). Escape hatch: a narrow `eslint-disable-next-line` with a
+  **required `--` justification**; the Code Reviewer audits every suppression
+  in the diff and blocks unjustified ones. Both engineer agents load the
+  skill and carry a design-budgets block so they design toward the limits
+  instead of discovering them at the gate; the `typescript` stack skill
+  cross-references the budgets. Adoption is per-project (config lives in the
+  target repo's lint setup); projects without the rules get the gap filed as
+  an improvement, never bolted onto a feature branch.
+
 ## [0.17.0] - 2026-08-22
 
 ### Changed
