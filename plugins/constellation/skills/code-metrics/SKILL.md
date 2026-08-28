@@ -41,20 +41,22 @@ export default [
       'sonarjs/cognitive-complexity': ['error', 15],
     },
   },
-  // Test files: length budgets off — a thorough describe block is not a god function
-  {
-    files: ['**/*.test.*', '**/*.spec.*', '**/*.e2e-spec.*'],
-    rules: {
-      'max-lines-per-function': 'off',
-      'max-lines': 'off',
-    },
-  },
   // React/JSX components may relax function length to 80 — markup inflates line
   // counts without inflating complexity. Complexity budgets stay unchanged.
   {
     files: ['**/*.tsx'],
     rules: {
       'max-lines-per-function': ['error', { max: 80, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  // Test files: length budgets off — a thorough describe block is not a god function.
+  // MUST be the last override: for a *.test.tsx file the last matching entry wins per
+  // rule, so placing this before the *.tsx entry would re-enable the budget on tests.
+  {
+    files: ['**/*.test.*', '**/*.spec.*', '**/*.e2e-spec.*'],
+    rules: {
+      'max-lines-per-function': 'off',
+      'max-lines': 'off',
     },
   },
 ];

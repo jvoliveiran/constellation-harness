@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-08-28
+
+### Fixed
+- **code-metrics: test-file exemption lost on `.test.tsx` files.** In the
+  skill's reference ESLint config the test-files override (length budgets off)
+  came before the `.tsx` override (80-line relaxation); since the last matching
+  entry wins per rule, `.test.tsx` files got `max-lines-per-function`
+  re-enabled at 80 instead of exempted. The test override now comes last, with
+  a comment stating the ordering constraint. Found during the fleet adoption
+  run across the user's repos — two adoption agents hit it independently.
+
 ## [0.18.0] - 2026-08-24
 
 ### Added
