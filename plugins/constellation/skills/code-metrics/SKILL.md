@@ -123,3 +123,5 @@ export function mapWebhookEvent(event: WebhookEvent): DomainEvent {
 ## Adoption
 
 Enforcement requires the rules in the target project's lint setup. When a project's `commands.lint` does not yet carry these rules, the engineer still designs within the budgets (they are hard limits on new code regardless), and the gap is filed as an improvement (`.constellation/improvements/`) or a tweak to adopt the config — **do not** bolt the lint config onto an unrelated feature branch. On adoption in a legacy codebase, baseline pragmatically: apply the rules to changed files first rather than mass-suppressing existing violations.
+
+After adoption, `/constellation:debt` inventories the full debt — it re-runs ESLint with `--no-inline-config` (resurfacing baselined suppressions) and dependency-cruiser without `--ignore-known`, filtered to the six budget rules, tagging each finding baselined vs new.
