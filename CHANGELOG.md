@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-28
+
+### Added
+- **`/constellation:debt` command.** Read-only inventory of a project's
+  code-metrics debt. Adopted projects suppress baselined pre-existing
+  violations inline, so a normal lint run only shows new ones; this command
+  re-runs ESLint with `--no-inline-config` (resurfacing every suppressed
+  budget violation) and dependency-cruiser without `--ignore-known`, filters
+  strictly to the six budget rules, and tags each finding 🧾 baselined
+  (suppression carries the adoption justification / violation is in the
+  known-violations file) or 🆕 new (slipped past or predates a rule — will
+  fail the next Lint Gate touching that file). Cross-references the baseline
+  improvement in `.constellation/improvements/` and flags untracked
+  baselines; `--new` filters the table to non-baselined findings. Born from
+  the fleet adoption run, where the baselined-vs-new distinction had no
+  single command.
+
 ## [0.18.1] - 2026-08-28
 
 ### Fixed
