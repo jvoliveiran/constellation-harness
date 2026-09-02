@@ -99,7 +99,7 @@ if printf '%s' "$CMD" | grep -Eq "${GIT_SUB}push([[:space:]]|\$)" && [ -f "$STAT
 fi
 
 # Rule: artifacts ship with the work — never push while harness artifacts sit
-# uncommitted in the target repo. Catches plans/improvements/spikes/ADRs/product files
+# uncommitted in the target repo. Catches tasks/plans/epics/features/ADRs/artifact files
 # that would otherwise be stranded untracked (state/ and metrics/ are gitignored and
 # never counted). Fix: stage them into the workflow commit, or run
 # .constellation/scripts/sync-artifacts.sh (artifact-only commit, allowed on main).

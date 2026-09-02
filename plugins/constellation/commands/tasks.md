@@ -1,48 +1,53 @@
 ---
-description: Portfolio overview of all task specs in .constellation/tasks/ — status, source, dates, linked plan — flagging the inbox queue and the tasks already refined into plans.
-argument-hint: "[--archived to include archived tasks]"
+description: Portfolio overview of all tasks in .constellation/tasks/ — status, type, source, feature link, plan pairing — flagging the inbox queue and the in-flight task.
+argument-hint: "[--type <t>] [--status <s>] [--archived to include archived tasks]"
 ---
 
 # /constellation:tasks
 
-Read-only overview of every task spec in the project. Never modifies tasks, plans, state, or metrics.
+Read-only overview of every task in the project. Never modifies tasks, plans, state, or metrics.
 
-Task specs are the harness inbox: work items captured by **other agents, tools, or humans before they are plans**. The ideal flow is task → plan (see the orchestrator's Task Lifecycle) — this command shows which tasks are still waiting and which already graduated into a plan.
+The **task is the unit of work** (artifact model v1): every workflow starts on a task filed at intake and ends on that task. This command shows the pipeline — what is queued, what is in flight, what shipped. For the full hierarchy (epics → features → tasks), use `/constellation:backlog`.
 
-## Task spec front-matter convention
+## Task front-matter convention
 
-Every file in `.constellation/tasks/*.md` carries this lightweight front-matter, so the listing is mechanical instead of forensic:
+Every file in `.constellation/tasks/NNN-<slug>.md` carries the front-matter defined in the orchestrator's `references/artifact-model.md`:
 
 ```markdown
 ---
-status: inbox            # inbox | refined | done | dropped
-source: codex            # optional — agent/tool/person that filed it
+status: inbox            # inbox | refined | in-progress | done | dropped | parked
+type: feature            # feature | fix | refactor | debt | spike | discovery
+source: user             # user | dx-analyst | codex | <agent/tool/person>
+feature: F001-user-onboarding.md   # optional
+related: 009-old-fix.md  # optional
+revisit: <trigger>       # required when parked
+commit: <sha>            # set on done
 date-created: DD-MM-YYYY
 last-edit: DD-MM-YYYY
-plan: 003-export-csv.md  # required once refined — the plan this task became
 ---
 ```
 
-The body is free-form — whatever context the filing agent had. The task ↔ plan link lives **on the task side only** (`plan:`); plans never point back.
+Links point up only: the task carries `feature:`; the plan carries `task:`. Neither parent points back.
 
 ## Procedure
 
 1. Glob `.constellation/tasks/*.md`; when `$ARGUMENTS` contains `--archived`, also glob
    `.constellation/tasks/archive/*.md`. No task files at all → report "No tasks yet —
-   task specs land in .constellation/tasks/ with `status: inbox` front-matter (see the
-   orchestrator's Task Lifecycle)." and stop.
-2. For each task, parse the front-matter: `status`, `source`, `date-created`,
-   `last-edit`, `plan`. A file without parseable front-matter is listed with status
-   `⚠️ malformed` — never skipped silently.
-3. **Resolve plan links.** For every task with a `plan:` field, look the file up in
-   `.constellation/plans/` (then `plans/archive/`) and read the plan's own `status`
-   front-matter. Render the link inline using the /constellation:plans status
-   vocabulary. A `plan:` value that matches no file renders `(⚠️ missing)`.
-4. Sort by status group — `inbox` first (it is the actionable queue), then `refined`,
-   `done`, `dropped`, malformed — and within each group ascending by `date-created`.
-   Task filenames are chosen by whoever files them, so name order carries no meaning.
-   Archived tasks, when included, render in a separate section below the active ones.
-5. Render the table, a one-line summary of counts per status, and the actionable
+   the orchestrator files one at intake for every workflow (see the orchestrator's
+   artifact model)." and stop.
+2. For each task, parse the front-matter. A file without parseable front-matter is
+   listed with status `⚠️ malformed` — never skipped silently.
+3. **Resolve the plan pairing.** A plan for task `NNN-<slug>.md` is
+   `.constellation/plans/NNN-<slug>.md` (then `plans/archive/`) — same number and slug.
+   When it exists, render its maturity inline (📝 draft / 👍 approved).
+4. If `.constellation/state/current-workflow.json` exists and its `task` field matches a
+   listed file, mark that task **▶ in flight** with the state's `currentStep`.
+5. Apply `--type <t>` / `--status <s>` filters from `$ARGUMENTS` when present (keep the
+   totals line unfiltered).
+6. Sort by status group — `inbox` first (the actionable queue), then `refined`,
+   `in-progress`, `parked`, `done`, `dropped`, malformed — and within each group by
+   task number ascending. Archived tasks, when included, render in a separate section.
+7. Render the table, a one-line summary of counts per status, and the actionable
    signals.
 
 ## Status vocabulary
@@ -50,43 +55,38 @@ The body is free-form — whatever context the filing agent had. The task ↔ pl
 | Status | Render |
 |---|---|
 | `inbox` | 📥 inbox |
-| `refined` | 🔗 refined → `<plan>` (`<plan status>`) |
-| `done` | ✅ done → `<plan>` |
+| `refined` | 📋 refined (+ ` · plan 📝/👍` when the paired plan exists) |
+| `in-progress` | 🔨 in-progress (+ `▶ <currentStep>` when in flight) |
+| `done` | ✅ done (+ short `commit` SHA) |
 | `dropped` | 🚫 dropped |
+| `parked` | 🅿️ parked — `<revisit trigger>` |
 | archived (in `archive/`) | 📦 archived |
 | unparseable front-matter | ⚠️ malformed |
-
-`<plan>` is the plan filename without `.md`; `<plan status>` reuses the
-/constellation:plans rendering (📝 draft / 👍 approved / 🔨 in-progress / ✅ completed /
-📦 archived).
 
 ## Output format
 
 ```
-Tasks — 4 active (2 inbox · 1 refined · 1 done) · 1 dropped
+Tasks — 5 active (2 inbox · 1 refined · 1 in-progress · 1 done) · 1 parked
 
-  Task                     Status                                      Source   Created      Last edit
-  fix-cursor-pagination    📥 inbox                                    codex    20-07-2026   20-07-2026
-  bulk-user-import         📥 inbox                                    pm       22-07-2026   22-07-2026
-  export-csv               🔗 refined → 003-export-csv (👍 approved)   user     18-07-2026   19-07-2026
-  add-audit-log            ✅ done → 001-add-audit-log                 codex    12-07-2026   16-07-2026
-  dark-mode-toggle         🚫 dropped                                  user     14-07-2026   15-07-2026
+  #    Task                   Status                            Type      Source      Created
+  014  fix-cursor-pagination  📥 inbox                          fix       codex       20-07-2026
+  016  dedupe-error-mappers   📥 inbox                          debt      dx-analyst  22-07-2026
+  013  export-csv             📋 refined · plan 👍              feature   user        18-07-2026
+  012  rate-limit-login       🔨 in-progress ▶ parallel-gate-1  feature   user        16-07-2026
+  011  add-audit-log          ✅ done (e57e8de)                 feature   user        12-07-2026
+  015  dark-mode-toggle       🅿️ parked — 100+ active users     feature   user        21-07-2026
 
-→ 2 inbox tasks awaiting refinement — pick one and ask for a plan (task → plan is the ideal flow)
+→ 2 inbox tasks awaiting pickup — 016 is debt-sized, say "tweak: dedupe-error-mappers"
 ```
 
-- Task name = filename without the `.md` suffix (and without a `NNN-` prefix when one
-  is present).
-- `Source` column from `source:`; blank when absent.
+- Task name = filename without the `NNN-` prefix and `.md` suffix; `#` = the number.
 - Omit the Archived section entirely when `--archived` was not passed; instead append
   `(N archived — rerun with --archived to include)` to the summary line when
   `archive/` is non-empty.
 - Actionable signals, listed under the table when present:
-  - `→ N inbox tasks awaiting refinement — pick one and ask for a plan (task → plan is the ideal flow)`
-  - `→ <task> links <plan> which is ✅ completed — flip the task to done`
-  - `→ <task> links <plan> which does not exist — fix its plan: field`
-- Cross-link: when `.constellation/improvements/` has files with `status: open` (or no
-  status), append one line after the signals:
-  `also: N open improvements — /constellation:improvements`.
+  - `→ N inbox tasks awaiting pickup` (name debt/fix ones that are tweak-sized)
+  - `→ <task> is parked and its revisit trigger may have fired — review it`
+  - `→ <task> links <feature> which does not exist — fix its feature: field`
+  - `→ N dx-analyst debt tasks in the same category — a recurring theme worth a combined tweak`
 
 This command reports; it never refines, drops, or archives anything.

@@ -25,8 +25,8 @@ Show the current workflow state without interrupting anything.
   🚢 Ship          ·
 ```
 
-   Per-step details come from existing state fields: `plan` (Plan), `planReviewResult` (Plan Review), `branch` (Branch), `gate1Results` + `reviewLoopCount` (Review Gate), `gate2Results` (QA/Tests), `prNumber` (PR), `hadBlockers` (Ship). `waitingOn: "user"` → append `⛔ awaiting your decision` to the banner and name the pending question.
-4. Below the table, report: track and original request, model profile, started / last updated timestamps. When `.constellation/improvements/` has files with `status: open` (or no status), append `also: N open improvements — /constellation:improvements`.
+   Per-step details come from existing state fields: `task` + `plan` (Plan), `planReviewResult` (Plan Review), `branch` (Branch), `gate1Results` + `reviewLoopCount` (Review Gate), `gate2Results` (QA/Tests), `prNumber` (PR), `hadBlockers` (Ship). `waitingOn: "user"` → append `⛔ awaiting your decision` to the banner and name the pending question.
+4. Below the table, report: the task (state's `task` field), track and original request, model profile, started / last updated timestamps. When `.constellation/tasks/` has `status: inbox` files, append `also: N inbox tasks — /constellation:tasks`.
 
 Follow the banner's rendering rules from the orchestrator skill (optional-step filtering, fix-loop anchoring, `post-pr` as an extra step, unknown ids as `⚙️ <raw-id>`).
 

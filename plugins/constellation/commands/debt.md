@@ -5,7 +5,7 @@ argument-hint: "[--new to show only non-baselined violations]"
 
 # /constellation:debt
 
-Read-only inventory of the project's code-metrics debt. Never modifies code, configs, improvements, state, or metrics.
+Read-only inventory of the project's code-metrics debt. Never modifies code, configs, tasks, state, or metrics.
 
 Adopted projects enforce the `code-metrics` budgets at the Lint Gate, but baselined pre-existing violations are suppressed inline and therefore invisible to a normal `npm run lint`. This command makes the whole debt visible again: it re-runs the linters in "ignore suppressions" mode, filters to the six budget rules, and tags each finding as 🧾 baselined (tracked debt) or 🆕 new (should not exist — the gate would catch it on the next change).
 
@@ -20,7 +20,7 @@ Adopted projects enforce the `code-metrics` budgets at the Lint Gate, but baseli
 2. **Filter to the six budget rules only.** `--no-inline-config` resurrects every suppressed rule in the project, including ones unrelated to code metrics — discard all findings whose `ruleId` is not one of the six. Never report non-metric rules here.
 3. **dependency-cruiser** (only if `.dependency-cruiser.cjs` exists): run `npx depcruise <src> --output-type json` WITHOUT `--ignore-known`, so known-violations baselines resurface. Collect rule name, from, to per violation.
 4. **Tag each finding.** A finding is 🧾 **baselined** when a suppression comment containing `baseline: pre-existing at code-metrics adoption` exists at/above the reported line (ESLint), or when the violation appears in `.dependency-cruiser-known-violations.json` (dependency-cruiser). Everything else is 🆕 **new**.
-5. **Cross-reference tracking**: if `.constellation/improvements/` contains a code-metrics baseline improvement, note its path and status; flag any 🧾 finding NOT listed in it as `⚠️ untracked baseline`.
+5. **Cross-reference tracking**: if `.constellation/tasks/` contains a code-metrics baseline task (`type: debt`, body referencing the baseline), note its path and status; flag any 🧾 finding NOT listed in it as `⚠️ untracked baseline`.
 6. With `--new`, drop the 🧾 rows from the table (keep them in the totals line).
 
 ## Output
@@ -36,12 +36,12 @@ Adopted projects enforce the `code-metrics` budgets at the Lint Gate, but baseli
 
 **Totals**: N violations — N baselined, N new. Per rule: max-params N, max-lines-per-function N, …
 **dependency-cruiser**: N violations (N known/baselined, N new) — or "clean".
-**Tracked in**: .constellation/improvements/NNN-….md (status) — or "⚠️ no baseline improvement on file".
+**Tracked in**: .constellation/tasks/NNN-….md (status) — or "⚠️ no baseline debt task on file".
 ```
 
 Close with at most three signals, only when true:
 - 🆕 violations exist → "New violations predate no one — they slipped past the gate or were written before adoption of rule X; fix or justify them now, they will fail the next Lint Gate that touches those files."
-- The baseline improvement is missing or out of sync with the 🧾 set → name the delta.
+- The baseline debt task is missing or out of sync with the 🧾 set → name the delta.
 - A single file or module concentrates ≥ 5 findings → name it as the highest-leverage refactor target.
 
 ## Hard rules

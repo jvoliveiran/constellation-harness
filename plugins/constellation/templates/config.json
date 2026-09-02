@@ -1,4 +1,5 @@
 {
+  "artifactModel": 1,
   "github": {
     "account": "<gh-username — detected from `gh api user --jq .login` during init>"
   },
@@ -10,7 +11,7 @@
   },
   "branching": {
     "mainBranch": "main",
-    "format": "<type>/<plan-number>-<description>"
+    "format": "<type>/<task-number>-<description>"
   },
   "schemaPath": null,
   "stack": [],

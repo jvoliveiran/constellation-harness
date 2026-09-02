@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-01
+
+### Changed
+- **Artifact model v1 — Epic / Feature / Task / Plan.** The five overlapping
+  v0 containers (plans, task specs, improvements, the parking lot, product
+  docs) collapse into one hierarchy plus one document type. The **task is
+  now the unit of work**: the orchestrator files one at intake for every
+  workflow (pure questions get none), one task ↔ one workflow, and the task
+  carries the work states (`inbox → refined → in-progress → done`, plus
+  `dropped`/`parked`). Plans become the implementation detail of a planned
+  task — same number and slug, `task:` link, document maturity only
+  (`draft → approved`). Epics and features group work above tasks
+  (`draft → active`, activation requires a linked child); PRDs, spike
+  findings, and discovery notes are `artifacts/` with a `kind:`. Links point
+  up only — parents never list children. Branches now carry the task number.
+  Spec: `docs/specs/artifact-model-v1.md`; full rules: the orchestrator
+  skill's `references/artifact-model.md` (replaces `task-lifecycle.md`).
+- **DX Analyst findings are `type: debt` tasks.** The
+  `.constellation/improvements/` backlog is gone; the orchestrator files
+  Gate 1 DX findings as tasks (`source: dx-analyst`) in the same inbox as
+  everything else. Still advisory, still never blocking.
+- **The product parking lot is `parked` tasks.** Each carries a mandatory
+  `revisit:` trigger; the PM scans them at every Discovery session. The
+  `parking-lot.md` and `roadmap.md` templates are retired — the roadmap is
+  the `order:` fields, rendered by `/constellation:backlog`.
+- **State and metrics re-anchor on the task.** `current-workflow.json` and
+  every metrics event carry `task`; `/constellation:metrics` reports token
+  cost per completed task (v0 events with only `plan` still parse).
+
+### Added
+- **`/constellation:backlog`** — tree view of epics → features → tasks with
+  status, type, plan presence, and roadmap order, derived from child links.
+- **`"artifactModel": 1` config marker + v0 migration.** The orchestrator
+  detects unmigrated projects and offers a one-shot, lossless migration
+  (plan → task backfill with the same numbers, improvements → debt tasks,
+  parking lot → parked tasks, product/spike docs → artifacts). Declining
+  stops the workflow — no dual-format runtime; hotfixes always run.
+  Archives and documentation directories are never touched.
+
+### Removed
+- **`/constellation:improvements`** — improvements are tasks now
+  (`/constellation:tasks --type debt`). No alias.
+
 ## [0.19.0] - 2026-08-28
 
 ### Added

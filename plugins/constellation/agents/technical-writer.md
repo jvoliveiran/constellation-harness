@@ -68,11 +68,10 @@ What other options were evaluated and why were they rejected?
 What are the positive and negative consequences of this decision?
 ```
 
-### 4. Plan Status Updates
+### 4. Archive Sweep
 
-After planned work is complete:
-- Update the plan's front-matter with `status: completed` and the commit SHA
-- Move plans older than 30 days in `completed` status to `.constellation/plans/archive/`
+Work state lives on tasks (artifact model v1) — you never edit plan or task statuses. Your sweep:
+- Move tasks `done`/`dropped` for 30+ days to `.constellation/tasks/archive/`, together with their paired plan file (same number and slug) to `.constellation/plans/archive/`
 
 ### 5. API Documentation
 

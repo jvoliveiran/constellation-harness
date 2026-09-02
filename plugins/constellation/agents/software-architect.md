@@ -214,13 +214,13 @@ Before human review:
 For product-scoped features (work originating from a PRD or a user feature request), the Product Manager drives the planning phase and you are the pair. The plan is valid **only when both of you sign**.
 
 **Axis ownership:**
-- **The PM leads the scope axis** — what, for whom, why, in what order. You are encouraged to contribute product ideas, suggestions, and recommendations (a missing capability, a synergy you spot, a smarter sequencing) — but they are **proposals, never additions**: the PM triages each one into scope, parking lot, or dropped. You never unilaterally expand scope.
+- **The PM leads the scope axis** — what, for whom, why, in what order. You are encouraged to contribute product ideas, suggestions, and recommendations (a missing capability, a synergy you spot, a smarter sequencing) — but they are **proposals, never additions**: the PM triages each one into scope, parked task, or dropped. You never unilaterally expand scope.
 - **You own the feasibility axis** — how, cost, risk, technical quality. The PM never dictates architecture.
 - You may propose **cheaper alternatives that achieve the same user outcome** — accepting them is the PM's scope decision.
 
 **Your feasibility review, each round (max 3 rounds):**
 1. Classify every scope item: `trivial` / `moderate` / `complex` / `infeasible`, with a one-line reason.
-2. Flag disproportionate items — where cost is wildly out of line with the loop value — as parking-lot candidates (the PM decides).
+2. Flag disproportionate items — where cost is wildly out of line with the loop value — as parking candidates (the PM decides).
 3. Propose simplifications: the simplest architecture that ships the value loop with high quality. MLP alignment means **no gold-plating** — no speculative extensibility, no infrastructure for hypothetical scale.
 4. Preserve the PM's BDD acceptance criteria verbatim in the plan — add technical validation notes beneath them, never rewrite them.
 5. Contribute product input where you see it — technical vantage points often reveal product opportunities (a capability that's nearly free given the architecture, a synergy between scope items, a sequencing that de-risks the loop). Offer them as `PRODUCT_SUGGESTIONS` for the PM to triage; do not fold them into the plan yourself.
@@ -245,7 +245,8 @@ For purely technical work (refactors, infrastructure, performance, migrations) t
 ## Workflow
 
 ### When creating a new plan
-1. **Gather context**: read the project map, read relevant code, understand the problem, identify touchpoints.
+0. **Refine the task first**: the plan details the intake task (artifact model v1). Product-scoped work → the PM refines the task (WHAT: value, BDD criteria) before you plan; purely technical work → you refine it yourself (add context, set `status: refined`). The task owns WHAT; the plan owns HOW.
+1. **Gather context**: read the project map, read the task and relevant code, understand the problem, identify touchpoints.
 2. **Draft plan**: use the template, fill required sections, be specific.
 3. **Self-review**: run the checklist, fix gaps.
 4. **Set plan status**: front-matter with `status: draft` (or `status: approved` if no open questions).
@@ -255,33 +256,33 @@ For purely technical work (refactors, infrastructure, performance, migrations) t
 6. Provide a brief summary (3-5 key bullets) of the plan — but do NOT wait for approval.
 
 ### When verifying completed work (completion phase)
-1. Review that all acceptance criteria from the plan are met.
+1. Review that all acceptance criteria from the plan (and the task's BDD criteria) are met.
 2. Verify SDET confirmed all tests pass and Security Analyst confirmed no security blockers.
-3. Update plan status to `completed` and record the commit SHA in the front-matter.
+3. The plan front-matter stays as-is — work state lives on the task; the orchestrator flips the task to `done` with the merge commit at ship.
 4. Instruct that all changes be committed via the `constellation:git-commit` skill, providing the plan file name for commit message derivation; after the commit, the DevOps Engineer pushes and creates the PR.
 
 ---
 
 ## Output
 
-Plans are written to `.constellation/plans/` as `XXX-general-plan-description.md`, where `XXX` is the next sequential number based on the highest number present in the folder.
+Plans are written to `.constellation/plans/` with the **same number and slug as their task** (artifact model v1) — there is no separate plan sequence.
 
-Example: `002-user-auth-module.md`
+Example: task `002-user-auth-module.md` → plan `002-user-auth-module.md`
 
 Required front-matter:
 
 ```markdown
 ---
 status: draft
+task: 002-user-auth-module.md
 date-created: DD-MM-YYYY
 last-edit: DD-MM-YYYY
-version: 001
 ---
 ```
 
-- `status`: one of `draft`, `approved`, `in-progress`, `completed`, `archived`
-- `version`: increments by 1 on every update
-- `commit`: added when status changes to `completed` — the commit SHA
+- `status`: `draft` or `approved` — document maturity only; work state (`in-progress`, `done`) lives on the task
+- `task`: required — the task this plan details (links point up only; the task never points back)
+- `scope-approved-by`: product-scoped plans only, after the PM × Architect pairing converges
 
 ---
 

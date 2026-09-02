@@ -22,6 +22,7 @@ All project-specific values come from `.constellation/config.json`:
 | `merge.policy` | `"auto-unless-blockers"` (default): clean-review PRs merge autonomously, blocker-history PRs ask the user. `"always-ask"`: every merge is confirmed. See [Ship](#ship--merge-policy). Absent → `"auto-unless-blockers"`. |
 | `ci.localFallback` | `true` (default): when CI is blocked by **infrastructure** (billing/spending limit, runners never started) rather than failing on the code, run the configured lint/build/test locally and let Ship proceed on green, recording `ciFallback: "local"`. `false` → always require real CI. Absent → `true`. |
 | `crossModelValidation` | Optional cross-model validation via local `opencode` — code review at Gate 1 and/or plan critique before branching, per its `steps` (see [Cross-Model Validation](#cross-model-validation)). Absent or `enabled:false` → skip entirely; behaves exactly as today. |
+| `artifactModel` | Artifact-model version marker. `1` → the epic/feature/task/plan model (this protocol). **Absent → unmigrated v0 project**: offer the migration in `references/artifact-model.md` before starting any workflow; if declined, stop (Hotfix track excepted — it proceeds without task filing). |
 
 Project layout reference: `.constellation/project-map.md`.
 
@@ -48,7 +49,8 @@ Users can issue these at any point during the workflow:
 | `/constellation:resume` | Resume from the saved state file. If it doesn't exist, report that there is nothing to resume. |
 | `/constellation:skip-gate` | Skip the current gate after explicit confirmation: "Are you sure you want to skip [gate]? This bypasses [reviewer/security/test] checks." Log the skip. |
 | `/constellation:status` | Show current state — track, step, gates passed, review loop count. Never interrupts the workflow. |
-| `/constellation:plans` | Portfolio overview of all plans in `.constellation/plans/` with lifecycle status, in plan-number order; flags the in-flight plan. Read-only, never interrupts. |
+| `/constellation:plans` | Portfolio overview of all plans in `.constellation/plans/` with maturity status and task pairing, in number order; flags the in-flight one. Read-only, never interrupts. |
+| `/constellation:backlog` | Tree view of the work hierarchy — epics → features → tasks, with status, type, and plan presence. Read-only, never interrupts. |
 
 ---
 
@@ -68,6 +70,29 @@ Determine the **workflow track** before picking the first agent — it defines t
 ```
 
 Explicit overrides: *"hotfix: …"* / *"discovery: …"* / *"spike: …"* / *"tweak: …"* / *"plan: …"*.
+
+### Intake — file the task
+
+The **task is the unit of work**: one task ↔ one workflow. Immediately after
+track determination, and before the first agent handoff:
+
+1. Check the `artifactModel` guard (config table above). Unmigrated → offer
+   migration first (Hotfix excepted).
+2. Write `.constellation/tasks/NNN-<slug>.md` — `status: inbox`, a `type`
+   (feature | fix | refactor | debt | spike | discovery), `source`, a title,
+   and the request as base description. Never summarize the request. Task
+   filing is clerical — never spawn a subagent for it.
+3. Pure questions and conversations get no task — the track classifier is
+   the gate.
+4. Set the task `in-progress` when the workflow starts real work (branch
+   creation, or workflow start for branchless tracks). Record the task file
+   in state (`task`).
+5. All workflow steps — lint loops, fix passes, post-PR rounds before ship —
+   are internal to that one task. Work arriving after ship is a **new** task
+   (optional `related:` link); never reopen a `done` task.
+
+Full rules — schemas, lifecycles, refinement, migration: read
+`references/artifact-model.md` (this skill's directory).
 
 ### Agent routing
 
@@ -146,24 +171,24 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
 ```
 
 1. Planning:
-   - **Product-scoped work** (a feature from a PRD or a user feature request): the **Product Manager drives, the Software Architect pairs**. Run the pairing loop (max 3 rounds): PM produces the scope draft (Product Scope contract) → Architect reviews feasibility and may contribute product suggestions (Feasibility contract) → PM responds (descope/accept/hold) and triages every suggestion (scope/park/drop — the PM leads scope) → repeat until both return `AGREED`. The Architect then writes the plan to `.constellation/plans/` with the PM's BDD criteria preserved and `scope-approved-by: product-manager, software-architect` in the front-matter. No convergence after 3 rounds → present both positions to the user as open questions.
-   - **Purely technical work** (refactors, infrastructure, performance, migrations): the Software Architect plans alone.
+   - **Product-scoped work** (a feature from a PRD or a user feature request): the **Product Manager drives, the Software Architect pairs**. The PM first refines the intake task — value, BDD acceptance criteria — **on the task file** (the task owns WHAT). Run the pairing loop (max 3 rounds): PM produces the scope draft (Product Scope contract) → Architect reviews feasibility and may contribute product suggestions (Feasibility contract) → PM responds (descope/accept/hold) and triages every suggestion (scope/park/drop — the PM leads scope; parked ideas become `parked` tasks with a `revisit:` trigger) → repeat until both return `AGREED`. Feasibility pushback edits the task; design decisions stay in the plan. The Architect then writes the plan to `.constellation/plans/` — same number and slug as the task, `task:` link, BDD criteria referenced from the task — with `scope-approved-by: product-manager, software-architect` in the front-matter (the plan owns HOW). No convergence after 3 rounds → present both positions to the user as open questions.
+   - **Purely technical work** (refactors, infrastructure, performance, migrations): the Software Architect refines the task and plans alone.
    **→ Save state**: `{ step: "architect", track: "planned" }`
 1b. **Cross-model plan review** (ONLY if `crossModelValidation.enabled` and its `steps` include `"plan-review"`): spawn `constellation:cross-model-reviewer` in `plan-review` mode over the drafted plan. Architect adjudicates each 🔴: accepted → revise the plan; disputed → becomes an open question for step 2. Single pass — do not re-critique the revised plan. `SKIPPED` → proceed. See [Cross-Model Validation → Plan review](#cross-model-validation).
    **→ Save state**: `{ step: "plan-review" }`
 2. Plan ready: no open questions → hand to DevOps Engineer **immediately** to create the branch. Open questions (the Architect's own, or disputed cross-model plan blockers) → present to the user; once resolved, hand over **immediately**.
    **→ Save state**: `{ step: "devops-branch" }`
-3. DevOps Engineer creates `feat/<plan-number>-<description>` and hands to Software Engineer **immediately**.
+3. DevOps Engineer creates `feat/<task-number>-<description>` and hands to Software Engineer **immediately**. Set the task `in-progress`.
    **→ Save state**: `{ step: "engineer" }`
 4. Software Engineer implements step by step, then triggers the **Lint Gate**.
    **→ Save state**: `{ step: "lint-gate" }`
 5. **Lint Gate** (see below). Loop with Engineer until it passes, then trigger Parallel Gate 1.
    **→ Save state**: `{ step: "parallel-gate-1" }`
-6. **Parallel Gate 1 — Review**: spawn Code Reviewer + Security Analyst + DX Analyst **in a single message**. Reviewer or Security has 🔴 blockers → merge all blockers into one list, hand to Engineer, re-run Lint Gate, re-trigger gate (loop until both pass). The DX Analyst is **advisory** — its improvements are persisted to `.constellation/improvements/` and never block, loop, or join the fix list (see [Merging results](#merging-results)). Neither blocking reviewer blocked → proceed.
+6. **Parallel Gate 1 — Review**: spawn Code Reviewer + Security Analyst + DX Analyst **in a single message**. Reviewer or Security has 🔴 blockers → merge all blockers into one list, hand to Engineer, re-run Lint Gate, re-trigger gate (loop until both pass). The DX Analyst is **advisory** — its findings are persisted as `type: debt` tasks and never block, loop, or join the fix list (see [Merging results](#merging-results)). Neither blocking reviewer blocked → proceed.
    **→ Save state**: `{ step: "parallel-gate-2" }` **→ Log**: `{ event: "gate1-pass", reviewLoops: N }`
 7. **Parallel Gate 2 — QA**: spawn SDET + Technical Writer **in a single message**. SDET failures → fix and re-run SDET only (Writer does not re-run). Both pass → proceed.
    **→ Save state**: `{ step: "architect-verify" }` **→ Log**: `{ event: "gate2-pass" }`
-8. Software Architect verifies the plan is fulfilled, sets plan status `completed`, hands to SDET to **commit** using the `constellation:git-commit` skill.
+8. Software Architect verifies the plan is fulfilled, hands to SDET to **commit** using the `constellation:git-commit` skill. (Work state lives on the task — it flips to `done` with the merge commit at ship, never on the plan.)
    **→ Save state**: `{ step: "devops-pr" }`
 9. DevOps Engineer pushes, creates the PR, and posts the **gate summary comment** (audit
    trail built from `gate1Results`/`gate2Results`/escalations in state). Reports the PR URL.
@@ -178,9 +203,9 @@ Architect → DevOps (branch) → Engineer → Lint Gate → [Reviewer + Securit
 DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security + DX] → SDET → Commit → DevOps (PR)
 ```
 
-1. No plan. DevOps creates `<type>/<description>`. **→ Save state**: `{ step: "devops-branch", track: "tweak" }` Hands to Engineer **immediately**. **→ Save state**: `{ step: "engineer" }`
+1. No plan — the intake task stays minimal (no refinement). DevOps creates `<type>/<task-number>-<description>`; set the task `in-progress`. **→ Save state**: `{ step: "devops-branch", track: "tweak" }` Hands to Engineer **immediately**. **→ Save state**: `{ step: "engineer" }`
 2. Engineer implements the original request, then Lint Gate (loop until pass). **→ Save state**: `{ step: "lint-gate" }`
-3. Parallel Gate 1 (Reviewer + Security + DX). Blockers loop back through Engineer + Lint Gate until clean; DX improvements are persisted, never block. **→ Save state**: `{ step: "parallel-gate-1" }`
+3. Parallel Gate 1 (Reviewer + Security + DX). Blockers loop back through Engineer + Lint Gate until clean; DX findings are persisted as tasks, never block. **→ Save state**: `{ step: "parallel-gate-1" }`
 4. SDET checks tests related **ONLY** to changed files; adds missing tests; runs them. **→ Save state**: `{ step: "sdet" }`
 5. SDET commits (message derived from the original request). DevOps pushes, creates the PR
    + gate summary comment **→ Save state**: `{ step: "devops-pr" }`, then the **Ship step** applies exactly as in Planned Work. **→ Save state**: `{ step: "ship", prNumber: N }`
@@ -192,7 +217,7 @@ DevOps (branch) → Engineer → Lint Gate → [Reviewer + Security + DX] → SD
 DevOps (branch) → Engineer → Lint Gate → Reviewer → SDET → Commit → DevOps (PR)
 ```
 
-- Branch `hotfix/<description>` from latest main. No plan. **No parallel gate — speed is the priority.** **→ Save state**: `{ step: "devops-branch", track: "hotfix" }` then, at Engineer handoff, `{ step: "engineer" }` and at the Lint Gate `{ step: "lint-gate" }`.
+- Branch `hotfix/<task-number>-<description>` from latest main (plain `hotfix/<description>` in an unmigrated v0 project — hotfixes never wait on migration or task filing). No plan. **No parallel gate — speed is the priority.** **→ Save state**: `{ step: "devops-branch", track: "hotfix" }` then, at Engineer handoff, `{ step: "engineer" }` and at the Lint Gate `{ step: "lint-gate" }`.
 - Code Reviewer only (🔴 blockers loop back). **Exception**: if the fix touches auth or security-sensitive code, also invoke Security Analyst. **→ Save state**: `{ step: "review-gate" }`
 - SDET runs **ONLY existing tests** related to the fix; new tests only if the bug was caused by a missing test. Commits with `fix:`. **→ Save state**: `{ step: "sdet" }`
 - DevOps pushes and creates the PR immediately (+ gate summary comment) **→ Save state**: `{ step: "devops-pr" }`, then the **Ship
@@ -206,7 +231,7 @@ Architect → Engineer → Document findings
 ```
 
 1. Architect defines the question and the timebox. **→ Save state**: `{ step: "architect", track: "spike" }`
-2. Engineer explores, prototypes, documents findings in `.constellation/spikes/` — **NOT** production code. **→ Save state**: `{ step: "engineer" }`
+2. Engineer explores, prototypes, documents findings in `.constellation/artifacts/spike-<slug>.md` (`kind: spike-findings`, `linked:` the spike task) — **NOT** production code. **→ Save state**: `{ step: "engineer" }`
 3. No review, testing, or branching — spike *code* is throwaway. The findings document is not: once written, run `.constellation/scripts/sync-artifacts.sh` to commit it (artifact-only, allowed on the main branch). Findings feed a future plan. **→ Save state**: `{ step: "findings" }` while the findings document is being written.
    **→ Delete state file.** **→ Log**: `{ event: "workflow-complete", track: "spike" }`
 
@@ -216,7 +241,7 @@ Architect → Engineer → Document findings
 PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts
 ```
 
-1. The Product Manager leads: reviews the parking lot for fired triggers, brainstorms/narrows with the user, and produces product artifacts in `.constellation/product/` (PRD, roadmap update, parking-lot entries).
+1. The Product Manager leads: scans `parked` tasks for fired `revisit:` triggers, brainstorms/narrows with the user, and produces the work hierarchy — epics (`epics/`, `status: draft`), features (`features/`), a PRD artifact (`artifacts/prd-<epic>.md`, `kind: prd`, linked to its epic), and `parked` tasks for deferred ideas. Epics and features go `active` only once at least one child links to them (see `references/artifact-model.md`).
    **→ Save state**: `{ step: "product-manager", track: "discovery" }`
 2. If a PRD or project definition was produced, the Software Architect runs a lightweight feasibility pass (Feasibility contract) — flagging infeasible or disproportionate scope before it hardens into a roadmap commitment. **→ Save state**: `{ step: "architect-feasibility" }`
 3. No branch, no code, no gates — outputs are markdown product artifacts only. Commit them before closing: run `.constellation/scripts/sync-artifacts.sh` (artifact-only, allowed on the main branch). Implementation later enters **Planned Work** referencing the PRD (where the full PM × Architect pairing happens).
@@ -276,7 +301,7 @@ Agent call 2: subagent_type: constellation:security-analyst, model: <heuristic>
     exit codes) and paste the output — the security-analyst has no shell.
 Agent call 3 (first gate pass ONLY — never on fix passes):
   subagent_type: constellation:dx-analyst, model: sonnet
-  prompt: <diff> + <plan reference> + <list of existing .constellation/improvements/ files with titles> +
+  prompt: <diff> + <plan reference> + <list of existing dx-analyst-sourced tasks in .constellation/tasks/ with titles> +
           "Subagent mode: DX-review the changes for complexity reduction, return the DX Review Result contract."
 Agent call 4 (ONLY if crossModelValidation.enabled and its steps include "code-review"):
   subagent_type: constellation:cross-model-reviewer, model: sonnet
@@ -346,41 +371,37 @@ A return missing a parsable `VERDICT` is re-requested once, then handled per §M
 8. After fixes: re-run the Lint Gate, then re-trigger **the entire gate** with the incremental diff.
 9. Re-reviews verify blockers were addressed; only unresolved or new **blockers** keep
    looping. All `PASS` → present remaining suggestions/nits as informational output and proceed.
-10. **DX Analyst results are advisory — persist, never gate.** Its improvements never
+10. **DX Analyst results are advisory — persist, never gate.** Its findings never
     join the fix list, never trigger a fix pass, never touch `hadBlockers` or
     `reviewLoopCount`, and the DX Analyst is **not re-spawned on fix passes** (app-level
     complexity findings don't change with a fix delta). For each `IMPROVEMENTS` entry not
-    already covered by an existing file, write
-    `.constellation/improvements/NNN-<slug>.md` (NNN = next number in the directory):
+    already covered by an existing task, the **orchestrator** writes a task —
+    `.constellation/tasks/NNN-<slug>.md`, next number in the sequence:
 
     ```markdown
     ---
-    status: open                      # open | promoted | done | dropped
-    category: duplication | dependencies | env-vars | local-setup | test-strategy
-    effort: S | M | L
-    source: <plan file or branch that surfaced it>
+    status: inbox
+    type: debt               # debt (complexity/debt) | refactor (restructure)
+    source: dx-analyst
     date-created: DD-MM-YYYY
-    promoted-to: <task/plan file or branch>   # required once promoted
+    last-edit: DD-MM-YYYY
     ---
     # <Title>
     **Evidence**: …
     **Simplification**: …
+    **Effort**: S | M | L — **Category**: duplication | dependencies | env-vars | local-setup | test-strategy
     ```
 
-    Mention the filed improvements in the gate summary (one line each). They are picked
-    up later as Tweaks (S/M) or Planned Work (L) when the user asks — improvements are
-    a backlog, not a queue the workflow drains automatically.
-    `/constellation:improvements` lists the portfolio.
+    Mention the filed tasks in the gate summary (one line each). They are a backlog,
+    not a queue the workflow drains automatically — picked up later as Tweaks (S/M) or
+    Planned Work (L) when the user asks. `/constellation:tasks` lists them
+    (`type: debt`, inbox queue).
 
-    **Promotion path** — when the user decides to act on an improvement, the domains
-    link instead of merging: S/M → picked up directly as a Tweak (record the branch in
-    `promoted-to:`); L → refined into a task spec or plan (record that file). Set
-    `status: promoted` at pick-up, `done` when the promoted work ships, `dropped` (with
-    a one-line reason in the body) when the user declines it. The improvement file is
-    the only side that links (`promoted-to:`) — tasks and plans never point back, same
-    as the task → plan convention.
+    These tasks follow the normal task lifecycle (`references/artifact-model.md`):
+    picked up → `in-progress`, shipped → `done` with the commit, declined →
+    `dropped` with a one-line reason.
 
-    Improvement files filed during a workflow ride the final workflow commit (the
+    Task files filed during a workflow ride the final workflow commit (the
     `git-commit` skill's `git add -A` sweeps them). Filed *outside* a workflow (an
     ad-hoc DX review), finish by running `.constellation/scripts/sync-artifacts.sh`
     so they never sit untracked.
@@ -395,7 +416,7 @@ A subagent return that does not match its output contract (no parsable `VERDICT`
 - Always re-run the **entire gate** after fixes — not just the agent that found blockers.
 - Use incremental diffs on fix passes; full diff only on the first pass.
 - Always include review memory in reviewer prompts.
-- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions). The code-reviewer, security-analyst, and dx-analyst have **no shell**; the diff (and dependency-audit output when relevant) is supplied in their prompts. The orchestrator — not the dx-analyst — writes the improvement files.
+- Gate 1 subagents are **read-only** — they report findings, never modify code (enforced by their tool restrictions). The code-reviewer, security-analyst, and dx-analyst have **no shell**; the diff (and dependency-audit output when relevant) is supplied in their prompts. The orchestrator — not the dx-analyst — writes the resulting task files.
 - SDET in Gate 2 CAN modify code (adding tests) — safe because Gate 1 already approved the implementation.
 
 ---
@@ -437,7 +458,9 @@ post-PR round — returns at least one 🔴 blocker. It never resets within a wo
 
 **After merge**: DevOps runs post-merge verify (checkout main + pull + configured
 `build` and `test`). Failure → alert the user with output and `git revert -m 1 <sha>`
-guidance; never auto-revert. Then delete the state file and log `workflow-shipped`.
+guidance; never auto-revert. Then set the task to `done` with the merge `commit:` and run
+`.constellation/scripts/sync-artifacts.sh` (artifact-only, allowed on main), delete
+the state file, and log `workflow-shipped`.
 
 `/constellation:ship` invokes this same step manually — e.g. after a human-gate pause in
 a previous session, or for a PR whose workflow state still exists.
@@ -462,6 +485,7 @@ Location: `.constellation/state/current-workflow.json`
 ```json
 {
   "track": "planned",
+  "task": "011-add-audit-log.md",
   "plan": "011-add-audit-log.md",
   "branch": "feat/011-add-audit-log",
   "originalRequest": "implement the audit log feature",
@@ -481,6 +505,8 @@ Location: `.constellation/state/current-workflow.json`
   "lastUpdatedAt": "<ISO timestamp>"
 }
 ```
+
+**`task`** is the primary work reference — every track has one (Hotfix in an unmigrated v0 project excepted). `plan` is set on planned tracks only and always matches the task's number and slug.
 
 **Save points**: after track determination, after each agent step, after each gate pass/fail, before and after each fix loop. Every save is immediately followed by the [Progress Banner](#progress-banner).
 
@@ -548,6 +574,7 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
   "timestamp": "<ISO timestamp>",
   "event": "workflow-complete",
   "track": "planned",
+  "task": "011-add-audit-log.md",
   "plan": "011-add-audit-log.md",
   "data": {
     "totalSteps": 9, "reviewLoops": 2, "gate1Blockers": 3, "gate2Blockers": 0,
@@ -584,32 +611,32 @@ Honesty rules: the delta covers everything the session consumed while the workfl
 
 ---
 
-## Plan Lifecycle
+## Artifact Model — Epic / Feature / Task / Plan
 
-Plans live in `.constellation/plans/` and move through: `draft → approved → in-progress → completed → archived`.
+The work hierarchy is **Epic → Feature → Task → Plan** plus free-form
+artifacts, with the **task as the unit of work** (see [Intake](#intake--file-the-task)).
 
-Front-matter:
+- **Task** (`tasks/NNN-<slug>.md`) — the work item. Carries the work states:
+  `inbox → refined → in-progress → done` (or `dropped` / `parked`). Owns
+  WHAT (BDD criteria after refinement) and, on `done`, the merge `commit:`.
+- **Plan** (`plans/NNN-<slug>.md`, same number and slug as its task,
+  `task:` link) — the implementation detail, written by the Architect as the
+  first work output of a planned task. Document maturity only:
+  `draft → approved` (product-scoped plans also need `scope-approved-by`).
+  Tweak/hotfix tasks never get a plan.
+- **Feature / Epic** (`features/F<NNN>-…`, `epics/E<NN>-…`) — grouping
+  levels: `draft → active → done | dropped`. Created during Discovery;
+  `active` requires at least one linked child.
+- **Artifacts** (`artifacts/<kind>-<slug>.md`) — PRDs (linked to an epic),
+  spike findings, discovery notes.
 
-```markdown
----
-status: completed
-commit: <sha>
-date-created: DD-MM-YYYY
-last-edit: DD-MM-YYYY
-version: 003
----
-```
-
-1. Architect sets `draft` on creation, `approved` when open questions are resolved. For product-scoped plans, `approved` additionally requires the PM × Architect pairing to have converged — recorded as `scope-approved-by: product-manager, software-architect` in the front-matter.
-2. Engineer sets `in-progress` when implementation begins.
-3. Architect sets `completed` and records the commit SHA after final verification.
-4. Plans `completed` for 30+ days move to `.constellation/plans/archive/` (Technical Writer).
-
----
-
-## Task Lifecycle
-
-Task specs — work items captured **before** they are plans, typically filed by other agents, tools, or humans — live in `.constellation/tasks/` and move through: `inbox → refined → done` (or `dropped`). When a workflow picks up, completes, or drops a task, **read `references/task-lifecycle.md` (this skill's directory)** for the front-matter and status-transition rules; `/constellation:tasks` lists the portfolio.
+Links point **up only** (plan → task → feature → epic); parents never list
+children. Tasks `done`/`dropped` for 30+ days move to `tasks/archive/` with
+their plan (Technical Writer). When a workflow creates, refines, or closes
+any of these, **read `references/artifact-model.md` (this skill's
+directory)** for the full schemas and transition rules.
+`/constellation:backlog` renders the tree; `/constellation:tasks` and
+`/constellation:plans` list the portfolios.
 
 ---
 
@@ -656,7 +683,7 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 1. All Engineer code changes pass the **Lint Gate** before review.
 2. All code changes get a Code Reviewer review.
 3. Security Analyst runs **ALWAYS** alongside Code Reviewer in Gate 1 (except Hotfixes).
-3b. DX Analyst runs alongside them on the **first** Gate 1 pass (except Hotfixes — speed first). It is advisory: improvements are filed to `.constellation/improvements/`, never blocked on, never re-run on fix passes.
+3b. DX Analyst runs alongside them on the **first** Gate 1 pass (except Hotfixes — speed first). It is advisory: findings are filed as `type: debt` tasks in `.constellation/tasks/`, never blocked on, never re-run on fix passes.
 4. SDET runs **ALWAYS** after reviews pass.
 5. 🔴 Blockers **ALWAYS** loop back: Engineer → Lint Gate → re-trigger the entire gate. **All fix loops are capped at 3** (lint gate retries, review-gate loops) — beyond that, escalate to the user; never loop indefinitely.
 6. Engineer only triggers the Lint Gate when no blocker fixes are pending.
@@ -676,7 +703,8 @@ Follow [Parallel Execution](#parallel-execution): capture context → select mod
 - Reinterpret or compress the user's request before passing it on
 - Default to Software Engineer when architectural ambiguity exists
 - Allow commits directly to the main branch (the artifact-only `sync-artifacts.sh` commit is the sole exception)
-- End a track with `.constellation` artifacts (plans, improvements, spikes, ADRs, product docs) left untracked or unstaged
+- End a track with `.constellation` artifacts (tasks, plans, epics, features, ADRs, artifacts) left untracked or unstaged
+- Start a non-hotfix workflow without its task on file, or file tasks for workflow-internal steps
 - Spawn parallel subagents in separate messages
 - Proceed past a parallel gate before **all** subagents have returned
 - Re-run only one subagent after blocker fixes — always the entire gate

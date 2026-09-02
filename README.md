@@ -121,9 +121,10 @@ Scans the project and generates:
 ├── project-map.md       generated codebase map (agents read this instead of exploring blind)
 ├── tracks.json          canonical SDLC step map per track (emojis, labels) — Progress HUD source of truth
 ├── memory/review-patterns.md   recurring review blockers (self-learning)
-├── plans/ (+archive/)   implementation plans
-├── tasks/ (+archive/)   task-spec inbox — other agents/tools file work here, refined into plans
-├── spikes/  adrs/       research docs and decision records
+├── tasks/ (+archive/)   the unit of work — one task per workflow, filed at intake (artifact model v1)
+├── plans/ (+archive/)   implementation detail of planned tasks (same number + slug)
+├── epics/  features/    work hierarchy above tasks (created during Discovery)
+├── artifacts/  adrs/    PRDs/spike findings/notes, and decision records
 ├── scripts/             opencode-review.sh (cross-model adapter), statusline.sh (Progress HUD)
 ├── state/  metrics/     workflow resume state + JSONL telemetry (gitignored)
 └── .gitignore
@@ -146,6 +147,8 @@ Custom marketplaces do **not** auto-update by default — updating is a two-step
 ```
 
 Then, **once per repo**, re-run `/constellation:init --refresh` so files that init copies into `.constellation/` (e.g. `scripts/opencode-review.sh`, the CI template) pick up the new version — the plugin update alone does not touch them.
+
+**Upgrading to 1.0 (artifact model v1)**: projects initialized before 1.0 run the v0 layout (`improvements/`, `product/`, plan-numbered work). The orchestrator detects the missing `"artifactModel": 1` marker in `config.json` and offers a one-shot, lossless migration before the next workflow (hotfixes run regardless). Archives and documentation directories (`adrs/`, `runbooks/`, `designs/`) are untouched. Full mapping: the orchestrator skill's `references/artifact-model.md` and [`docs/specs/artifact-model-v1.md`](docs/specs/artifact-model-v1.md).
 
 Optional:
 - **Auto-update**: `/plugin` → Marketplaces tab → constellation → enable auto-update (checks at session start).
@@ -185,11 +188,11 @@ Orchestrator (constellation:orchestrator skill)
 
 | Track | Pipeline | Trigger |
 |---|---|---|
-| **Discovery** | PM (brainstorm → narrow → PRD/roadmap) → Architect feasibility pass → product artifacts in `.constellation/product/` | product ideas, PRDs, roadmaps, prioritization, or `discovery: …` |
+| **Discovery** | PM (brainstorm → narrow → epics/features/PRD) → Architect feasibility pass → work hierarchy in `.constellation/` (epics, features, artifacts) | product ideas, PRDs, roadmaps, prioritization, or `discovery: …` |
 | **Planned Work** | [PM × Architect pairing]* → DevOps branch → Engineer → Lint Gate → [Reviewer + Security + DX] → [SDET + Writer] → Architect verify → Commit → PR + gate summary → Ship (merge + verify) | 3+ files / new module / architecture, or `plan: …` |
 | **Tweak** | DevOps branch → Engineer → Lint Gate → [Reviewer + Security + DX] → SDET → Commit → PR + gate summary → Ship | bounded 1-2 file change, or `tweak: …` |
 | **Hotfix** | DevOps branch → Engineer → Lint Gate → Reviewer → SDET → Commit → PR + gate summary → Ship | production broken, or `hotfix: …` |
-| **Spike** | Architect → Engineer → findings doc in `.constellation/spikes/` | research, or `spike: …` |
+| **Spike** | Architect → Engineer → findings doc in `.constellation/artifacts/` | research, or `spike: …` |
 
 \* Product-scoped work only: the Product Manager drives scope (MLP slice, BDD criteria, metrics) and the Architect pairs on feasibility — a bounded convergence loop (max 3 rounds); the plan is approved only when both sign. Purely technical work skips the pairing and the Architect plans alone.
 
@@ -199,7 +202,7 @@ Orchestrator (constellation:orchestrator skill)
 - **Lint Gate** — project lint + build (+ schema compatibility when `schemaPath` is configured) runs before any reviewer, so expensive Opus reviewers never see code that doesn't compile.
 - **Code-metrics budgets** — the `code-metrics` skill sets numeric quality budgets against god classes and sprawling functions (functions ≤ 50 lines / ≤ 3 params, files ≤ 300 lines, cyclomatic ≤ 10, cognitive ≤ 15, nesting ≤ 4), enforced as ESLint **errors** at the Lint Gate, plus dependency-cruiser boundary rules (no circulars, domain never imports infrastructure, no cross-module internals) for the structural half. Engineers design toward the budgets; a genuine exception is a narrow `eslint-disable-next-line` with a required justification, and the Code Reviewer blocks unjustified suppressions. Contracts are required at module boundaries only — single-implementation internals stay direct (the DX Analyst flags over-abstraction).
 - **Parallel gates** — reviewers are spawned concurrently in a single message; blockers from both are merged into one fix list.
-- **DX advisory pass** — the DX Analyst runs alongside Gate 1 (first pass only, skipped on hotfixes) hunting complexity: duplicated code, unnecessary dependencies, redundant env vars, local-setup friction, and over-mocked cross-app test setups. It never blocks — each finding is filed as a markdown improvement in `.constellation/improvements/` (with category, evidence, simplification, effort) to be picked up later as a tweak or plan.
+- **DX advisory pass** — the DX Analyst runs alongside Gate 1 (first pass only, skipped on hotfixes) hunting complexity: duplicated code, unnecessary dependencies, redundant env vars, local-setup friction, and over-mocked cross-app test setups. It never blocks — each finding is filed as a `type: debt` task in `.constellation/tasks/` (with category, evidence, simplification, effort) to be picked up later as a tweak or planned work.
 - **Incremental review** — fix passes send reviewers only the fix delta plus the original blocker list, not the whole diff again.
 - **Review memory** — recurring blocker patterns accumulate in `.constellation/memory/review-patterns.md`; the Engineer self-checks against them before each gate, reducing loops over time.
 - **Fix policy** — `review.fixPolicy` controls what the Engineer must fix after review: `"blockers"` (default) or `"blockers+suggestions"` (suggestions join the first fix pass only). Nits piggyback: mandatory when the first pass had any blocker/suggestion, otherwise at the Engineer's discretion — they never trigger or block a loop.
@@ -215,7 +218,7 @@ Orchestrator (constellation:orchestrator skill)
 
 | Agent | Model | Role | Gate-mode tools |
 |---|---|---|---|
-| `product-manager` | opus | MLP scope, value loop, PRDs, roadmaps, parking lot — drives the planning phase | full |
+| `product-manager` | opus | MLP scope, value loop, epics, PRDs, roadmaps, parked tasks — drives the planning phase | full |
 | `software-architect` | fable (opus fallback) | Plans with acceptance criteria, risks, validation — pairs with PM on feasibility | full |
 | `software-engineer` | sonnet | Implements backend/service plans and changes with verified tests | full |
 | `frontend-engineer` | sonnet | Implements UI work with verified tests — components, state, accessibility, design quality | full |
@@ -223,7 +226,7 @@ Orchestrator (constellation:orchestrator skill)
 | `code-reviewer` | fable (opus fallback) | Correctness/maintainability/performance review | **read-only, no shell** |
 | `cross-model-reviewer` | sonnet | Bridges Gate 1 to a second model family (e.g. Gemini or GPT via local opencode) — optional, off by default | Bash + Read (opencode only) |
 | `security-analyst` | opus | OWASP, auth/authz, data exposure, dependency audit | **read-only** |
-| `dx-analyst` | sonnet | Complexity reduction — duplication, dependencies, env vars, local setup, test-strategy simplicity; advisory, files improvements to `.constellation/improvements/` | **read-only, no shell** |
+| `dx-analyst` | sonnet | Complexity reduction — duplication, dependencies, env vars, local setup, test-strategy simplicity; advisory, findings become `type: debt` tasks | **read-only, no shell** |
 | `sdet` | sonnet | Test strategy, implementation, suite audits | full |
 | `devops-engineer` | sonnet | Branches, pushes, PRs, CHANGELOG | full |
 | `technical-writer` | sonnet | README, CHANGELOG, ADRs, API docs | full |
@@ -242,10 +245,10 @@ In SDLC order — project setup → previewing work → controlling a running wo
 | `/constellation:init` | Onboards the current repo: generates `.constellation/` (config, project map, review memory, scripts) and detects commands/stack/account. Run **once per repo** before anything else; re-run with `--refresh` after harness upgrades to update scaffolded files. | `/constellation:init` |
 | `/constellation:dry-run` | Traces the exact workflow a request would trigger — track, agents, models, skills, gates — **without executing or modifying anything**. Use before committing to a large piece of work, or to sanity-check how a request will be classified. | `/constellation:dry-run add rate limiting to the login endpoint` |
 | `/constellation:status` | Shows where the current workflow stands as the visual Progress HUD: banner + per-step table (track, step, gates passed, review loops). Use **mid-workflow** to orient yourself, or at session start to see what's in flight. | `/constellation:status` |
-| `/constellation:plans` | Portfolio overview of **all** plans with lifecycle status (📝 draft / 👍 approved / 🔨 in-progress / ✅ completed / 📦 archived), in plan-number order, flagging the in-flight one and drafts blocked on open questions. Use to orient across work items, pick what to run next, or spot stale drafts. | `/constellation:plans --archived` |
-| `/constellation:tasks` | Portfolio overview of **all** task specs in `.constellation/tasks/` — the inbox where other agents/tools file work before it becomes a plan (📥 inbox / 🔗 refined / ✅ done / 🚫 dropped). Refined tasks link the plan they became, with the plan's own status inline. Use to see what's waiting for refinement — the ideal flow is task → plan. | `/constellation:tasks --archived` |
-| `/constellation:improvements` | Portfolio overview of **all** DX improvements in `.constellation/improvements/` — the complexity-reduction backlog the DX Analyst files at Gate 1 (💡 open / 🔗 promoted / ✅ done / 🚫 dropped), grouped by category so recurring themes surface. Promoted improvements link the tweak/task/plan they became. Use to pick tweak-sized wins or spot clusters worth a combined effort. | `/constellation:improvements --flat` |
-| `/constellation:debt` | Inventory of **all** code-metrics budget violations in the project — including the ones hidden behind baseline suppressions (re-runs ESLint with `--no-inline-config` and dependency-cruiser without `--ignore-known`, filtered to the six budget rules), each tagged 🧾 baselined or 🆕 new, cross-checked against the baseline improvement. Use to size the debt or verify nothing slipped past the gate. Read-only. | `/constellation:debt --new` |
+| `/constellation:backlog` | Tree view of the whole work hierarchy — epics → features → tasks — with status, type, and plan presence, derived from child front-matter links. Use to see the roadmap, what can go active, and where work concentrates. | `/constellation:backlog --epic E01` |
+| `/constellation:tasks` | Portfolio overview of **all** tasks in `.constellation/tasks/` — the unit of work, one per workflow (📥 inbox / 📋 refined / 🔨 in-progress / ✅ done / 🚫 dropped / 🅿️ parked), with type, source, and plan pairing. DX Analyst findings land here as `type: debt`. Use to see the pipeline and pick what to run next. | `/constellation:tasks --type debt` |
+| `/constellation:plans` | Portfolio overview of **all** plans with document maturity (📝 draft / 👍 approved) and each plan's task state inline, in number order, flagging the in-flight one and drafts blocked on open questions. | `/constellation:plans --archived` |
+| `/constellation:debt` | Inventory of **all** code-metrics budget violations in the project — including the ones hidden behind baseline suppressions (re-runs ESLint with `--no-inline-config` and dependency-cruiser without `--ignore-known`, filtered to the six budget rules), each tagged 🧾 baselined or 🆕 new, cross-checked against the baseline debt task. Use to size the debt or verify nothing slipped past the gate. Read-only. | `/constellation:debt --new` |
 | `/constellation:skip-gate` | Skips the gate the workflow is currently blocked on (asks for confirmation, records the skip in metrics). Use **sparingly** — when a gate is stuck on something you've consciously decided to accept. | `/constellation:skip-gate` |
 | `/constellation:abort` | Stops the workflow **now**, saving state and keeping the branch + changes intact. Use when priorities shift mid-workflow — nothing is lost, resume later. | `/constellation:abort` |
 | `/constellation:resume` | Continues an interrupted workflow from saved state — after validating it (branch exists, plan present, PR still open); stale state is archived, never blindly trusted. Use at the start of a session when work was left unfinished. | `/constellation:resume` |

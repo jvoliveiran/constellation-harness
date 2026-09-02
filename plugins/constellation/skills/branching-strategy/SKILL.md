@@ -18,7 +18,7 @@ All work happens on feature branches. Never commit directly to main.
 ### Format
 
 ```
-<type>/<plan-number>-<short-description>
+<type>/<task-number>-<short-description>
 ```
 
 ### Type Mapping
@@ -125,7 +125,7 @@ Plan: `XXX-description.md` (if applicable)
 
 ### For Planned Work
 1. Software Architect creates the plan
-2. DevOps Engineer creates `feat/<plan-number>-<description>`
+2. DevOps Engineer creates `feat/<task-number>-<description>`
 3. Software Engineer implements on the feature branch
 4. All subsequent agents (Code Reviewer, Security Analyst, SDET) work on the same branch
 5. After the final commit, DevOps Engineer pushes and creates the PR
