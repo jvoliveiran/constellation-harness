@@ -1,7 +1,7 @@
 {
   "name": "constellation",
   "displayName": "Constellation Harness",
-  "version": "0.19.0",
+  "version": "1.0.0",
   "description": "Multi-agent software delivery harness: an orchestrator routes every request through specialist personas (product manager, architect, backend/frontend engineers, UI/UX designer, reviewers, SDET, devops, writer) with parallel quality gates, workflow state, and review memory.",
   "author": {
     "name": "João Oliveira",

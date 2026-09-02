@@ -28,7 +28,7 @@ You are the first and last agent in the planned work workflow — you set up the
 
 1. Ensure the local main branch is up to date: `git checkout <mainBranch> && git pull origin <mainBranch>`
 2. Create a feature branch following the branching-strategy skill conventions
-3. For planned work: `feat/<plan-number>-<description>` (e.g., `feat/010-create-role-mutation`)
+3. For planned work: `feat/<task-number>-<description>` (e.g., `feat/010-create-role-mutation`)
 4. For tweaks: `<type>/<description>` (e.g., `fix/login-validation`)
 5. Check out the new branch
 6. Confirm the branch is ready and report so the next agent can proceed

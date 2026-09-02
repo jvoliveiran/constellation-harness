@@ -34,7 +34,10 @@ When exploring this codebase to implement something:
 ## Useful Documents
 
 - `README.md` — global project overview
-- `.constellation/plans/` — implementation plans; file names indicate scope
+- `.constellation/tasks/` — the work pipeline (unit of work; one task per workflow)
+- `.constellation/plans/` — implementation plans, one per planned task (same number + slug)
+- `.constellation/epics/` + `.constellation/features/` — work hierarchy above tasks
+- `.constellation/artifacts/` — PRDs, spike findings, discovery notes
 - `.constellation/adrs/` — architecture decision records
 
 ## Code Review

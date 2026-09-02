@@ -33,16 +33,17 @@ jq -rs '{blockers: [.[] | .data.crossModelBlockers // 0] | add, escalated: [.[] 
 # Ship outcomes
 jq -rs '[.[] | select(.event=="workflow-shipped")] | {shipped: length, auto: [.[] | select(.data.merge=="auto")] | length, verifyFails: [.[] | select(.data.postMergeVerify=="fail")] | length}' "$LOG"
 
-# Token cost per completed task/plan: overall average + per-track (workflow-complete carries tokensSpent)
+# Token cost per completed task: overall average + per-track (workflow-complete carries tokensSpent)
 jq -rs '[.[] | select(.event=="workflow-complete" and .data.tokensSpent != null)]
   | if length == 0 then "no token data yet" else
       {avgTokensPerWorkflow: (map(.data.tokensSpent) | add / length | round), n: length,
        byTrack: (group_by(.track) | map({track: .[0].track, avg: (map(.data.tokensSpent) | add / length | round), n: length}))}
     end' "$LOG"
 
-# Full cost through ship (adds post-PR + ship spend), and the 3 most expensive plans
+# Full cost through ship (adds post-PR + ship spend), and the 3 most expensive tasks
+# (.task is the v1 field; .plan covers v0-era events)
 jq -rs '[.[] | select(.event=="workflow-shipped" and .data.tokensSpent != null) | .data.tokensSpent] | if length == 0 then "no data" else {avgThroughShip: (add / length | round), max: max} end' "$LOG"
-jq -rs '[.[] | select(.event=="workflow-complete" and .data.tokensSpent != null)] | sort_by(-.data.tokensSpent) | .[:3] | map({plan: (.plan // "—"), track, tokens: .data.tokensSpent})' "$LOG"
+jq -rs '[.[] | select(.event=="workflow-complete" and .data.tokensSpent != null)] | sort_by(-.data.tokensSpent) | .[:3] | map({task: (.task // .plan // "—"), track, tokens: .data.tokensSpent})' "$LOG"
 ```
 
 Also compute per-track averages where sample size allows (≥3 workflows).
@@ -50,8 +51,8 @@ Also compute per-track averages where sample size allows (≥3 workflows).
 ## 2. Report
 
 Present one compact table (metric, value, sample size) followed by a **Signals** section.
-Token metrics get their own rows: **avg tokens per completed task/plan** (overall and
-per-track where n ≥ 3), avg through ship, and the top-3 most expensive plans. Format
+Token metrics get their own rows: **avg tokens per completed task** (overall and
+per-track where n ≥ 3), avg through ship, and the top-3 most expensive tasks. Format
 token counts human-readable (`480k`, `1.2M`). Workflows logged before token accounting
 existed have no `tokensSpent` — report the token sample size (`n`) alongside, never
 treat missing values as zero.

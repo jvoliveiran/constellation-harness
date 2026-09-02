@@ -10,7 +10,7 @@ Initialize (or refresh) the Constellation Harness for the current project. Until
 
 ## Arguments
 
-`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json`, `scripts/statusline.sh`, and `scripts/sync-artifacts.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also backfill any scaffold directories from step 3 that are missing (e.g. `tasks/` in repos initialized before it existed) — directories only, never overwriting files. Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
+`$ARGUMENTS` — if it contains `--refresh`, only regenerate `.constellation/project-map.md` and re-copy the canonical plugin files — `tracks.json`, `scripts/statusline.sh`, and `scripts/sync-artifacts.sh` always (never user-edited, so plugin updates propagate), `scripts/opencode-review.sh` when missing (keep config and all other files untouched). Also backfill any scaffold directories from step 3 that are missing (e.g. `epics/` in repos initialized before it existed) — directories only, never overwriting files. If `config.json` lacks `"artifactModel": 1`, the project still runs artifact model v0 — offer the migration in the orchestrator's `references/artifact-model.md` (a refresh never migrates silently). Also re-run the **Remote transport** check from step 2 (SSH remotes predating the HTTPS policy get the conversion offer on refresh, not just on first init).
 
 ## Procedure
 
@@ -36,20 +36,17 @@ Create this structure in the project root (templates live in `${CLAUDE_PLUGIN_RO
 
 ```
 .constellation/
-├── config.json              ← from templates/config.json, filled with detected values
+├── config.json              ← from templates/config.json, filled with detected values (includes "artifactModel": 1)
 ├── project-map.md           ← from templates/project-map.md, sections generated (step 4)
 ├── tracks.json              ← from templates/tracks.json, verbatim; canonical step map for the Progress HUD
 ├── memory/review-patterns.md ← from templates/review-patterns.md, verbatim
-├── plans/archive/.gitkeep
-├── tasks/archive/.gitkeep      ← task-spec inbox (other agents/tools file work here; refined into plans)
-├── improvements/.gitkeep       ← DX Analyst findings (complexity-reduction backlog)
-├── spikes/.gitkeep
+├── epics/.gitkeep              ← work hierarchy (artifact model v1): epics → features → tasks → plans
+├── features/.gitkeep
+├── tasks/archive/.gitkeep      ← the unit of work — the orchestrator files one per workflow at intake
+├── plans/archive/.gitkeep      ← implementation detail of planned tasks (same number + slug)
+├── artifacts/.gitkeep          ← PRDs, spike findings, discovery notes (kind: front-matter)
 ├── adrs/.gitkeep
 ├── designs/.gitkeep            ← design rationale docs from ui-ux-designer (frontend projects)
-├── product/                    ← product-manager artifacts
-│   ├── prds/.gitkeep
-│   ├── roadmap.md              ← from templates/roadmap.md, verbatim
-│   └── parking-lot.md          ← from templates/parking-lot.md, verbatim
 ├── scripts/
 │   ├── opencode-review.sh    ← from templates/opencode-review.sh, verbatim (chmod +x); cross-model review adapter
 │   ├── statusline.sh         ← from templates/statusline.sh, verbatim (chmod +x); Progress HUD statusline renderer
