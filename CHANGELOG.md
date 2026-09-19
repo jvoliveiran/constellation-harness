@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-19
+
+### Added
+- **`/constellation:project` command.** Global project tree — epics →
+  features → tasks → plans as nodes — with a legend header and a one-line
+  description on every node, extracted from each artifact's first body line.
+  Derivation rules are reused from `/constellation:backlog` by reference.
+
+### Changed
+- **`/constellation:backlog` prints a legend header** above the totals line,
+  covering epic/feature status, task status, plan maturity, and markers.
+- **Default visibility in `backlog` and `project`.** Done tasks are hidden by
+  default — attached or standalone; `--all` shows them. The hidden count always
+  renders in the totals line; signals still use the full set.
+- **Derived completion in `backlog` and `project`.** An epic or feature renders
+  ✅ only when its own status is `done` and every child is done or dropped;
+  a `done` parent with open children renders `⚠️ done?` plus a mismatch signal.
+
 ## [1.0.0] - 2026-09-01
 
 ### Changed
