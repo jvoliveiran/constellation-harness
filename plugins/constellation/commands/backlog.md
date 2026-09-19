@@ -34,7 +34,15 @@ Links point up only (task → feature → epic), so this command **derives** the
 Reuse the status vocabularies of /constellation:tasks (tasks) and these for grouping
 levels: 🌱 draft / 🚀 active / ✅ done / 🚫 dropped.
 
+Always print the legend block first, then the totals line, then the tree.
+
 ```
+Legend
+  epic/feature  🌱 draft · 🚀 active · ✅ done · 🚫 dropped
+  task          📥 inbox · 📋 refined · 🔨 in-progress · ✅ done · 🚫 dropped · 🅿️ parked
+  plan          📝 draft · 👍 approved
+  markers       ▶ in flight · ⚠️ malformed or missing link
+
 Backlog — 1 epic · 2 features · 6 tasks (2 inbox · 1 in-progress · 2 done · 1 parked)
 
 🚀 E01 mvp-launch

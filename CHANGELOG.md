@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`/constellation:project` command.** Global project tree — epics →
+  features → tasks → plans as nodes — with a legend header and a one-line
+  description on every node, extracted from each artifact's first body line.
+  Derivation rules are reused from `/constellation:backlog` by reference.
+
+### Changed
+- **`/constellation:backlog` prints a legend header** above the totals line,
+  covering epic/feature status, task status, plan maturity, and markers.
+
 ## [1.0.0] - 2026-09-01
 
 ### Changed
