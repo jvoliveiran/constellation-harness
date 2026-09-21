@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "//": "Constellation Harness — OpenCode port, sample project config.",
+
+  "//instructions": "AGENTS.md carries the orchestrator policy (the static half of Claude Code's SessionStart hook). Listed explicitly for clarity; OpenCode loads AGENTS.md by default.",
+  "instructions": ["AGENTS.md"],
+
+  "//plugin": "The two hook plugins in .opencode/plugins/ are auto-loaded from that directory, so they do NOT need to be listed here. This array is only for npm-published plugins. Kept empty to show nothing extra is required.",
+  "plugin": [],
+
+  "//skills": "Not configured here. OpenCode discovers skills from .opencode/skills/ AND directly from .claude/skills/ — so the harness's existing 25 SKILL.md files work UNCHANGED if the .claude/ tree is present, or copy them into .opencode/skills/.",
+
+  "//model": "OpenCode is multi-provider; the harness's model tiers map to namespaced ids.",
+  "model": "anthropic/claude-sonnet-4-5"
+}

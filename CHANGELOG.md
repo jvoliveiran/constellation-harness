@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-21
+
+### Added
+- **Worktree-per-workflow spike** (`docs/spikes/worktree-per-workflow/`):
+  investigation into running parallel Constellation workflows in one clone
+  via one git worktree per workflow — problem, design, wrinkles, affected
+  surface, and sketched acceptance criteria. Origin task:
+  `.constellation/tasks/worktree-per-workflow.md` (committed alongside).
+- **OpenCode port spike** (`docs/spikes/opencode-port/`): working prototype
+  of the `.opencode/` layout that runs the harness inside OpenCode, with the
+  component mapping and the hook-rewrite analysis.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added
