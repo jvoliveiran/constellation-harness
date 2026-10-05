@@ -2,7 +2,7 @@
 status: draft
 task: 002-board-backlog-tree-and-packaging.md
 date-created: 03-10-2026
-last-edit: 03-10-2026
+last-edit: 05-10-2026
 ---
 # Board phase 2 — backlog tree, transition witness, and packaging
 
@@ -44,9 +44,13 @@ The six criteria on the task file apply verbatim. Technical notes:
    unknown fields, accept `tasks/archive/` and `plans/archive/`. Malformed
    means: no front-matter block found, or `status` missing. Both carry a
    one-line reason.
-3. A transition is detected by comparing the parsed `status` of a task
-   before and after a `PostToolUse` event on its path. The event's `ts`
-   is the transition time.
+3. A transition is detected by the board's own watcher: when a task file
+   changes on disk, compare its parsed `status` before and after, and use
+   the file's mtime as the transition time. Do not rely on `PostToolUse`
+   for this. Observed live on 05-10-2026 in guardei-ui: the orchestrator
+   writes the state file through a Bash heredoc, so the `Write|Edit` hook
+   never sees `.constellation/` saves. The hook log remains the source for
+   agent lifecycle only.
 4. The monitor command exits 0 within 100 ms when `config.json` is absent.
 5. `/constellation:board` prints the URL and whether the server answers,
    and never starts a second server for the same project.
@@ -107,14 +111,20 @@ The six criteria on the task file apply verbatim. Technical notes:
   Toggle for archived tasks. Group order matches `/constellation:tasks`:
   inbox, refined, in-progress, parked, done, dropped, malformed.
 
-### Part C — transition witness (hook change)
+### Part C — transition witness (board change, hook widening)
 
 **Files**:
 
+- `plugins/constellation/scripts/board.mjs` - Modify - The watcher already
+  fires on task file changes; keep the previous parsed `status` per task
+  in memory and emit a transition with the file mtime when it differs.
+  Also record state-file saves as activity from the watcher, since the
+  orchestrator saves through Bash and no hook witnesses them.
 - `plugins/constellation/scripts/log-event.sh` - Modify - Widen the
   `PostToolUse` filter from `.constellation/` only to every Write and Edit
   path, relative to the project. The page shows source edits as a quiet
-  activity line under the running agent.
+  activity line under the running agent. Source edits do go through the
+  Write and Edit tools, so this part of the hook path is sound.
 
 ### Part D — packaging
 

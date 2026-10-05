@@ -172,3 +172,27 @@ test('loadSnapshot: tails events.jsonl and skips partial lines', () => {
   assert.equal(snap.agents.length, 1);
   assert.equal(snap.agents[0].running, true);
 });
+
+// Observed live in guardei-ui on 05-10-2026: a SubagentStop with an id that matches no
+// start and an empty agent_type, while the real specialist kept running.
+test('pairEvents: unmatched SubagentStop without agent_type is a counted helper, not an agent', () => {
+  const { agents, activity, helperStops } = pairEvents(parseEventLines([
+    '{"ts":"2026-10-05T14:03:43Z","event":"SubagentStart","agent_id":"a936","agent_type":"constellation:software-architect"}',
+    '{"ts":"2026-10-05T14:04:14Z","event":"SubagentStop","agent_id":"a3df","agent_type":""}',
+    '{"ts":"2026-10-05T14:05:45Z","event":"SubagentStop","agent_id":"adf4","agent_type":""}',
+  ].join('\n')));
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].agent_id, 'a936');
+  assert.equal(agents[0].running, true);
+  assert.equal(activity.length, 0);
+  assert.equal(helperStops, 2);
+});
+
+test('pairEvents: unmatched SubagentStop WITH an agent_type still becomes an agent row', () => {
+  const { agents } = pairEvents(parseEventLines(
+    '{"ts":"2026-10-05T14:04:14Z","event":"SubagentStop","agent_id":"zz","agent_type":"constellation:sdet"}',
+  ));
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].running, false);
+  assert.equal(agents[0].start, null);
+});

@@ -108,10 +108,18 @@ export function parseEventLines(text) {
 export function pairEvents(events) {
   const agents = new Map();
   const activity = [];
+  let helperStops = 0;
   for (const e of events) {
     if (!e || typeof e !== 'object') continue;
     if (e.event === 'SubagentStart' || e.event === 'SubagentStop') {
       const key = e.agent_id ?? `${e.agent_type ?? 'agent'}@${e.ts}`;
+      if (e.event === 'SubagentStop' && !agents.has(key) && !e.agent_type) {
+        // Observed live: Claude Code emits a SubagentStop every ~30-60 s for internal
+        // helper agents that never produced a SubagentStart and carry no agent_type.
+        // Not specialists — count them and keep them off the page.
+        helperStops += 1;
+        continue;
+      }
       const a = agents.get(key) ?? { agent_id: e.agent_id ?? null, agent_type: e.agent_type ?? null, start: null, end: null, running: false };
       if (e.event === 'SubagentStart') {
         if (a.start == null) a.start = e.ts ?? null;
@@ -129,7 +137,7 @@ export function pairEvents(events) {
   const list = [...agents.values()].map((a) => ({ ...a, durationSec: durationSeconds(a.start, a.end) }));
   list.sort((x, y) => (y.start ?? '').localeCompare(x.start ?? ''));
   activity.sort((x, y) => (y.ts ?? '').localeCompare(x.ts ?? ''));
-  return { agents: list, activity };
+  return { agents: list, activity, helperStops };
 }
 
 function durationSeconds(start, end) {
@@ -215,7 +223,7 @@ export function loadSnapshot(projectDir, prev = null) {
 
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
-  const { agents, activity } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
+  const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
 
   return {
     projectDir,
@@ -227,6 +235,7 @@ export function loadSnapshot(projectDir, prev = null) {
     tokenDelta: state ? tokenDelta(state.tokens) : null,
     agents,
     activity,
+    helperStops,
     stale,
     errors,
   };
