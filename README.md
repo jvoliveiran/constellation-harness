@@ -17,7 +17,7 @@ constellation-harness/                 (plugin marketplace)
     │   ├── commands/                  /constellation:* workflow commands
     │   ├── skills/                    orchestrator + generic delivery skills
     │   ├── templates/                 files scaffolded by /constellation:init
-    │   ├── hooks/ + scripts/          SessionStart activation (gated per project)
+    │   ├── hooks/ + scripts/          SessionStart activation, git guard, event log, board (gated per project)
     │   └── .claude-plugin/plugin.json
     ├── constellation-stack-node/      OPT-IN — Node/NestJS/GraphQL/Prisma skills
     │   ├── skills/
@@ -211,6 +211,8 @@ Orchestrator (constellation:orchestrator skill)
 - **State & resume** — every milestone is saved to `.constellation/state/current-workflow.json`; interrupted workflows resume with `/constellation:resume`.
 - **Workflow Progress HUD** — always know which SDLC step is running and how far along the pipeline is. One canonical step map (`.constellation/tracks.json`) renders three ways: a one-line **Progress Banner** printed after every state save (`` 🌌 planned 6/10 │ 📐✓ 🔭✓ 🌿✓ 🔨✓ 🧹✓ ▶🔍 Review Gate · · · · │ feat/011-audit-log ``), an optional **statusline** renderer (`.constellation/scripts/statusline.sh`, mechanical — reads state directly, wired by init on request), and `/constellation:status` as the zoom-in view. Fix loops show `🔁 loop N/3` anchored on the gate (progress never moves backward); a workflow stopped on a user decision shows `⛔ awaiting your decision` (`waitingOn` state field).
 - **Metrics** — every event appends to `.constellation/metrics/workflow-log.jsonl` for pattern analysis.
+- **Board (localhost, read-only)** — a live panel of the in-flight workflow in the browser: the track steps with the current pointer, loop and waiting-on-user modifiers, elapsed time, token delta, and a feed of which specialist runs right now. Run `node <plugin-root>/plugins/constellation/scripts/board.mjs /path/to/project` (Node 20+, no dependencies) and open `http://127.0.0.1:4411`. It renders the same two files as the banner and the statusline, so the views never disagree, and it never writes to `.constellation/`.
+- **Hook event log** — the plugin's hooks append one JSON line per `SubagentStart`, `SubagentStop`, `Stop`, and every Write/Edit under `.constellation/` to `.constellation/metrics/events.jsonl`, stamped with the system clock (`scripts/log-event.sh`, silent outside initialized projects). This is the board's live feed and the only timestamp source not written by the model. `metrics/` is gitignored by the init template; projects that copied an older template without that line should add it.
 
 ---
 

@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-05
+
+### Added
+- **Board phase 1 — live workflow panel** (`plugins/constellation/scripts/board.mjs`):
+  a read-only localhost page that watches `.constellation/state/` and
+  `.constellation/metrics/` and renders the in-flight workflow — track steps
+  with the current pointer (same resolution rules as the statusline), fix-loop
+  and waiting-on-user modifiers, elapsed time, token delta — plus a live feed
+  of subagent starts and stops over Server-Sent Events. Node 20+, zero
+  dependencies, binds to 127.0.0.1. Tests in `board.test.mjs` use the banner
+  examples from the orchestrator skill as fixtures. Plan:
+  `.constellation/plans/001-board-live-workflow-panel.md`.
+- **Hook event log** (`plugins/constellation/scripts/log-event.sh`): registered
+  on `SubagentStart`, `SubagentStop`, `Stop`, and `PostToolUse` (Write|Edit);
+  appends one JSON line per event to `.constellation/metrics/events.jsonl`
+  with a system-clock timestamp. PostToolUse lines are kept only for paths
+  under `.constellation/`. Silent no-op outside initialized projects or
+  without `jq`; never blocks.
+
+### Changed
+- **Orchestrator clock rule**: timestamps in the state file (`startedAt`,
+  `lastUpdatedAt`) and in `workflow-log.jsonl` must come from
+  `date -u +%Y-%m-%dT%H:%M:%SZ` run with the Bash tool at save time — never a
+  value written from memory. Observed motivation: every timestamp in a real
+  project's metrics log sat on a five-minute boundary.
+
 ## [1.1.1] - 2026-09-21
 
 ### Added

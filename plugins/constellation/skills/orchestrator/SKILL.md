@@ -35,6 +35,7 @@ Project layout reference: `.constellation/project-map.md`.
 - **ALWAYS** check for a saved workflow state file (`.constellation/state/current-workflow.json`) on conversation start — if it exists, offer to resume from the saved step.
 - **ALWAYS** log workflow milestones to `.constellation/metrics/workflow-log.jsonl`.
 - **ALWAYS** print the [Progress Banner](#progress-banner) immediately after every state save — rendered from the state just written.
+- **ALWAYS** take timestamps from the shell — run `date -u +%Y-%m-%dT%H:%M:%SZ` with the Bash tool before every state save and every metrics append. Never write a timestamp from memory.
 
 ---
 
@@ -510,6 +511,8 @@ Location: `.constellation/state/current-workflow.json`
 
 **Save points**: after track determination, after each agent step, after each gate pass/fail, before and after each fix loop. Every save is immediately followed by the [Progress Banner](#progress-banner).
 
+**Timestamps** (`startedAt`, `lastUpdatedAt`): the value is the output of `date -u +%Y-%m-%dT%H:%M:%SZ`, run with the Bash tool at save time. A remembered or estimated time is wrong by construction — the statusline computes staleness from `lastUpdatedAt` and the board (`scripts/board.mjs`) computes elapsed time from `startedAt`.
+
 **`tokens`**: the per-workflow token counter — see [Token accounting](#token-accounting) for how it is seeded, refreshed at every save, carried across sessions on resume, and turned into `tokensSpent` on the completion events.
 
 **Fix loops keep `currentStep` on the gate**: while blockers loop back through Engineer + Lint Gate, `currentStep` stays `parallel-gate-1` (or `review-gate` / `lint-gate` for its own retries) — the loop is visible via `reviewLoopCount` and `preFixSha`, and progress never moves backward.
@@ -567,7 +570,7 @@ The banner never replaces the mandatory handoff sentence (agent + model) — it 
 
 ## Workflow Metrics
 
-Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object per line:
+Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object per line. The `timestamp` is the output of `date -u +%Y-%m-%dT%H:%M:%SZ`, run with the Bash tool right before the append — never a value written from memory:
 
 ```json
 {
@@ -597,6 +600,8 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
 | `gate-skipped` | User skips a gate |
 
 These reveal recurring blocker patterns, lint-gate savings, average review loops, track usage, and token cost per completed task/plan.
+
+A second file, `.constellation/metrics/events.jsonl`, is written **mechanically by the plugin's hooks** (`scripts/log-event.sh`): one line per `SubagentStart`, `SubagentStop`, `Stop`, and every Write/Edit under `.constellation/`, each stamped with the system clock. The orchestrator never writes to it. The board (`scripts/board.mjs`) tails it to show which specialist runs right now.
 
 ### Token accounting
 
