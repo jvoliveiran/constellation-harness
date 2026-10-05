@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-05
+
+### Fixed
+- **Board: typeless helper stops no longer render as agents.** Observed live
+  in guardei-ui: Claude Code emits a `SubagentStop` every 30-60 s with a fresh
+  `agent_id` and an empty `agent_type` for internal helper agents that never
+  produced a `SubagentStart`. The first one rendered as a blank agent row.
+  `pairEvents` now counts them (`helperStops` in the snapshot) and keeps them
+  off the page. Two tests added.
+
+### Changed
+- **Phase 2 plan** (`.constellation/plans/002-…`): the transition witness
+  moves from the `PostToolUse` hook to the board's own watcher with file
+  mtimes. Observed live: the orchestrator saves the state file through a
+  Bash heredoc, so the `Write|Edit` hook never sees `.constellation/` saves.
+
 ## [1.2.0] - 2026-10-05
 
 ### Added
