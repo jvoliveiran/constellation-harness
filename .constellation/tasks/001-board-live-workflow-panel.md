@@ -1,9 +1,10 @@
 ---
-status: in-progress
+status: done
+commit: 7adbce5f534fca1d5e19e29038a054316324ce13
 type: feature
 source: user
 date-created: 03-10-2026
-last-edit: 03-10-2026
+last-edit: 05-10-2026
 ---
 # Board phase 1 — live workflow panel on localhost
 
