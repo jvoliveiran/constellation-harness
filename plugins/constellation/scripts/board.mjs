@@ -711,6 +711,12 @@ const PAGE = `<!doctype html>
   .dur { color:var(--dim); margin-left:auto; font-variant-numeric: tabular-nums; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:var(--dim); }
   .errs { color:var(--warn); font-size:12px; margin-top:10px; }
+  .warn-line { font-size:11px; color:var(--dim); margin:0 0 4px 24px; }
+  details summary { cursor:pointer; color:var(--dim); }
+  .task { padding:3px 0; font-size:13px; }
+  .grp, .epic { margin:8px 0 8px 12px; }
+  .gh { font-weight:600; margin:6px 0 2px; }
+  .attn { border:1px solid var(--warn); border-radius:8px; padding:8px 12px; margin-bottom:12px; }
 </style>
 </head>
 <body>
@@ -722,13 +728,17 @@ const PAGE = `<!doctype html>
   <section><h2>Now</h2><div id="now"></div></section>
   <section><h2>Agents</h2><div id="feed"></div></section>
 </main>
+<section style="margin-top:16px"><h2>Backlog</h2><div id="backlog"></div></section>
 <script>
 (function () {
   var snap = null;
+  var connected = false, lostAt = null;
+  var renderBacklog = ${renderBacklog.toString()};
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
-  var since = function (iso) { if (!iso) return null; var ms = Date.now() - Date.parse(iso); return isNaN(ms) ? null : Math.max(0, Math.round(ms/1000)); };
+  var nowMs = function () { return connected ? Date.now() : (lostAt || Date.now()); };
+  var since = function (iso) { if (!iso) return null; var ms = nowMs() - Date.parse(iso); return isNaN(ms) ? null : Math.max(0, Math.round(ms/1000)); };
   var fmtTok = function (n) { if (n == null) return '—'; return n >= 1e6 ? (n/1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); };
 
   function render() {
@@ -737,6 +747,7 @@ const PAGE = `<!doctype html>
     if (!snap.initialized) meta += '<span class="badge warn">not initialized — no .constellation/config.json</span>';
     if (!snap.hasTracks) meta += '<span class="badge warn">tracks.json missing</span>';
     if (snap.stale) meta += '<span class="badge warn">stale — state file unreadable, showing last good</span>';
+    if (!connected && lostAt) meta += '<span class="badge warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
     meta += '<span>updated ' + hhmm(snap.at) + '</span>';
     document.getElementById('meta').innerHTML = meta;
 
@@ -759,7 +770,7 @@ const PAGE = `<!doctype html>
       strip += '</div>';
       var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="badge">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
       var facts = '<div class="facts">'
-        + fact('elapsed', fmtDur(since(s.startedAt)) || '—')
+        + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, '', fmtDur(since(s.startedAt)) || '—') + '</div></div>'
         + fact('last save', hhmm(s.lastUpdatedAt))
         + fact('tokens spent', fmtTok(snap.tokenDelta))
         + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
@@ -771,33 +782,52 @@ const PAGE = `<!doctype html>
     if (snap.errors && snap.errors.length) now += '<div class="errs">' + snap.errors.map(esc).join('<br>') + '</div>';
     document.getElementById('now').innerHTML = now;
 
+    var open = [];
+    document.querySelectorAll('#backlog details[open]').forEach(function (d) { open.push(d.getAttribute('data-group')); });
+    var backlog = document.getElementById('backlog');
+    backlog.innerHTML = renderBacklog(snap.tree, esc);
+    backlog.querySelectorAll('details').forEach(function (d) { if (open.indexOf(d.getAttribute('data-group')) >= 0) d.setAttribute('open', ''); });
+
+    var activity = snap.feed || [];
     var feed = '';
-    if (!snap.agents.length && !snap.activity.length) {
+    if (!snap.agents.length && !activity.length) {
       feed = '<div class="empty">No events yet<br><code>.constellation/metrics/events.jsonl</code></div>';
     } else {
       feed += '<ul>';
       snap.agents.forEach(function (a) {
-        var dur = a.running ? '<span class="dur run">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
+        var dur = a.running ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
         feed += '<li><span class="t">' + hhmm(a.start) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + esc((a.agent_type || 'agent').replace(/^constellation:/, '')) + '</span>' + dur + '</li>';
       });
       feed += '</ul>';
-      if (snap.activity.length) {
+      if (activity.length) {
         feed += '<h2 style="margin-top:16px">Activity</h2><ul>';
-        snap.activity.slice(0, 30).forEach(function (e) {
-          var what = e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + what + '</span></li>';
+        activity.forEach(function (e) {
+          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e) + '</span></li>';
         });
         feed += '</ul>';
       }
     }
     document.getElementById('feed').innerHTML = feed;
   }
+  function feedText(e) {
+    if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
+    if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
+    return e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
+  }
+  function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
+  function tick() {
+    document.querySelectorAll('[data-since]').forEach(function (el) {
+      var secs = since(el.getAttribute('data-since'));
+      if (secs != null) el.textContent = el.getAttribute('data-prefix') + fmtDur(secs);
+    });
+  }
   function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
 
   var es = new EventSource('/events');
-  es.onmessage = function (ev) { try { snap = JSON.parse(ev.data); render(); } catch (e) { /* ignore */ } };
-  es.onerror = function () { var m = document.getElementById('meta'); if (m && snap) m.innerHTML += '<span class="badge warn">disconnected — retrying</span>'; };
-  setInterval(render, 1000);
+  es.onopen = function () { connected = true; lostAt = null; render(); };
+  es.onmessage = function (ev) { connected = true; lostAt = null; try { snap = JSON.parse(ev.data); render(); } catch (e) { /* ignore */ } };
+  es.onerror = function () { connected = false; if (lostAt == null) lostAt = Date.now(); render(); };
+  setInterval(tick, 1000);
 })();
 </script>
 </body>
