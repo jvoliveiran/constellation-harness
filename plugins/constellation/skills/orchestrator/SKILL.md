@@ -52,6 +52,7 @@ Users can issue these at any point during the workflow:
 | `/constellation:status` | Show current state — track, step, gates passed, review loop count. Never interrupts the workflow. |
 | `/constellation:plans` | Portfolio overview of all plans in `.constellation/plans/` with maturity status and task pairing, in number order; flags the in-flight one. Read-only, never interrupts. |
 | `/constellation:backlog` | Tree view of the work hierarchy — epics → features → tasks, with status, type, and plan presence. Read-only, never interrupts. |
+| `/constellation:board` | Print the URL of the live board, or the command that starts it. Read-only, never interrupts. |
 
 ---
 

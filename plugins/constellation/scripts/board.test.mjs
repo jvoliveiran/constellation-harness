@@ -499,12 +499,20 @@ test('renderBacklog: file names are escaped', () => {
 
 test('renderBacklog: Needs attention lists malformed and lenient items with warnings', () => {
   const html = renderBacklog(rendererTree(), esc);
-  const block = html.slice(html.indexOf('Needs attention'));
-  assert.ok(html.includes('Needs attention'));
-  assert.ok(block.includes('005-broken.md') && block.includes('status missing'));
-  assert.ok(block.includes('004-odd.md') && block.includes('unknown status: in-progres'));
-  assert.ok(html.includes('<div class="warn-line">unknown status: in-progres</div>'));
+  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
+  assert.ok(attn.includes('Needs attention'));
+  assert.ok(attn.includes('005-broken.md') && attn.includes('status missing'));
+  assert.ok(attn.includes('004-odd.md') && attn.includes('unknown status: in-progres'));
   assert.ok(!html.includes('<details><summary>Needs'));
+});
+
+test('renderBacklog: a task row shows its own warnings right under it', () => {
+  const html = renderBacklog(rendererTree(), esc);
+  // The same warning text also sits in Needs attention, so look only at the task row and what follows it.
+  const afterRow = html.slice(html.indexOf('data-file="004-odd.md"'));
+  const rowAndWarnings = afterRow.slice(0, afterRow.indexOf('<div class="task"', 1) < 0 ? undefined : afterRow.indexOf('<div class="task"', 1));
+  assert.ok(rowAndWarnings.includes('<div class="warn-line">unknown status: in-progres</div>'));
+  assert.ok(rowAndWarnings.includes('<span class="badge warn">lenient</span>'));
 });
 
 test('renderBacklog: done and dropped collapse in details with counts', () => {
@@ -513,6 +521,28 @@ test('renderBacklog: done and dropped collapse in details with counts', () => {
   const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
   assert.ok(!attn.includes('<details'));
   assert.ok(!html.slice(0, html.indexOf('<details')).includes('002-done.md'));
+});
+
+test('renderBacklog: parked and dropped tasks stay visible, dropped inside a collapsed group', () => {
+  const tree = buildTree(['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'].map((status, i) => mk('task', `00${i}-${status}.md`, [`status: ${status}`])), null);
+  const html = renderBacklog(tree, esc);
+  for (const status of ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped']) assert.ok(html.includes(`-${status}.md"`), status);
+  const collapsed = html.slice(html.indexOf('<details data-group="standalone:dropped">'));
+  assert.ok(collapsed.includes('<summary>1 dropped</summary>'));
+  assert.ok(collapsed.includes('data-file="005-dropped.md"'));
+  assert.ok(!html.slice(0, html.indexOf('<details')).includes('005-dropped.md'));
+});
+
+test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
+  const evil = '<script>alert(1)</script>';
+  const tree = buildTree([
+    mk('epic', `E01-${evil}.md`, ['status: active']),
+    mk('feature', `F001-${evil}.md`, ['status: active', `epic: E01-${evil}.md`]),
+    mk('plan', `050-${evil}.md`, ['status: draft', `task: 050-${evil}.md`]),
+  ], null);
+  const html = renderBacklog(tree, esc);
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(!html.includes('<script'));
 });
 
 test('renderBacklog: source runs with no module scope', () => {
@@ -735,4 +765,41 @@ test('cli: --quiet on a taken port stands by, then takes over', async () => {
       assert.equal(snap?.projectDir, dir);
     } finally { run.child.kill('SIGKILL'); }
   });
+});
+
+test('serve: the page script compiles and embeds the backlog renderer', async () => {
+  await withBoardServer(async (port) => {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
+    assert.equal(r.status, 200);
+    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    assert.ok(script, 'page has an inline script');
+    assert.ok(script.includes('function renderBacklog('));
+    assert.doesNotThrow(() => new Function(script), 'inline script has a syntax error');
+  });
+});
+
+// Criterion 3: the feed shows a status change within 2 seconds. The poll floor is 1.5 s, so the
+// deadline adds slack for process scheduling only.
+test('cli: a task status edit reaches the snapshot feed with its timestamp', async () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: refined']);
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir]);
+  try {
+    const first = await waitForSnapshot(port, 3000);
+    assert.equal(first?.tree.tasks[0].status, 'refined');
+    writeItem(dir, 'tasks', '001-a.md', ['status: in-progress']);
+    const deadline = Date.now() + 3000;
+    let snap = first;
+    while (snap.transitions.length === 0 && Date.now() < deadline) {
+      await sleep(100);
+      snap = await waitForSnapshot(port, 500);
+    }
+    assert.equal(snap.transitions.length, 1);
+    assert.deepEqual([snap.transitions[0].file, snap.transitions[0].from, snap.transitions[0].to], ['001-a.md', 'refined', 'in-progress']);
+    assert.ok(!Number.isNaN(Date.parse(snap.transitions[0].ts)));
+    assert.equal(snap.feed[0].kind, 'transition');
+  } finally { run.child.kill('SIGKILL'); }
 });
