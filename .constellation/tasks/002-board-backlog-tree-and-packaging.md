@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: 1dbb9a9ef451ac25e99363a2fefd1ba141d93662
 type: feature
 source: user
 related: 001-board-live-workflow-panel.md
