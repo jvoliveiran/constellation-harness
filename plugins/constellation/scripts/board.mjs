@@ -17,8 +17,21 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_PORT = 4411;
 const EVENT_TAIL = 200;
 const DEBOUNCE_MS = 150;
-const POLL_MS = 2000;
+const POLL_MS = 1500;
 const LOOP_CAP = 3;
+const BURST_LIMIT = 3;
+const FEED_LIMIT = 30;
+const TRANSITION_CAP = 50;
+const STANDBY_MS = 5000;
+const FRONT_MATTER_OPEN_WINDOW = 10;
+const FRONT_MATTER_CLOSE_WINDOW = 40;
+const TASK_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
+const KNOWN_FIELDS = {
+  epic: ['status', 'date-created', 'last-edit'],
+  feature: ['status', 'epic', 'order', 'date-created', 'last-edit'],
+  task: ['status', 'type', 'source', 'feature', 'order', 'related', 'revisit', 'commit', 'date-created', 'last-edit'],
+  plan: ['status', 'task', 'scope-approved-by', 'date-created', 'last-edit'],
+};
 
 // ---------------------------------------------------------------------------
 // Pure functions (tested in board.test.mjs)
@@ -157,6 +170,274 @@ export function tokenDelta(tokens) {
 }
 
 // ---------------------------------------------------------------------------
+// Work items: front-matter parser, tree builder, status differ, feed (pure)
+// ---------------------------------------------------------------------------
+
+function parseFieldValue(raw) {
+  const value = raw.replace(/\s+#.*$/, '').trim();
+  const quoted = /^(["'])(.*)\1$/.exec(value);
+  return quoted ? quoted[2] : value;
+}
+
+/** Lenient front-matter parser. Never throws. Returns { fields, warnings, malformed }. */
+export function parseFrontMatter(text, kind) {
+  const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const open = lines.slice(0, FRONT_MATTER_OPEN_WINDOW).indexOf('---');
+  if (open < 0) return { fields: {}, warnings: ['no front-matter'], malformed: true };
+  const warnings = open > 0 ? ['title before front-matter'] : [];
+  const body = lines.slice(open + 1, open + 1 + FRONT_MATTER_CLOSE_WINDOW);
+  const close = body.indexOf('---');
+  if (close < 0) return { fields: {}, warnings: [...warnings, 'unclosed front-matter'], malformed: true };
+
+  const fields = {};
+  for (const line of body.slice(0, close)) {
+    const colon = line.indexOf(':');
+    if (colon < 0) continue;
+    const key = line.slice(0, colon).trim();
+    fields[key] = parseFieldValue(line.slice(colon + 1));
+    if (!(KNOWN_FIELDS[kind] ?? []).includes(key)) warnings.push(`unknown field: ${key}`);
+  }
+  if (fields.status) fields.status = fields.status.toLowerCase();
+  const malformed = !fields.status;
+  if (malformed) warnings.push('status missing');
+  return { fields, warnings, malformed };
+}
+
+/** Build the wire node for one work-item file. Carries no raw front-matter map. */
+export function toNode(kind, file, text, mtime) {
+  const { fields, warnings, malformed } = parseFrontMatter(text, kind);
+  const base = file.replace(/\.md$/, '');
+  const dash = base.indexOf('-');
+  const prefix = dash < 0 ? base : base.slice(0, dash);
+  const numbered = /^(E\d+|F\d+|\d+)$/.test(prefix);
+  if (!numbered) warnings.push('no number in file name');
+  const order = fields.order === undefined || fields.order === '' ? NaN : Number(fields.order);
+  const links = {};
+  for (const key of ['epic', 'feature', 'task']) if (fields[key]) links[key] = fields[key];
+  return {
+    kind,
+    file,
+    id: numbered ? prefix : null,
+    name: numbered ? base.slice(dash + 1) : base,
+    status: fields.status ?? null,
+    type: fields.type ?? null,
+    order: Number.isFinite(order) ? order : null,
+    links,
+    mtime,
+    flags: malformed ? ['malformed'] : warnings.length ? ['lenient'] : [],
+    warnings,
+  };
+}
+
+const byOrderThenFile = (a, b) => {
+  if (a.order !== b.order) {
+    if (a.order == null) return 1;
+    if (b.order == null) return -1;
+    return a.order - b.order;
+  }
+  return a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
+};
+
+/** Add a warning. A malformed node keeps only the malformed flag. */
+function addWarning(node, warning) {
+  node.warnings.push(warning);
+  if (node.flags.length === 0) node.flags.push('lenient');
+}
+
+function attachByLink(children, parentByFile, linkKey) {
+  const attached = new Map();
+  const orphans = [];
+  for (const child of children) {
+    const target = child.links[linkKey];
+    const parent = target ? parentByFile.get(target) : null;
+    if (target && !parent) addWarning(child, `missing link: ${target}`);
+    if (parent) attached.set(parent.file, [...(attached.get(parent.file) ?? []), child]);
+    else orphans.push(child);
+  }
+  return { attached, orphans };
+}
+
+function attachPlans(plans, taskByFile) {
+  const orphans = [];
+  for (const plan of plans) {
+    const linked = plan.links.task;
+    const target = [taskByFile.get(linked), taskByFile.get(plan.file)].find((t) => t && !t.plan);
+    if (linked && linked !== plan.file) addWarning(plan, 'task link mismatch');
+    if (target) target.plan = { file: plan.file, status: plan.status };
+    else {
+      addWarning(plan, 'plan without task');
+      orphans.push(plan);
+    }
+  }
+  return orphans;
+}
+
+function toTaskNode(node, state) {
+  const known = TASK_STATUSES.includes(node.status);
+  const task = { ...node, group: known ? node.status : 'other', plan: null, inFlight: false, currentStep: null };
+  if (node.status && !known) addWarning(task, `unknown status: ${node.status}`);
+  if (state?.task === node.file) {
+    task.inFlight = true;
+    task.currentStep = state.currentStep ?? null;
+  }
+  return task;
+}
+
+const summaryOf = ({ kind, file, flags, warnings }) => ({ kind, file, flags, warnings });
+const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
+
+/** Assemble the epics → features → tasks tree plus counts and the attention list. */
+export function buildTree(nodes, state) {
+  const copy = nodes.map((n) => ({ ...n, links: { ...n.links }, flags: [...n.flags], warnings: [...n.warnings] }));
+  const ofKind = (kind) => copy.filter((n) => n.kind === kind).sort(byOrderThenFile);
+  const epics = ofKind('epic');
+  const features = ofKind('feature');
+  const tasks = ofKind('task').map((n) => toTaskNode(n, state));
+  const plans = ofKind('plan');
+
+  const featureTree = attachByLink(features, new Map(epics.map((e) => [e.file, e])), 'epic');
+  const taskTree = attachByLink(tasks, new Map(features.map((f) => [f.file, f])), 'feature');
+  const orphanPlans = attachPlans(plans, new Map(tasks.map((t) => [t.file, t])));
+
+  const withTasks = (f) => groupNode(f, { tasks: (taskTree.attached.get(f.file) ?? []).map((t) => t.file) });
+  const counts = Object.fromEntries([...TASK_STATUSES, 'other'].map((g) => [g, tasks.filter((t) => t.group === g).length]));
+  const everyNode = [...epics, ...features, ...tasks, ...plans];
+  counts.malformed = everyNode.filter((n) => n.flags.includes('malformed')).length;
+
+  return {
+    epics: epics.map((e) => groupNode(e, { features: (featureTree.attached.get(e.file) ?? []).map(withTasks) })),
+    orphanFeatures: featureTree.orphans.map(withTasks),
+    standaloneTasks: taskTree.orphans.map((t) => t.file),
+    orphanPlans: orphanPlans.map((p) => groupNode(p, {})),
+    tasks,
+    attention: everyNode.filter((n) => n.flags.length > 0).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(summaryOf),
+    counts,
+  };
+}
+
+/** Status changes between two task lists. ts is the next node's file mtime. */
+export function diffStatuses(prevTasks, nextTasks) {
+  if (!prevTasks) return [];
+  const prevByFile = new Map(prevTasks.map((t) => [t.file, t]));
+  const out = [];
+  for (const next of nextTasks) {
+    if (!next.status || next.flags.includes('malformed')) continue;
+    const prev = prevByFile.get(next.file);
+    if (prev && !prev.status) continue;
+    const from = prev ? prev.status : null;
+    if (from !== next.status) out.push({ kind: 'transition', file: next.file, from, to: next.status, ts: next.mtime });
+  }
+  return out;
+}
+
+/** One summary entry replaces a burst (branch switch, pull). Per-file pairs stay in items. */
+export function collapseBurst(transitions, limit = BURST_LIMIT) {
+  if (transitions.length <= limit) return transitions;
+  const newest = transitions.reduce((max, t) => (Date.parse(t.ts) > Date.parse(max) ? t.ts : max), transitions[0].ts);
+  return [{ kind: 'summary', summary: true, count: transitions.length, ts: newest, items: transitions }];
+}
+
+const feedTime = (entry) => {
+  const ms = Date.parse(entry.ts);
+  return Number.isNaN(ms) ? -Infinity : ms;
+};
+
+/** Merge hook activity and status transitions, newest first. Compares parsed times. */
+export function mergeFeed(activity, transitions, limit = FEED_LIMIT) {
+  const events = activity.map((e) => ({ ...e, kind: 'event' }));
+  return [...events, ...transitions]
+    .sort((a, b) => (feedTime(a) === feedTime(b) ? 0 : feedTime(b) > feedTime(a) ? 1 : -1))
+    .slice(0, limit);
+}
+
+export function emptySnapshot(projectDir) {
+  return {
+    projectDir, at: new Date().toISOString(), hasTracks: false, initialized: true,
+    state: null, progress: null, tokenDelta: null, agents: [], activity: [], helperStops: 0,
+    feed: [], tree: null, transitions: [], stale: false, errors: [],
+  };
+}
+
+/** Run the loader. A throw keeps the previous snapshot and adds an error. */
+export function safeRefresh(load, prev, projectDir) {
+  try {
+    return load();
+  } catch (e) {
+    const base = prev ?? emptySnapshot(projectDir);
+    return { ...base, errors: [...base.errors, `refresh failed: ${e.message}`] };
+  }
+}
+
+/**
+ * Render the backlog tree as an HTML string. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import.
+ */
+export function renderBacklog(tree, esc) {
+  var GLYPHS = { inbox: '📥', refined: '📋', 'in-progress': '🔨', parked: '🅿️', done: '✅', dropped: '🚫', other: '❓' };
+  var PLAN_GLYPHS = { draft: '📝', approved: '👍' };
+  var OPEN_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other'];
+  var COLLAPSED_GROUPS = ['done', 'dropped'];
+  var byFile = {};
+  var hasNodes = !!tree && (tree.tasks.length + tree.epics.length + tree.orphanFeatures.length + tree.orphanPlans.length) > 0;
+  if (!hasNodes) return '<div class="empty">No work items</div>';
+  tree.tasks.forEach(function (t) { byFile[t.file] = t; });
+
+  function badge(node) {
+    return node.flags.length ? ' <span class="badge warn">' + esc(node.flags[0]) + '</span>' : '';
+  }
+  function warnLines(node) {
+    return node.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
+  }
+  function taskRow(t) {
+    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + (PLAN_GLYPHS[t.plan.status] || '📝') + '</span>' : '';
+    var step = t.inFlight ? ' <span class="run">▶ ' + esc(t.currentStep || '') + '</span>' : '';
+    return '<div class="task" data-file="' + esc(t.file) + '" title="' + esc(t.warnings.join('; ')) + '">'
+      + (GLYPHS[t.group] || GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
+      + (t.type ? ' <code>' + esc(t.type) + '</code>' : '') + plan + step + badge(t) + '</div>' + warnLines(t);
+  }
+  function taskGroups(files, groupKey) {
+    var items = files.map(function (f) { return byFile[f]; }).filter(Boolean);
+    var html = OPEN_GROUPS.map(function (g) {
+      return items.filter(function (t) { return t.group === g; }).map(taskRow).join('');
+    }).join('');
+    COLLAPSED_GROUPS.forEach(function (g) {
+      var list = items.filter(function (t) { return t.group === g; });
+      if (!list.length) return;
+      html += '<details data-group="' + esc(groupKey + ':' + g) + '"><summary>' + list.length + ' ' + g + '</summary>' + list.map(taskRow).join('') + '</details>';
+    });
+    return html;
+  }
+  function header(node) {
+    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <code>' + esc(node.status || '') + '</code>' + badge(node) + '</div>' + warnLines(node);
+  }
+  function featureGroup(f) {
+    return '<div class="grp">' + header(f) + taskGroups(f.tasks, f.file) + '</div>';
+  }
+  function plainGroup(title, body) {
+    return '<div class="grp"><div class="gh">' + esc(title) + '</div>' + body + '</div>';
+  }
+
+  var html = '';
+  if (tree.attention.length) {
+    html += '<div class="attn"><div class="gh">Needs attention</div>' + tree.attention.map(function (a) {
+      return '<div class="task">' + esc(a.kind) + ' <code>' + esc(a.file) + '</code> <span class="badge warn">' + esc(a.flags[0]) + '</span></div>'
+        + a.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
+    }).join('') + '</div>';
+  }
+  tree.epics.forEach(function (e) {
+    html += '<div class="epic">' + header(e) + e.features.map(featureGroup).join('') + '</div>';
+  });
+  if (tree.orphanFeatures.length) html += plainGroup('(no epic)', tree.orphanFeatures.map(featureGroup).join(''));
+  if (tree.standaloneTasks.length) html += plainGroup('(standalone tasks)', taskGroups(tree.standaloneTasks, 'standalone'));
+  if (tree.orphanPlans.length) {
+    html += plainGroup('(plans without task)', tree.orphanPlans.map(function (p) {
+      return '<div class="task">' + (PLAN_GLYPHS[p.status] || '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
+    }).join(''));
+  }
+  return html;
+}
+
+// ---------------------------------------------------------------------------
 // Filesystem
 // ---------------------------------------------------------------------------
 
@@ -170,7 +451,41 @@ function paths(projectDir) {
     tracks: path.join(root, 'tracks.json'),
     config: path.join(root, 'config.json'),
     events: path.join(root, 'metrics', 'events.jsonl'),
+    epicsDir: path.join(root, 'epics'),
+    featuresDir: path.join(root, 'features'),
+    tasksDir: path.join(root, 'tasks'),
+    plansDir: path.join(root, 'plans'),
   };
+}
+
+const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 'tasksDir'], ['plan', 'plansDir']];
+const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
+
+function readWorkItem(kind, dir, name) {
+  try {
+    const file = path.join(dir, name);
+    const text = fs.readFileSync(file, 'utf8');
+    return toNode(kind, name, text, fs.statSync(file).mtime.toISOString());
+  } catch (e) {
+    // ENOENT: a race or a dangling symlink — nothing to show.
+    if (e.code === 'ENOENT') return null;
+    const node = toNode(kind, name, '', new Date(0).toISOString());
+    return { ...node, warnings: [`unreadable: ${e.code ?? 'error'}`] };
+  }
+}
+
+/** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
+function scanWorkItems(p) {
+  const nodes = [];
+  for (const [kind, key] of WORK_DIRS) {
+    let names;
+    try { names = fs.readdirSync(p[key]).sort(); } catch { continue; }
+    for (const name of names.filter(isWorkFile)) {
+      const node = readWorkItem(kind, p[key], name);
+      if (node) nodes.push(node);
+    }
+  }
+  return nodes;
 }
 
 function readJson(file) {
@@ -224,6 +539,11 @@ export function loadSnapshot(projectDir, prev = null) {
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
   const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
+  const tree = buildTree(scanWorkItems(p), state);
+  const transitions = [
+    ...collapseBurst(diffStatuses(prev?.tree?.tasks ?? null, tree.tasks)),
+    ...(prev?.transitions ?? []),
+  ].slice(0, TRANSITION_CAP);
 
   return {
     projectDir,
@@ -236,6 +556,9 @@ export function loadSnapshot(projectDir, prev = null) {
     agents,
     activity,
     helperStops,
+    feed: mergeFeed(activity, transitions),
+    tree,
+    transitions,
     stale,
     errors,
   };
@@ -268,7 +591,7 @@ function watch(projectDir, onChange) {
       // directory vanished between the check and the watch — the poll covers it
     }
   };
-  const armAll = () => [p.root, p.stateDir, p.metricsDir].forEach(arm);
+  const armAll = () => [p.root, p.stateDir, p.metricsDir, p.epicsDir, p.featuresDir, p.tasksDir, p.plansDir].forEach(arm);
   armAll();
 
   let sig = signature(p);
@@ -295,16 +618,28 @@ function signature(p) {
   const stamp = (f) => {
     try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
   };
-  return [p.state, p.events, p.tracks, p.config].map(stamp).join('|');
+  const dirStamp = (dir) => {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return '-'; }
+    return names.filter(isWorkFile).sort().map((n) => `${n}=${stamp(path.join(dir, n))}`).join(',');
+  };
+  const workDirs = WORK_DIRS.map(([, key]) => dirStamp(p[key]));
+  return [p.state, p.events, p.tracks, p.config].map(stamp).concat(workDirs).join('|');
 }
 
 // ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
 
-function serve(port, getSnapshot, subscribe) {
+export function serve(getSnapshot, subscribe) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
+    // A foreign Host header means a DNS-rebinding page is talking to this server.
+    const port = server.address().port;
+    if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
+      res.writeHead(403).end();
+      return;
+    }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (req.method !== 'GET') { res.writeHead(405).end(); return; }
     if (url.pathname === '/') {
@@ -382,6 +717,12 @@ const PAGE = `<!doctype html>
   .dur { color:var(--dim); margin-left:auto; font-variant-numeric: tabular-nums; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:var(--dim); }
   .errs { color:var(--warn); font-size:12px; margin-top:10px; }
+  .warn-line { font-size:11px; color:var(--dim); margin:0 0 4px 24px; }
+  details summary { cursor:pointer; color:var(--dim); }
+  .task { padding:3px 0; font-size:13px; }
+  .grp, .epic { margin:8px 0 8px 12px; }
+  .gh { font-weight:600; margin:6px 0 2px; }
+  .attn { border:1px solid var(--warn); border-radius:8px; padding:8px 12px; margin-bottom:12px; }
 </style>
 </head>
 <body>
@@ -393,13 +734,17 @@ const PAGE = `<!doctype html>
   <section><h2>Now</h2><div id="now"></div></section>
   <section><h2>Agents</h2><div id="feed"></div></section>
 </main>
+<section style="margin-top:16px"><h2>Backlog</h2><div id="backlog"></div></section>
 <script>
 (function () {
   var snap = null;
+  var connected = false, lostAt = null;
+  var renderBacklog = ${renderBacklog.toString()};
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
-  var since = function (iso) { if (!iso) return null; var ms = Date.now() - Date.parse(iso); return isNaN(ms) ? null : Math.max(0, Math.round(ms/1000)); };
+  var nowMs = function () { return connected ? Date.now() : (lostAt || Date.now()); };
+  var since = function (iso) { if (!iso) return null; var ms = nowMs() - Date.parse(iso); return isNaN(ms) ? null : Math.max(0, Math.round(ms/1000)); };
   var fmtTok = function (n) { if (n == null) return '—'; return n >= 1e6 ? (n/1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); };
 
   function render() {
@@ -408,6 +753,7 @@ const PAGE = `<!doctype html>
     if (!snap.initialized) meta += '<span class="badge warn">not initialized — no .constellation/config.json</span>';
     if (!snap.hasTracks) meta += '<span class="badge warn">tracks.json missing</span>';
     if (snap.stale) meta += '<span class="badge warn">stale — state file unreadable, showing last good</span>';
+    if (!connected && lostAt) meta += '<span class="badge warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
     meta += '<span>updated ' + hhmm(snap.at) + '</span>';
     document.getElementById('meta').innerHTML = meta;
 
@@ -430,7 +776,7 @@ const PAGE = `<!doctype html>
       strip += '</div>';
       var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="badge">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
       var facts = '<div class="facts">'
-        + fact('elapsed', fmtDur(since(s.startedAt)) || '—')
+        + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, '', fmtDur(since(s.startedAt)) || '—') + '</div></div>'
         + fact('last save', hhmm(s.lastUpdatedAt))
         + fact('tokens spent', fmtTok(snap.tokenDelta))
         + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
@@ -442,33 +788,52 @@ const PAGE = `<!doctype html>
     if (snap.errors && snap.errors.length) now += '<div class="errs">' + snap.errors.map(esc).join('<br>') + '</div>';
     document.getElementById('now').innerHTML = now;
 
+    var open = [];
+    document.querySelectorAll('#backlog details[open]').forEach(function (d) { open.push(d.getAttribute('data-group')); });
+    var backlog = document.getElementById('backlog');
+    backlog.innerHTML = renderBacklog(snap.tree, esc);
+    backlog.querySelectorAll('details').forEach(function (d) { if (open.indexOf(d.getAttribute('data-group')) >= 0) d.setAttribute('open', ''); });
+
+    var activity = snap.feed || [];
     var feed = '';
-    if (!snap.agents.length && !snap.activity.length) {
+    if (!snap.agents.length && !activity.length) {
       feed = '<div class="empty">No events yet<br><code>.constellation/metrics/events.jsonl</code></div>';
     } else {
       feed += '<ul>';
       snap.agents.forEach(function (a) {
-        var dur = a.running ? '<span class="dur run">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
+        var dur = a.running ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
         feed += '<li><span class="t">' + hhmm(a.start) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + esc((a.agent_type || 'agent').replace(/^constellation:/, '')) + '</span>' + dur + '</li>';
       });
       feed += '</ul>';
-      if (snap.activity.length) {
+      if (activity.length) {
         feed += '<h2 style="margin-top:16px">Activity</h2><ul>';
-        snap.activity.slice(0, 30).forEach(function (e) {
-          var what = e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + what + '</span></li>';
+        activity.forEach(function (e) {
+          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e) + '</span></li>';
         });
         feed += '</ul>';
       }
     }
     document.getElementById('feed').innerHTML = feed;
   }
+  function feedText(e) {
+    if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
+    if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
+    return e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
+  }
+  function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
+  function tick() {
+    document.querySelectorAll('[data-since]').forEach(function (el) {
+      var secs = since(el.getAttribute('data-since'));
+      if (secs != null) el.textContent = el.getAttribute('data-prefix') + fmtDur(secs);
+    });
+  }
   function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
 
   var es = new EventSource('/events');
-  es.onmessage = function (ev) { try { snap = JSON.parse(ev.data); render(); } catch (e) { /* ignore */ } };
-  es.onerror = function () { var m = document.getElementById('meta'); if (m && snap) m.innerHTML += '<span class="badge warn">disconnected — retrying</span>'; };
-  setInterval(render, 1000);
+  es.onopen = function () { connected = true; lostAt = null; render(); };
+  es.onmessage = function (ev) { connected = true; lostAt = null; try { snap = JSON.parse(ev.data); render(); } catch (e) { /* ignore */ } };
+  es.onerror = function () { connected = false; if (lostAt == null) lostAt = Date.now(); render(); };
+  setInterval(tick, 1000);
 })();
 </script>
 </body>
@@ -480,10 +845,11 @@ const PAGE = `<!doctype html>
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false };
+  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
+    else if (a === '--quiet') out.quiet = true;
     else if (a === '--port') out.port = Number(argv[++i]);
     else if (a.startsWith('--port=')) out.port = Number(a.slice(7));
     else out.projectDir = path.resolve(a);
@@ -499,41 +865,53 @@ function main() {
   }
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('usage: node board.mjs [projectDir] [--port N]\n  Read-only live panel of the in-flight Constellation workflow.');
+    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet]\n  Read-only live panel of the in-flight Constellation workflow.');
     process.exit(0);
   }
   if (!Number.isInteger(args.port) || args.port <= 0) {
     console.error('board: --port must be a positive integer');
     process.exit(1);
   }
-  if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
+  if (args.quiet) {
+    // Started by the plugin monitor in every session: stay silent where the harness is absent.
+    if (!fs.existsSync(paths(args.projectDir).config)) process.exit(0);
+  } else if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
     console.error(`board: ${args.projectDir}/.constellation not found — pass an initialized project directory`);
     process.exit(1);
   }
+  runServer(args);
+}
 
-  let snapshot = loadSnapshot(args.projectDir);
+function runServer({ projectDir, port, quiet }) {
+  let snapshot = null;
+  let stopWatch = null;
   const listeners = new Set();
+  const getSnapshot = () => snapshot ?? (snapshot = safeRefresh(() => loadSnapshot(projectDir), null, projectDir));
   const refresh = () => {
-    snapshot = loadSnapshot(args.projectDir, snapshot);
+    snapshot = safeRefresh(() => loadSnapshot(projectDir, snapshot), snapshot, projectDir);
     for (const l of listeners) l(snapshot);
   };
-  const stopWatch = watch(args.projectDir, refresh);
 
-  const server = serve(args.port, () => snapshot, (l) => listeners.add(l));
+  const server = serve(getSnapshot, (l) => listeners.add(l));
+  server.on('listening', () => {
+    getSnapshot();
+    stopWatch = watch(projectDir, refresh);
+    if (!quiet) console.log(`🌌 Constellation board  http://127.0.0.1:${port}  (watching ${projectDir}/.constellation)`);
+  });
   server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-      console.error(`board: port ${args.port} is in use — pass --port <other>`);
-    } else {
-      console.error(`board: ${e.message}`);
+    if (e.code === 'EADDRINUSE' && quiet) {
+      // Another session holds the port. Stand by and retry when that session ends.
+      const standbyMs = Number(process.env.BOARD_STANDBY_MS) || STANDBY_MS;
+      setTimeout(() => server.listen(port, '127.0.0.1'), standbyMs);
+      return;
     }
-    stopWatch();
+    console.error(e.code === 'EADDRINUSE' ? `board: port ${port} is in use — pass --port <other>` : `board: ${e.message}`);
+    if (stopWatch) stopWatch();
     process.exit(1);
   });
-  server.listen(args.port, '127.0.0.1', () => {
-    console.log(`🌌 Constellation board  http://127.0.0.1:${args.port}  (watching ${args.projectDir}/.constellation)`);
-  });
+  server.listen(port, '127.0.0.1');
 
-  const shutdown = () => { stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
+  const shutdown = () => { if (stopWatch) stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }

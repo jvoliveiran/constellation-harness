@@ -1,7 +1,7 @@
 {
   "name": "constellation",
   "displayName": "Constellation Harness",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Multi-agent software delivery harness: an orchestrator routes every request through specialist personas (product manager, architect, backend/frontend engineers, UI/UX designer, reviewers, SDET, devops, writer) with parallel quality gates, workflow state, and review memory.",
   "author": {
     "name": "João Oliveira",
@@ -15,5 +15,15 @@
     "code-review",
     "quality-gates",
     "harness"
-  ]
+  ],
+  "experimental": {
+    "monitors": [
+      {
+        "name": "board",
+        "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/board.mjs\" --quiet",
+        "description": "Constellation board on http://127.0.0.1:4411",
+        "when": "always"
+      }
+    ]
+  }
 }

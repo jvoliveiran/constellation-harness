@@ -1,10 +1,10 @@
 ---
-status: inbox
+status: in-progress
 type: feature
 source: user
 related: 001-board-live-workflow-panel.md
 date-created: 03-10-2026
-last-edit: 03-10-2026
+last-edit: 06-10-2026
 ---
 # Board phase 2 — backlog tree, transition witness, and packaging
 
@@ -29,7 +29,7 @@ parser gives the page and the commands one deterministic source.
    fields, then the page lists it with a visible malformed or lenient badge
    and never hides it.
 3. Given a task file changes status, then the feed shows the old and new
-   status with the hook timestamp within 2 seconds.
+   status with a real timestamp within 2 seconds.
 4. Given the plugin is enabled in an initialized project, when a session
    starts, then the server starts without a user command and prints its URL
    through `/constellation:board`.

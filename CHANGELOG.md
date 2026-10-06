@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-06
+
+### Added
+- **Board backlog tree** (#002): the board page shows the work hierarchy. The
+  tree groups items under Needs attention and other groups. A `malformed`
+  badge marks a file that the parser cannot read. A `lenient` badge marks a
+  file that the parser accepts with a repair.
+- **Status transitions in the feed**: the board records each status change of
+  a work item in the feed. The timestamp is the file mtime. A burst of
+  changes in a short time collapses into one entry.
+- **Board starts with the session**: the plugin registers the board in
+  `experimental.monitors`. The board starts without a manual command. This
+  works in interactive sessions only. Under `-p` the board does not start.
+- **`/constellation:board` command**: a read-only command that prints the
+  board URL, or the command that starts the board on another port.
+- **Standby takeover**: when the port is busy, a second board waits in standby
+  and takes the port when the first board stops.
+- **Disconnected badge**: the page shows a disconnected badge when the feed
+  connection drops. The badge freezes the elapsed timers.
+
+### Security
+- **Host-header check**: the board rejects requests with a foreign `Host`
+  header. This blocks DNS rebinding attacks.
+
+### Fixed
+- **Crash safety for stray files**: files such as editor lock files in the
+  work directories no longer crash the board.
+
+### Known limitations
+- Open follow-up tasks:
+  `.constellation/tasks/003-board-parser-cli-for-portfolio-commands.md`,
+  `004-board-automatic-port-selection.md`,
+  `005-board-archive-dirs-and-backlog-parity.md`,
+  `006-board-standby-tests-poll-not-sleep.md`,
+  `007-board-standby-flag-not-env-var.md`, and
+  `008-board-hardening-from-gate-1-review.md` (review-gate hardening).
+- Plan: `.constellation/plans/002-board-backlog-tree-and-packaging.md`.
+
 ## [1.2.1] - 2026-10-05
 
 ### Fixed
