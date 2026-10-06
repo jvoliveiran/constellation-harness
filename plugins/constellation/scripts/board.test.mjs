@@ -518,3 +518,77 @@ test('renderBacklog: source runs with no module scope', () => {
   const tree = rendererTree();
   assert.equal(isolated(tree, esc), renderBacklog(tree, esc));
 });
+
+// ---------------------------------------------------------------------------
+// Snapshot — scan, tree, transitions
+// ---------------------------------------------------------------------------
+
+const writeItem = (dir, sub, file, lines) => {
+  fs.mkdirSync(path.join(dir, '.constellation', sub), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.constellation', sub, file), doc(lines));
+};
+
+test('loadSnapshot: missing work directories yield an empty tree and no errors', () => {
+  const snap = loadSnapshot(tmpProject());
+  assert.deepEqual(snap.tree.tasks, []);
+  assert.deepEqual(snap.errors, []);
+  assert.deepEqual(snap.feed, []);
+  assert.deepEqual(snap.transitions, []);
+});
+
+test('loadSnapshot: tasks directory populates the tree with plan maturity', () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: refined']);
+  writeItem(dir, 'plans', '001-a.md', ['status: approved', 'task: 001-a.md']);
+  const { tree } = loadSnapshot(dir);
+  assert.equal(tree.tasks.length, 1);
+  assert.equal(tree.tasks[0].plan.status, 'approved');
+});
+
+test('loadSnapshot: a status edit between two snapshots records a transition', () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: refined']);
+  const first = loadSnapshot(dir);
+  assert.deepEqual(first.transitions, []);
+  writeItem(dir, 'tasks', '001-a.md', ['status: in-progress']);
+  const second = loadSnapshot(dir, first);
+  assert.equal(second.transitions.length, 1);
+  assert.deepEqual([second.transitions[0].file, second.transitions[0].from, second.transitions[0].to], ['001-a.md', 'refined', 'in-progress']);
+  assert.ok(!Number.isNaN(Date.parse(second.transitions[0].ts)));
+  assert.deepEqual(second.feed.map((e) => e.kind), ['transition']);
+});
+
+test('loadSnapshot: transitions cap at 50 and keep the newest first', () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: inbox']);
+  let snap = loadSnapshot(dir);
+  for (let i = 1; i <= 51; i++) {
+    writeItem(dir, 'tasks', '001-a.md', [`status: ${i % 2 ? 'refined' : 'inbox'}`]);
+    snap = loadSnapshot(dir, snap);
+  }
+  assert.equal(snap.transitions.length, 50);
+  assert.equal(snap.transitions[0].to, 'refined', 'index 0 is change 51');
+  assert.equal(snap.transitions[49].to, 'inbox', 'change 1 was dropped');
+});
+
+test('loadSnapshot: dangling symlinks and lock files do not throw', () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '003-valid.md', ['status: inbox']);
+  const tasksDir = path.join(dir, '.constellation', 'tasks');
+  fs.symlinkSync(path.join(dir, 'nowhere'), path.join(tasksDir, '.#001-x.md'));
+  fs.symlinkSync(path.join(dir, 'nowhere'), path.join(tasksDir, '002-gone.md'));
+  fs.writeFileSync(path.join(tasksDir, '.004-swap.md'), doc(['status: inbox']));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.tree.tasks.map((t) => t.file), ['003-valid.md']);
+  assert.deepEqual(snap.errors, []);
+});
+
+test('loadSnapshot: an unreadable entry is malformed with its code', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks', '003-dir.md'), { recursive: true });
+  const { tree } = loadSnapshot(dir);
+  assert.equal(tree.tasks.length, 1);
+  assert.deepEqual(tree.tasks[0].warnings, ['unreadable: EISDIR']);
+  assert.deepEqual(tree.tasks[0].flags, ['malformed']);
+  assert.equal(tree.counts.malformed, 1);
+});

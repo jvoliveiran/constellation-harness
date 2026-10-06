@@ -451,7 +451,41 @@ function paths(projectDir) {
     tracks: path.join(root, 'tracks.json'),
     config: path.join(root, 'config.json'),
     events: path.join(root, 'metrics', 'events.jsonl'),
+    epicsDir: path.join(root, 'epics'),
+    featuresDir: path.join(root, 'features'),
+    tasksDir: path.join(root, 'tasks'),
+    plansDir: path.join(root, 'plans'),
   };
+}
+
+const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 'tasksDir'], ['plan', 'plansDir']];
+const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
+
+function readWorkItem(kind, dir, name) {
+  try {
+    const file = path.join(dir, name);
+    const text = fs.readFileSync(file, 'utf8');
+    return toNode(kind, name, text, fs.statSync(file).mtime.toISOString());
+  } catch (e) {
+    // ENOENT: a race or a dangling symlink — nothing to show.
+    if (e.code === 'ENOENT') return null;
+    const node = toNode(kind, name, '', new Date(0).toISOString());
+    return { ...node, warnings: [`unreadable: ${e.code ?? 'error'}`] };
+  }
+}
+
+/** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
+function scanWorkItems(p) {
+  const nodes = [];
+  for (const [kind, key] of WORK_DIRS) {
+    let names;
+    try { names = fs.readdirSync(p[key]).sort(); } catch { continue; }
+    for (const name of names.filter(isWorkFile)) {
+      const node = readWorkItem(kind, p[key], name);
+      if (node) nodes.push(node);
+    }
+  }
+  return nodes;
 }
 
 function readJson(file) {
@@ -505,6 +539,11 @@ export function loadSnapshot(projectDir, prev = null) {
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
   const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
+  const tree = buildTree(scanWorkItems(p), state);
+  const transitions = [
+    ...collapseBurst(diffStatuses(prev?.tree?.tasks ?? null, tree.tasks)),
+    ...(prev?.transitions ?? []),
+  ].slice(0, TRANSITION_CAP);
 
   return {
     projectDir,
@@ -517,6 +556,9 @@ export function loadSnapshot(projectDir, prev = null) {
     agents,
     activity,
     helperStops,
+    feed: mergeFeed(activity, transitions),
+    tree,
+    transitions,
     stale,
     errors,
   };
@@ -549,7 +591,7 @@ function watch(projectDir, onChange) {
       // directory vanished between the check and the watch — the poll covers it
     }
   };
-  const armAll = () => [p.root, p.stateDir, p.metricsDir].forEach(arm);
+  const armAll = () => [p.root, p.stateDir, p.metricsDir, p.epicsDir, p.featuresDir, p.tasksDir, p.plansDir].forEach(arm);
   armAll();
 
   let sig = signature(p);
@@ -576,7 +618,13 @@ function signature(p) {
   const stamp = (f) => {
     try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
   };
-  return [p.state, p.events, p.tracks, p.config].map(stamp).join('|');
+  const dirStamp = (dir) => {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return '-'; }
+    return names.filter(isWorkFile).sort().map((n) => `${n}=${stamp(path.join(dir, n))}`).join(',');
+  };
+  const workDirs = WORK_DIRS.map(([, key]) => dirStamp(p[key]));
+  return [p.state, p.events, p.tracks, p.config].map(stamp).concat(workDirs).join('|');
 }
 
 // ---------------------------------------------------------------------------
