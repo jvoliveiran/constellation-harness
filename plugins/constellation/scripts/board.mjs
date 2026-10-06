@@ -631,9 +631,15 @@ function signature(p) {
 // HTTP
 // ---------------------------------------------------------------------------
 
-function serve(port, getSnapshot, subscribe) {
+export function serve(getSnapshot, subscribe) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
+    // A foreign Host header means a DNS-rebinding page is talking to this server.
+    const port = server.address().port;
+    if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
+      res.writeHead(403).end();
+      return;
+    }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (req.method !== 'GET') { res.writeHead(405).end(); return; }
     if (url.pathname === '/') {
@@ -839,10 +845,11 @@ const PAGE = `<!doctype html>
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false };
+  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
+    else if (a === '--quiet') out.quiet = true;
     else if (a === '--port') out.port = Number(argv[++i]);
     else if (a.startsWith('--port=')) out.port = Number(a.slice(7));
     else out.projectDir = path.resolve(a);
@@ -858,41 +865,53 @@ function main() {
   }
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('usage: node board.mjs [projectDir] [--port N]\n  Read-only live panel of the in-flight Constellation workflow.');
+    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet]\n  Read-only live panel of the in-flight Constellation workflow.');
     process.exit(0);
   }
   if (!Number.isInteger(args.port) || args.port <= 0) {
     console.error('board: --port must be a positive integer');
     process.exit(1);
   }
-  if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
+  if (args.quiet) {
+    // Started by the plugin monitor in every session: stay silent where the harness is absent.
+    if (!fs.existsSync(paths(args.projectDir).config)) process.exit(0);
+  } else if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
     console.error(`board: ${args.projectDir}/.constellation not found — pass an initialized project directory`);
     process.exit(1);
   }
+  runServer(args);
+}
 
-  let snapshot = loadSnapshot(args.projectDir);
+function runServer({ projectDir, port, quiet }) {
+  let snapshot = null;
+  let stopWatch = null;
   const listeners = new Set();
+  const getSnapshot = () => snapshot ?? (snapshot = safeRefresh(() => loadSnapshot(projectDir), null, projectDir));
   const refresh = () => {
-    snapshot = loadSnapshot(args.projectDir, snapshot);
+    snapshot = safeRefresh(() => loadSnapshot(projectDir, snapshot), snapshot, projectDir);
     for (const l of listeners) l(snapshot);
   };
-  const stopWatch = watch(args.projectDir, refresh);
 
-  const server = serve(args.port, () => snapshot, (l) => listeners.add(l));
+  const server = serve(getSnapshot, (l) => listeners.add(l));
+  server.on('listening', () => {
+    getSnapshot();
+    stopWatch = watch(projectDir, refresh);
+    if (!quiet) console.log(`🌌 Constellation board  http://127.0.0.1:${port}  (watching ${projectDir}/.constellation)`);
+  });
   server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-      console.error(`board: port ${args.port} is in use — pass --port <other>`);
-    } else {
-      console.error(`board: ${e.message}`);
+    if (e.code === 'EADDRINUSE' && quiet) {
+      // Another session holds the port. Stand by and retry when that session ends.
+      const standbyMs = Number(process.env.BOARD_STANDBY_MS) || STANDBY_MS;
+      setTimeout(() => server.listen(port, '127.0.0.1'), standbyMs);
+      return;
     }
-    stopWatch();
+    console.error(e.code === 'EADDRINUSE' ? `board: port ${port} is in use — pass --port <other>` : `board: ${e.message}`);
+    if (stopWatch) stopWatch();
     process.exit(1);
   });
-  server.listen(args.port, '127.0.0.1', () => {
-    console.log(`🌌 Constellation board  http://127.0.0.1:${args.port}  (watching ${args.projectDir}/.constellation)`);
-  });
+  server.listen(port, '127.0.0.1');
 
-  const shutdown = () => { stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
+  const shutdown = () => { if (stopWatch) stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }

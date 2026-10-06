@@ -2,12 +2,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -591,4 +593,146 @@ test('loadSnapshot: an unreadable entry is malformed with its code', () => {
   assert.deepEqual(tree.tasks[0].warnings, ['unreadable: EISDIR']);
   assert.deepEqual(tree.tasks[0].flags, ['malformed']);
   assert.equal(tree.counts.malformed, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Server and CLI — real sockets and child processes. Every test cleans up in finally.
+// ---------------------------------------------------------------------------
+
+const boardPath = path.join(here, 'board.mjs');
+const REQUEST_TIMEOUT_MS = 3000;
+
+// fetch cannot set the Host header, so the tests use http.request.
+const httpRequest = (port, { host, method = 'GET', url = '/api/snapshot' }) => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, method, path: url, headers: { host }, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    let body = '';
+    res.on('data', (c) => { body += c; });
+    res.on('end', () => resolve({ status: res.statusCode, body }));
+  });
+  req.on('timeout', () => req.destroy(new Error('request timeout')));
+  req.on('error', reject);
+  req.end();
+});
+
+const closeServer = (server) => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+const listenOnFreePort = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+
+async function withBoardServer(fn) {
+  const server = serve(() => ({ projectDir: '/p' }), () => {});
+  const port = await listenOnFreePort(server);
+  try { await fn(port); } finally { await closeServer(server); }
+}
+
+test('serve: foreign Host on /api/snapshot returns 403', async () => {
+  await withBoardServer(async (port) => {
+    const r = await httpRequest(port, { host: 'attacker.example:' + port });
+    assert.equal(r.status, 403);
+    assert.equal(r.body, '');
+  });
+});
+
+test('serve: foreign Host on /events returns 403', async () => {
+  await withBoardServer(async (port) => {
+    const r = await httpRequest(port, { host: 'attacker.example:' + port, url: '/events' });
+    assert.equal(r.status, 403);
+    assert.equal(r.body, '');
+  });
+});
+
+test('serve: correct Host returns 200 for 127.0.0.1 and localhost', async () => {
+  await withBoardServer(async (port) => {
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`]) {
+      const r = await httpRequest(port, { host });
+      assert.equal(r.status, 200, host);
+      assert.equal(JSON.parse(r.body).projectDir, '/p');
+    }
+  });
+});
+
+test('serve: POST with a correct Host returns 405', async () => {
+  await withBoardServer(async (port) => {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, method: 'POST' });
+    assert.equal(r.status, 405);
+  });
+});
+
+const CHILD_TIMEOUT_MS = 5000;
+
+function spawnBoard(args, env = {}) {
+  const child = spawn(process.execPath, [boardPath, ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const run = { child, stdout: '', stderr: '' };
+  child.stdout.on('data', (c) => { run.stdout += c; });
+  child.stderr.on('data', (c) => { run.stderr += c; });
+  run.exit = new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ code: 'timeout' }), CHILD_TIMEOUT_MS);
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
+  });
+  return run;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withBlocker(fn) {
+  const blocker = http.createServer((req, res) => res.end('blocker'));
+  const port = await listenOnFreePort(blocker);
+  let closed = false;
+  const release = async () => { if (!closed) { closed = true; await closeServer(blocker); } };
+  try { await fn(port, release); } finally { await release(); }
+}
+
+test('cli: --quiet without config.json exits 0 and prints nothing', async () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'board-empty-'));
+  const run = spawnBoard(['--quiet', '--port', '49321', empty]);
+  try {
+    assert.equal((await run.exit).code, 0);
+    assert.equal(run.stdout, '');
+    assert.equal(run.stderr, '');
+  } finally { run.child.kill('SIGKILL'); }
+});
+
+test('cli: without --quiet an uninitialized directory still exits 1', async () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'board-empty-'));
+  const run = spawnBoard(['--port', '49322', empty]);
+  try {
+    assert.equal((await run.exit).code, 1);
+    assert.ok(run.stderr.includes('not found'), run.stderr);
+  } finally { run.child.kill('SIGKILL'); }
+});
+
+test('cli: without --quiet a taken port still exits 1', async () => {
+  await withBlocker(async (port) => {
+    const run = spawnBoard(['--port', String(port), tmpProject()], { BOARD_STANDBY_MS: '200' });
+    try {
+      assert.equal((await run.exit).code, 1);
+      assert.ok(run.stderr.includes('in use'), run.stderr);
+    } finally { run.child.kill('SIGKILL'); }
+  });
+});
+
+async function waitForSnapshot(port, deadlineMs) {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}` }).catch(() => null);
+    if (r?.status === 200 && r.body.includes('projectDir')) return JSON.parse(r.body);
+    if (Date.now() > deadline) return null;
+    await sleep(100);
+  }
+}
+
+test('cli: --quiet on a taken port stands by, then takes over', async () => {
+  await withBlocker(async (port, release) => {
+    const dir = tmpProject();
+    const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: '200' });
+    try {
+      await sleep(600);
+      assert.equal(run.child.exitCode, null, 'child still alive');
+      assert.equal(run.stdout, '');
+      assert.equal(run.stderr, '');
+      const blocked = await httpRequest(port, { host: `127.0.0.1:${port}` });
+      assert.equal(blocked.body, 'blocker');
+      await release();
+      const snap = await waitForSnapshot(port, 2000);
+      assert.equal(snap?.projectDir, dir);
+    } finally { run.child.kill('SIGKILL'); }
+  });
 });

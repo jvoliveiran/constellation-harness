@@ -15,5 +15,15 @@
     "code-review",
     "quality-gates",
     "harness"
-  ]
+  ],
+  "experimental": {
+    "monitors": [
+      {
+        "name": "board",
+        "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/board.mjs\" --quiet",
+        "description": "Constellation board on http://127.0.0.1:4411",
+        "when": "always"
+      }
+    ]
+  }
 }
