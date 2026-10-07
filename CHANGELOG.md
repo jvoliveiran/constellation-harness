@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-07
+
+### Fixed
+- **Board monitor no longer starts in every session**: since 1.3.0, the
+  monitor used `when: "always"`. In a project that is not initialized, the
+  board exits 0 at once. Claude Code then printed `Monitor ... ended without
+  producing output (exit 0)`. The monitor now uses
+  `on-skill-invoke:constellation:orchestrator`. It starts the first time the
+  orchestrator skill loads. The trigger value must carry the plugin
+  namespace. The bare form `on-skill-invoke:orchestrator` never matches.
+  `claude plugin validate` accepts both forms. A new selftest step checks the
+  trigger of every monitor.
+
 ## [1.3.0] - 2026-10-06
 
 ### Added
