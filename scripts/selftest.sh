@@ -30,6 +30,24 @@ else
   say "3. plugin validation SKIPPED (claude CLI not on PATH)"
 fi
 
+# 3b. Monitor triggers — a monitor must arm on a constellation skill, never on "always".
+#     A user-scope plugin with "always" arms in projects that are not initialized.
+#     The CLI matches on-skill-invoke by exact string against the namespaced skill name,
+#     and `claude plugin validate` accepts any name, so a typo fails silently at runtime.
+PLUGIN_JSON="$ROOT/plugins/constellation/.claude-plugin/plugin.json"
+while IFS=$'\t' read -r mon_name mon_when; do
+  [ -n "$mon_name" ] || continue
+  if [ "$mon_when" = "always" ]; then
+    fail "monitor '$mon_name': when is 'always' — arms in projects that are not initialized"
+  elif [[ "$mon_when" =~ ^on-skill-invoke:constellation:([a-z0-9-]+)$ ]]; then
+    [ -f "$ROOT/plugins/constellation/skills/${BASH_REMATCH[1]}/SKILL.md" ] \
+      || fail "monitor '$mon_name': skill '${BASH_REMATCH[1]}' has no SKILL.md under plugins/constellation/skills/"
+  else
+    fail "monitor '$mon_name': when '$mon_when' must match on-skill-invoke:constellation:<skill> (the plugin namespace is required)"
+  fi
+done < <(jq -r '(.experimental.monitors // [])[] | [.name, (.when // "")] | @tsv' "$PLUGIN_JSON")
+say "3b. monitor triggers checked"
+
 # 4. Contract drift — every gate agent's output contract must carry the markers the
 #    orchestrator parses, and the orchestrator must reference each contract heading.
 ORCH="$ROOT/plugins/constellation/skills/orchestrator/SKILL.md"
