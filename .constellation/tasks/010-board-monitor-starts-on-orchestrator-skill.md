@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: a18dc728949875cb5f42b26ad94b8a2a4a4d6173
 type: fix
 source: user
 related: 002-board-backlog-tree-and-packaging.md
