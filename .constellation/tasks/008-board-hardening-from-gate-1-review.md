@@ -1,10 +1,10 @@
 ---
-status: inbox
+status: in-progress
 type: fix
 source: security-analyst, code-reviewer
 related: 002-board-backlog-tree-and-packaging.md
 date-created: 06-10-2026
-last-edit: 07-10-2026
+last-edit: 08-10-2026
 ---
 # Board hardening from the task 002 review gate
 
@@ -22,4 +22,4 @@ under the default fix policy. Each one is small.
 9. **Stale header comment.** The file header of `board.mjs` still says "phase 1", and its usage line omits `--quiet`.
 10. **Bounded reads for `config.json` and `tracks.json`.** `readJson` reads both committed files with `readFileSync`. A cloned repo can make either one a symlink to `/dev/zero`, and the board then hangs at start. Fix: read both through the `readPrefix` helper of task 013, with a 1 MB cap. Raised by the architect while planning task 013 on 07-10-2026.
 
-Open question from the security review: find out whether Claude Code starts plugin monitors before the workspace-trust prompt of a newly cloned repo. If it does, items 1 and 3 need no user consent to trigger.
+Moved to task 017 on 08-10-2026. Open question from the security review: find out whether Claude Code starts plugin monitors before the workspace-trust prompt of a newly cloned repo. If it does, items 1 and 3 need no user consent to trigger.

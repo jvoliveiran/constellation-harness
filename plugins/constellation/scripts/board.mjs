@@ -1,20 +1,24 @@
 #!/usr/bin/env node
-// Constellation Harness — board (phase 1): live workflow panel on localhost.
+// Constellation Harness — board: live workflow panel and backlog tree on localhost.
 //
-// Read-only. Watches .constellation/state/ and .constellation/metrics/ of one project,
-// resolves the active track against .constellation/tracks.json with the same rules as the
-// statusline, and serves one HTML page that updates over Server-Sent Events.
+// Read-only. Watches .constellation/ of one project: state/, metrics/, and the epics/,
+// features/, tasks/, and plans/ directories. Resolves the active track against
+// .constellation/tracks.json with the same rules as the statusline, and serves one HTML
+// page that updates over Server-Sent Events.
 //
-//   node board.mjs [projectDir] [--port 4411]
+//   node board.mjs [projectDir] [--port N] [--quiet] [--probe]
 //
 // Zero npm dependencies. Node 20 or later. Binds to 127.0.0.1 only.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_PORT = 4411;
+const MAX_PORT = 65535;
+export const SSE_CLIENT_CAP = 32;
 const EVENT_TAIL = 200;
 const DEBOUNCE_MS = 150;
 const POLL_MS = 1500;
@@ -27,6 +31,8 @@ const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
 export const READ_CAP_BYTES = 64 * 1024;
 export const CAP_WARNING = `front-matter exceeds ${READ_CAP_BYTES / 1024} KB`;
+const JSON_CAP_BYTES = 1024 * 1024;
+const ROOT_OUTSIDE = '.constellation resolves outside the project';
 const PROBE_TIMEOUT_MS = 1000;
 const PROBE_MAX_BYTES = 8 * 1024 * 1024;
 // A projectDir that may reach Claude's context: absolute, at most 256 characters, no control
@@ -279,11 +285,12 @@ function attachPlans(plans, taskByFile) {
   const orphans = [];
   for (const plan of plans) {
     const linked = plan.links.task;
-    const target = [taskByFile.get(linked), taskByFile.get(plan.file)].find((t) => t && !t.plan);
+    // The same-name task is the fallback only when the link is empty or names no task.
+    const target = (linked ? taskByFile.get(linked) : undefined) ?? taskByFile.get(plan.file);
     if (linked && linked !== plan.file) addWarning(plan, 'task link mismatch');
-    if (target) target.plan = { file: plan.file, status: plan.status };
+    if (target && !target.plan) target.plan = { file: plan.file, status: plan.status };
     else {
-      addWarning(plan, 'plan without task');
+      addWarning(plan, target ? `duplicate plan for task: ${target.file}` : 'plan without task');
       orphans.push(plan);
     }
   }
@@ -384,7 +391,8 @@ export function safeRefresh(load, prev, projectDir) {
     return load();
   } catch (e) {
     const base = prev ?? emptySnapshot(projectDir);
-    return { ...base, errors: [...base.errors, `refresh failed: ${e.message}`] };
+    const message = `refresh failed: ${e.message}`;
+    return { ...base, errors: base.errors.includes(message) ? base.errors : [...base.errors, message] };
   }
 }
 
@@ -395,6 +403,7 @@ export function safeRefresh(load, prev, projectDir) {
 export function renderBacklog(tree, esc) {
   var GLYPHS = { inbox: '📥', refined: '📋', 'in-progress': '🔨', parked: '🅿️', done: '✅', dropped: '🚫', other: '❓' };
   var PLAN_GLYPHS = { draft: '📝', approved: '👍' };
+  function glyph(map, key, fallback) { return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback; }
   var OPEN_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other'];
   var COLLAPSED_GROUPS = ['done', 'dropped'];
   var byFile = {};
@@ -409,10 +418,10 @@ export function renderBacklog(tree, esc) {
     return node.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
   }
   function taskRow(t) {
-    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + (PLAN_GLYPHS[t.plan.status] || '📝') + '</span>' : '';
+    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + glyph(PLAN_GLYPHS, t.plan.status, '📝') + '</span>' : '';
     var step = t.inFlight ? ' <span class="run">▶ ' + esc(t.currentStep || '') + '</span>' : '';
     return '<div class="task" data-file="' + esc(t.file) + '" title="' + esc(t.warnings.join('; ')) + '">'
-      + (GLYPHS[t.group] || GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
+      + glyph(GLYPHS, t.group, GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
       + (t.type ? ' <code>' + esc(t.type) + '</code>' : '') + plan + step + badge(t) + '</div>' + warnLines(t);
   }
   function taskGroups(files, groupKey) {
@@ -451,7 +460,7 @@ export function renderBacklog(tree, esc) {
   if (tree.standaloneTasks.length) html += plainGroup('(standalone tasks)', taskGroups(tree.standaloneTasks, 'standalone'));
   if (tree.orphanPlans.length) {
     html += plainGroup('(plans without task)', tree.orphanPlans.map(function (p) {
-      return '<div class="task">' + (PLAN_GLYPHS[p.status] || '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
+      return '<div class="task">' + glyph(PLAN_GLYPHS, p.status, '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
     }).join(''));
   }
   return html;
@@ -480,9 +489,12 @@ export function classifyProbe(body, here) {
 
 /** The text that /constellation:board prints for one probe result. */
 export function probeText(result, port, boardFile) {
-  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port + 1}\n`;
+  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port < MAX_PORT ? port + 1 : port - 1}\n`;
   if (result.kind === 'running') return `Board running: http://127.0.0.1:${port}\n`;
-  if (result.kind === 'other') return `Port ${port} serves the board of another project: ${result.dir}\n${next}`;
+  if (result.kind === 'other') {
+    const holder = result.dir ? `Port ${port} serves the board of another project: ${result.dir}` : `Port ${port} serves the board of another project.`;
+    return `${holder}\n${next}`;
+  }
   if (result.kind === 'foreign') return `Another service holds port ${port}. It is not a Constellation board.\n${next}`;
   const portFlag = port === DEFAULT_PORT ? '' : ` --port ${port}`;
   return `Board not running.\nThe board starts when the orchestrator skill loads.\nnode "${boardFile}"${portFlag}\n`;
@@ -513,24 +525,63 @@ const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 't
 const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
 
 const readBuffer = Buffer.alloc(READ_CAP_BYTES);
+let jsonBuffer = null;
+// Allocated on the first JSON read, then reused: probe runs and test imports never pay for 1 MB.
+const getJsonBuffer = () => (jsonBuffer ??= Buffer.alloc(JSON_CAP_BYTES));
 const rejected = (code) => Object.assign(new Error(code), { code });
 
-/**
- * Read at most READ_CAP_BYTES of one work-item file. The real path must stay inside the real
- * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the
- * open of a FIFO from blocking the event loop. Throws an Error whose code names the reason.
- */
-function readPrefix(root, file) {
+/** The real path of a file, which must stay inside the real .constellation/ root. */
+function containedReal(root, file) {
   const real = fs.realpathSync(file);
   if (!real.startsWith(root + path.sep)) throw rejected('outside .constellation');
-  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+  return real;
+}
+
+/**
+ * Resolve the real .constellation/ root of a project. The root is accepted when it lies inside the
+ * real project directory or when its own name is .constellation (a shared root). A missing root
+ * yields { root: null, error: null }.
+ */
+function resolveRoot(projectDir) {
+  let project, root;
+  try {
+    project = fs.realpathSync(projectDir);
+    root = fs.realpathSync(path.join(projectDir, '.constellation'));
+  } catch (e) {
+    return { root: null, error: e.code === 'ENOENT' ? null : `.constellation: unreadable: ${e.code ?? 'error'}` };
+  }
+  const inside = root.startsWith(project + path.sep);
+  if (!inside && path.basename(root) !== '.constellation') return { root: null, error: ROOT_OUTSIDE };
+  return { root, error: null };
+}
+
+/** True when the project holds a contained .constellation root and a regular config.json in it. */
+function hasHarness(projectDir) {
+  const { root } = resolveRoot(projectDir);
+  if (!root) return false;
+  try {
+    return fs.statSync(containedReal(root, path.join(projectDir, '.constellation', 'config.json'))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read at most buffer.length bytes of one file. The real path must stay inside the real
+ * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the open
+ * of a FIFO from blocking the event loop. O_NOFOLLOW makes a swap of the final component to a
+ * symlink after the real-path check fail with ELOOP. Throws an Error whose code names the reason.
+ */
+function readPrefix(root, file, buffer = readBuffer) {
+  const real = containedReal(root, file);
+  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const st = fs.fstatSync(fd);
     if (st.isDirectory()) throw rejected('EISDIR');
     if (!st.isFile()) throw rejected('not a regular file');
     let n = 0;
-    for (let r = 1; r > 0 && n < READ_CAP_BYTES; n += r) r = fs.readSync(fd, readBuffer, n, READ_CAP_BYTES - n, n);
-    return { text: readBuffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
+    for (let r = 1; r > 0 && n < buffer.length; n += r) r = fs.readSync(fd, buffer, n, buffer.length - n, n);
+    return { text: buffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
   } finally {
     fs.closeSync(fd);
   }
@@ -549,9 +600,8 @@ function readWorkItem(kind, dir, name, root) {
 }
 
 /** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
-function scanWorkItems(p) {
-  let root;
-  try { root = fs.realpathSync(p.root); } catch { return []; }
+function scanWorkItems(p, root) {
+  if (!root) return [];
   const nodes = [];
   for (const [kind, key] of WORK_DIRS) {
     let names;
@@ -564,16 +614,19 @@ function scanWorkItems(p) {
   return nodes;
 }
 
-function readJson(file) {
-  // { value, missing, error }
-  let text;
+/** Read one JSON file under the root, at most JSON_CAP_BYTES. Returns { value, missing, error }. */
+function readJson(root, file) {
+  if (!root) return { value: null, missing: true, error: null };
+  let read;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    read = readPrefix(root, file, getJsonBuffer());
   } catch (e) {
-    return { value: null, missing: e.code === 'ENOENT', error: e.code === 'ENOENT' ? null : String(e.message) };
+    const missing = e.code === 'ENOENT';
+    return { value: null, missing, error: missing ? null : `unreadable: ${e.code ?? 'error'}` };
   }
+  if (read.truncated) return { value: null, missing: false, error: `exceeds ${JSON_CAP_BYTES / 1024 / 1024} MB` };
   try {
-    return { value: JSON.parse(text), missing: false, error: null };
+    return { value: JSON.parse(read.text), missing: false, error: null };
   } catch (e) {
     return { value: null, missing: false, error: `parse: ${e.message}` };
   }
@@ -595,10 +648,12 @@ function readTail(file, maxLines) {
 export function loadSnapshot(projectDir, prev = null) {
   const p = paths(projectDir);
   const errors = [];
+  const { root, error: rootError } = resolveRoot(projectDir);
+  if (rootError) return { ...emptySnapshot(projectDir), errors: [rootError] };
 
-  const tracksR = readJson(p.tracks);
-  const configR = readJson(p.config);
-  const stateR = readJson(p.state);
+  const tracksR = readJson(root, p.tracks);
+  const configR = readJson(root, p.config);
+  const stateR = readJson(root, p.state);
   if (tracksR.error) errors.push(`tracks.json: ${tracksR.error}`);
   if (configR.error) errors.push(`config.json: ${configR.error}`);
 
@@ -615,7 +670,7 @@ export function loadSnapshot(projectDir, prev = null) {
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
   const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
-  const tree = buildTree(scanWorkItems(p), state);
+  const tree = buildTree(scanWorkItems(p, root), state);
   const transitions = [
     ...collapseBurst(diffStatuses(prev?.tree?.tasks ?? null, tree.tasks)),
     ...(prev?.transitions ?? []),
@@ -710,6 +765,7 @@ function signature(p) {
 export function serve(getSnapshot, subscribe) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
+    res.setHeader('x-content-type-options', 'nosniff');
     // A foreign Host header means a DNS-rebinding page is talking to this server.
     const port = server.address().port;
     if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
@@ -719,7 +775,7 @@ export function serve(getSnapshot, subscribe) {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (req.method !== 'GET') { res.writeHead(405).end(); return; }
     if (url.pathname === '/') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': PAGE_CSP });
       res.end(PAGE);
       return;
     }
@@ -729,6 +785,10 @@ export function serve(getSnapshot, subscribe) {
       return;
     }
     if (url.pathname === '/events') {
+      if (clients.size >= SSE_CLIENT_CAP) {
+        res.writeHead(503, { 'content-type': 'text/plain', 'retry-after': '5' }).end('too many board clients');
+        return;
+      }
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-store',
@@ -751,14 +811,7 @@ export function serve(getSnapshot, subscribe) {
   return server;
 }
 
-const PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Constellation board</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ctext y=%2726%27 font-size=%2726%27%3E%F0%9F%8C%8C%3C/text%3E%3C/svg%3E">
-<style>
+const PAGE_STYLE = `
   :root { color-scheme: dark; --bg:#0f1117; --panel:#171a23; --line:#262a36; --fg:#e6e6e6; --dim:#8b91a1; --ok:#5ad38a; --cur:#ffcb47; --warn:#ff6b6b; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; padding:0 16px 32px; }
@@ -798,20 +851,12 @@ const PAGE = `<!doctype html>
   .task { padding:3px 0; font-size:13px; }
   .grp, .epic { margin:8px 0 8px 12px; }
   .gh { font-weight:600; margin:6px 0 2px; }
+  .mt16 { margin-top:16px; }
+  .mb12 { margin-bottom:12px; }
   .attn { border:1px solid var(--warn); border-radius:8px; padding:8px 12px; margin-bottom:12px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>🌌 Constellation board</h1>
-  <div class="meta" id="meta"></div>
-</header>
-<main>
-  <section><h2>Now</h2><div id="now"></div></section>
-  <section><h2>Agents</h2><div id="feed"></div></section>
-</main>
-<section style="margin-top:16px"><h2>Backlog</h2><div id="backlog"></div></section>
-<script>
+`;
+
+const PAGE_SCRIPT = `
 (function () {
   var snap = null;
   var connected = false, lostAt = null;
@@ -839,7 +884,7 @@ const PAGE = `<!doctype html>
     if (!s) {
       now = '<div class="empty">No workflow in flight<br><code>watching ' + esc(snap.projectDir) + '/.constellation/</code></div>';
     } else {
-      var head = '<div class="meta" style="margin-bottom:12px">'
+      var head = '<div class="meta mb12">'
         + '<span class="badge">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
         + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
         + (s.task ? '<span>task <code>' + esc(s.task) + '</code></span>' : '')
@@ -883,7 +928,7 @@ const PAGE = `<!doctype html>
       });
       feed += '</ul>';
       if (activity.length) {
-        feed += '<h2 style="margin-top:16px">Activity</h2><ul>';
+        feed += '<h2 class="mt16">Activity</h2><ul>';
         activity.forEach(function (e) {
           feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
         });
@@ -907,10 +952,47 @@ const PAGE = `<!doctype html>
   es.onerror = function () { connected = false; if (lostAt == null) lostAt = Date.now(); render(); };
   setInterval(tick, 1000);
 })();
-</script>
+`;
+
+const PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Constellation board</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ctext y=%2726%27 font-size=%2726%27%3E%F0%9F%8C%8C%3C/text%3E%3C/svg%3E">
+<style>${PAGE_STYLE}</style>
+</head>
+<body>
+<header>
+  <h1>🌌 Constellation board</h1>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <section><h2>Now</h2><div id="now"></div></section>
+  <section><h2>Agents</h2><div id="feed"></div></section>
+</main>
+<section class="mt16"><h2>Backlog</h2><div id="backlog"></div></section>
+<script>${PAGE_SCRIPT}</script>
 </body>
 </html>
 `;
+
+/** The CSP source for one inline text: the base64 SHA-256 of its exact UTF-8 bytes. */
+const cspHash = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
+
+// The page loads one inline script and one inline style, and nothing else. The hashes cover the
+// exact text that is served, so an edit of either text without a rebuild breaks the page at once.
+const PAGE_CSP = [
+  "default-src 'none'",
+  `script-src ${cspHash(PAGE_SCRIPT)}`,
+  `style-src ${cspHash(PAGE_STYLE)}`,
+  "connect-src 'self'",
+  'img-src data:',
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -932,6 +1014,10 @@ function probe(port, here) {
       resolve(result);
     };
     const req = http.get({ host: '127.0.0.1', port, path: '/api/snapshot', agent: false }, (res) => {
+      if (res.statusCode !== 200) {
+        finish({ kind: 'foreign' });
+        return;
+      }
       const chunks = [];
       let size = 0;
       res.on('data', (chunk) => {
@@ -947,11 +1033,35 @@ function probe(port, here) {
   });
 }
 
+/**
+ * True when dir is a project of this user: a real path (no symlink in any component of the text
+ * that the probe prints), a directory owned by the current UID, and a harness project by the same
+ * rule as the --quiet gate. A process on another UID cannot create such a directory, so it cannot
+ * choose the words the probe prints. A symlink would pass a plain stat, because stat checks the
+ * target and the probe prints the link path.
+ * Accepted residual risk: an intermediate component can still be swapped between the realpath and
+ * the lstat calls (see D5 of plan 014).
+ * Cost: a real board that started through a symlinked path gets the fixed line. The next-port
+ * command still prints. Windows has no getuid, so it never passes.
+ */
+function ownsProject(dir) {
+  try {
+    if (typeof process.getuid !== 'function') return false;
+    if (fs.realpathSync(dir) !== dir) return false;
+    const st = fs.lstatSync(dir);
+    if (!st.isDirectory() || st.uid !== process.getuid()) return false;
+    return hasHarness(dir);
+  } catch {
+    return false;
+  }
+}
+
 function runProbe({ projectDir, port }) {
   let here = projectDir;
   try { here = fs.realpathSync(projectDir); } catch { /* keep the resolved path */ }
-  probe(port, here).then((result) => {
-    process.stdout.write(probeText(result, port, fileURLToPath(import.meta.url)));
+  probe(port, here).catch(() => ({ kind: 'foreign' })).then((result) => {
+    const checked = result.kind === 'other' && !ownsProject(result.dir) ? { kind: 'other' } : result;
+    process.stdout.write(probeText(checked, port, fileURLToPath(import.meta.url)));
   });
 }
 
@@ -980,8 +1090,8 @@ function main() {
     console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Read-only live panel of the in-flight Constellation workflow.\n  --probe prints whether a board for this project runs on the port, then exits.');
     process.exit(0);
   }
-  if (!Number.isInteger(args.port) || args.port <= 0) {
-    console.error('board: --port must be a positive integer');
+  if (!Number.isInteger(args.port) || args.port < 1 || args.port > MAX_PORT) {
+    console.error(`board: --port must be an integer from 1 to ${MAX_PORT}`);
     process.exit(1);
   }
   if (args.probe) {
@@ -990,7 +1100,7 @@ function main() {
   }
   if (args.quiet) {
     // Started by the plugin monitor in every session: stay silent where the harness is absent.
-    if (!fs.existsSync(paths(args.projectDir).config)) process.exit(0);
+    if (!hasHarness(args.projectDir)) process.exit(0);
   } else if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
     console.error(`board: ${args.projectDir}/.constellation not found — pass an initialized project directory`);
     process.exit(1);
