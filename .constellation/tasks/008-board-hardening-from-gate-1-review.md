@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: 1b9d53b4725584b58a863ada83cf4e1d89a1172e
 type: fix
 source: security-analyst, code-reviewer
 related: 002-board-backlog-tree-and-packaging.md
