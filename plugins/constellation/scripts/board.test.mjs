@@ -1,5 +1,5 @@
 // Tests for the pure functions of board.mjs. Run: node --test plugins/constellation/scripts/
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -135,8 +135,17 @@ test('tokenDelta follows the orchestrator formula and tolerates missing fields',
   assert.equal(tokenDelta({ sessionStart: 'x' }), null);
 });
 
+// Every temporary directory of this file goes through mkTmp, so one hook removes them all.
+const tmpDirs = [];
+const mkTmp = (prefix) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+};
+after(() => { for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+
 function tmpProject() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-'));
+  const dir = mkTmp('board-');
   fs.mkdirSync(path.join(dir, '.constellation', 'state'), { recursive: true });
   fs.mkdirSync(path.join(dir, '.constellation', 'metrics'), { recursive: true });
   fs.copyFileSync(path.join(here, '..', 'templates', 'tracks.json'), path.join(dir, '.constellation', 'tracks.json'));
@@ -519,14 +528,27 @@ test('renderBacklog: Needs attention lists malformed and lenient items with warn
   assert.ok(!html.includes('<details><summary>Needs'));
 });
 
-test('renderBacklog: an unknown-field-only row keeps its badge outside Needs attention', () => {
-  const tree = buildTree([mk('task', '001-odd.md', ['status: inbox', 'category: x']), mk('task', '002-broken.md', ['type: fix'])], null);
+test('renderBacklog: an unknown-field-only row keeps its badge and one warning line per field outside Needs attention', () => {
+  const tree = buildTree([mk('task', '001-odd.md', ['status: inbox', 'category: x', 'effort: s']), mk('task', '002-broken.md', ['type: fix'])], null);
   const html = renderBacklog(tree, esc);
   const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
   assert.ok(attn.includes('002-broken.md') && !attn.includes('001-odd.md'));
-  const row = html.slice(html.indexOf('data-file="001-odd.md"'));
+  // The row ends where the next task row starts. Its warning lines sit inside that slice.
+  const row = html.slice(html.indexOf('data-file="001-odd.md"')).split('<div class="task"')[0];
   assert.ok(row.includes('<span class="badge warn">lenient</span>'));
-  assert.ok(row.includes('unknown field: category'));
+  assert.equal(row.split('class="warn-line"').length - 1, 2);
+  assert.ok(row.includes('<div class="warn-line">unknown field: category</div>'));
+  assert.ok(row.includes('<div class="warn-line">unknown field: effort</div>'));
+});
+
+test('renderBacklog: warning text built from front-matter keys and links is escaped', () => {
+  const tree = buildTree([mk('task', '001-x.md', ['status: inbox', '<img src=x onerror=alert(1)>: y', 'feature: F9"><svg onload=alert(2)>.md'])], null);
+  const html = renderBacklog(tree, esc);
+  assert.ok(html.includes('unknown field: &lt;img src=x onerror=alert(1)&gt;'));
+  assert.ok(html.includes('missing link: F9&quot;&gt;&lt;svg onload=alert(2)&gt;.md'));
+  assert.ok(!html.includes('<img'));
+  assert.ok(!html.includes('<svg'));
+  assert.ok(html.includes('title="unknown field: &lt;img'), 'the title attribute holds the escaped text');
 });
 
 test('renderBacklog: a task row shows its own warnings right under it', () => {
@@ -576,7 +598,7 @@ test('renderBacklog: source runs with no module scope', () => {
 
 test('feedText: tool_name with HTML is escaped', () => {
   const html = feedText({ kind: 'event', event: 'PostToolUse', tool_name: '<img src=x onerror=alert(1)>', file: 'a.md' }, esc);
-  assert.ok(html.includes('&lt;img'));
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
   assert.ok(!html.includes('<img'));
 });
 
@@ -662,6 +684,7 @@ test('loadSnapshot: an unreadable entry is malformed with its code', () => {
   assert.deepEqual(tree.tasks[0].warnings, ['unreadable: EISDIR']);
   assert.deepEqual(tree.tasks[0].flags, ['malformed']);
   assert.equal(tree.counts.malformed, 1);
+  assert.deepEqual(tree.attention, [{ kind: 'task', file: '003-dir.md', flags: ['malformed'], warnings: ['unreadable: EISDIR'] }]);
 });
 
 // Bounded reads. A test whose failure mode is a hang runs the loader in a child process with a
@@ -712,6 +735,18 @@ test('loadSnapshot: a file larger than the read cap parses its front-matter', ()
   assert.deepEqual(node.flags, []);
 });
 
+test('loadSnapshot: a front-matter that fills most of the read cap still parses', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-fat.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(60000)]) + '\n' + 'x'.repeat(1024 * 1024));
+  const { tree } = loadSnapshot(dir);
+  const node = taskNode(tree, '001-fat.md');
+  assert.equal(node.status, 'inbox');
+  assert.deepEqual(node.warnings, ['unknown field: note']);
+  assert.deepEqual(node.flags, ['lenient']);
+  assert.deepEqual(tree.attention, []);
+});
+
 test('loadSnapshot: front-matter that crosses the read cap is malformed', () => {
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
@@ -743,6 +778,20 @@ test('loadSnapshot: a symlink outside .constellation is rejected and leaks no ke
   assert.ok(!JSON.stringify(tree).includes('secret-key'));
 });
 
+test('loadSnapshot: a symlink into a sibling directory that shares the .constellation prefix is rejected', () => {
+  const dir = tmpProject();
+  const sibling = path.join(dir, '.constellation-evil');
+  fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(sibling, '001-evil.md'), doc(['status: inbox', 'sibling-key: 1']));
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.symlinkSync(path.join('..', '..', '.constellation-evil', '001-evil.md'), path.join(dir, '.constellation', 'tasks', '001-evil.md'));
+  const { tree } = loadSnapshot(dir);
+  const node = taskNode(tree, '001-evil.md');
+  assert.deepEqual(node.warnings, ['unreadable: outside .constellation']);
+  assert.deepEqual(node.flags, ['malformed']);
+  assert.ok(!JSON.stringify(tree).includes('sibling-key'));
+});
+
 test('loadSnapshot: a symlink to a file inside .constellation parses normally', () => {
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
@@ -757,7 +806,7 @@ test('loadSnapshot: a symlink to a file inside .constellation parses normally', 
 test('loadSnapshot: a symlinked .constellation directory still reads its files', () => {
   const real = tmpProject();
   writeItem(real, 'tasks', '001-a.md', ['status: inbox']);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-link-'));
+  const dir = mkTmp('board-link-');
   fs.symlinkSync(path.join(real, '.constellation'), path.join(dir, '.constellation'));
   const node = taskNode(loadSnapshot(dir).tree, '001-a.md');
   assert.equal(node.status, 'inbox');
@@ -862,7 +911,7 @@ async function withBlocker(fn) {
 }
 
 test('cli: --quiet without config.json exits 0 and prints nothing', async () => {
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'board-empty-'));
+  const empty = mkTmp('board-empty-');
   const run = spawnBoard(['--quiet', '--port', '49321', empty]);
   try {
     assert.equal((await run.exit).code, 0);
@@ -872,7 +921,7 @@ test('cli: --quiet without config.json exits 0 and prints nothing', async () => 
 });
 
 test('cli: without --quiet an uninitialized directory still exits 1', async () => {
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'board-empty-'));
+  const empty = mkTmp('board-empty-');
   const run = spawnBoard(['--port', '49322', empty]);
   try {
     assert.equal((await run.exit).code, 1);
@@ -985,6 +1034,16 @@ test('classifyProbe: garbage and unsafe projectDir values are foreign', () => {
   for (const body of bodies) assert.deepEqual(classifyProbe(body, '/a'), { kind: 'foreign' }, body.slice(0, 40));
 });
 
+test('classifyProbe: a macOS-style path with spaces and symbols is accepted', () => {
+  const dir = '/Users/Jane Doe/dev/my-app_v2.1/@scope/c++/~tmp';
+  assert.deepEqual(classifyProbe(JSON.stringify({ projectDir: dir }), '/elsewhere'), { kind: 'other', dir });
+});
+
+test('probeText: the default port prints the start command without a port flag', () => {
+  const text = probeText({ kind: 'none' }, 4411, '/p/board.mjs');
+  assert.equal(text, 'Board not running.\nThe board starts when the orchestrator skill loads.\nnode "/p/board.mjs"\n');
+});
+
 const freePort = async () => {
   const server = http.createServer();
   const port = await listenOnFreePort(server);
@@ -1026,11 +1085,22 @@ test('cli: --probe for this project prints Board running', async () => {
   });
 });
 
+test('cli: --probe resolves a symlinked project directory before it compares', async () => {
+  const dir = tmpProject();
+  const link = path.join(mkTmp('board-probe-link-'), 'project');
+  fs.symlinkSync(dir, link);
+  await withSnapshotStub({ projectDir: fs.realpathSync(dir) }, async (port) => {
+    const r = await runProbeCli(port, link);
+    assert.equal(r.stdout, `Board running: http://127.0.0.1:${port}\n`);
+  });
+});
+
 test('cli: --probe on a non-board service hides the reply', async () => {
   await withBlocker(async (port) => {
     const r = await runProbeCli(port, tmpProject());
     assert.equal(r.code, 0);
     assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
+    assert.ok(r.stdout.includes(`board.mjs" --port ${port + 1}`), r.stdout);
     assert.ok(!r.stdout.includes('blocker'));
   });
 });
