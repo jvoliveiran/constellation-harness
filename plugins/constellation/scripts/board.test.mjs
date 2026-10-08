@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -574,6 +574,22 @@ test('renderBacklog: source runs with no module scope', () => {
   assert.equal(isolated(tree, esc), renderBacklog(tree, esc));
 });
 
+test('feedText: tool_name with HTML is escaped', () => {
+  const html = feedText({ kind: 'event', event: 'PostToolUse', tool_name: '<img src=x onerror=alert(1)>', file: 'a.md' }, esc);
+  assert.ok(html.includes('&lt;img'));
+  assert.ok(!html.includes('<img'));
+});
+
+test('feedText: source runs with no module scope', () => {
+  const isolated = new Function('return ' + feedText.toString())();
+  const entries = [
+    { kind: 'event', event: 'PostToolUse', tool_name: 'Write', file: 'a.md' },
+    { kind: 'transition', file: '001-a.md', from: null, to: 'inbox' },
+    { kind: 'summary', count: 7 },
+  ];
+  for (const e of entries) assert.equal(isolated(e, esc), feedText(e, esc));
+});
+
 // ---------------------------------------------------------------------------
 // Snapshot — scan, tree, transitions
 // ---------------------------------------------------------------------------
@@ -910,6 +926,16 @@ test('serve: the page script compiles and embeds the backlog renderer', async ()
     assert.ok(script, 'page has an inline script');
     assert.ok(script.includes('function renderBacklog('));
     assert.doesNotThrow(() => new Function(script), 'inline script has a syntax error');
+  });
+});
+
+test('serve: the page script embeds feedText from the module', async () => {
+  await withBoardServer(async (port) => {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
+    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    assert.ok(script.includes(`var feedText = ${feedText.toString()};`));
+    assert.equal(script.split('function feedText(').length - 1, 1, 'one feedText definition in the page');
+    assert.ok(script.includes('feedText(e, esc)'));
   });
 });
 

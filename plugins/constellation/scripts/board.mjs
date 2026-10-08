@@ -452,6 +452,16 @@ export function renderBacklog(tree, esc) {
   return html;
 }
 
+/**
+ * Render one Activity feed entry as an HTML string. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import.
+ */
+export function feedText(e, esc) {
+  if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
+  if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
+  return e.event === 'PostToolUse' ? esc(e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem
 // ---------------------------------------------------------------------------
@@ -780,6 +790,7 @@ const PAGE = `<!doctype html>
   var snap = null;
   var connected = false, lostAt = null;
   var renderBacklog = ${renderBacklog.toString()};
+  var feedText = ${feedText.toString()};
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
@@ -848,17 +859,12 @@ const PAGE = `<!doctype html>
       if (activity.length) {
         feed += '<h2 style="margin-top:16px">Activity</h2><ul>';
         activity.forEach(function (e) {
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e) + '</span></li>';
+          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
         });
         feed += '</ul>';
       }
     }
     document.getElementById('feed').innerHTML = feed;
-  }
-  function feedText(e) {
-    if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
-    if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
-    return e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
   }
   function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
   function tick() {
