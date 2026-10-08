@@ -1,10 +1,10 @@
 ---
-status: inbox
+status: in-progress
 type: debt
 source: dx-analyst
 related: 002-board-backlog-tree-and-packaging.md
 date-created: 06-10-2026
-last-edit: 06-10-2026
+last-edit: 08-10-2026
 ---
 # Board standby tests poll instead of fixed sleeps
 
