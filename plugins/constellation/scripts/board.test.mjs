@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
+  READ_CAP_BYTES, CAP_WARNING,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -687,8 +688,8 @@ test('loadSnapshot: an unreadable entry is malformed with its code', () => {
   assert.deepEqual(tree.attention, [{ kind: 'task', file: '003-dir.md', flags: ['malformed'], warnings: ['unreadable: EISDIR'] }]);
 });
 
-// Bounded reads. A test whose failure mode is a hang runs the loader in a child process with a
-// hard timeout, so the runner never freezes.
+// Bounded reads. Only a FIFO can hang the loader, so that test runs it in a child process with a
+// hard timeout and the runner never freezes.
 const SNAPSHOT_CHILD_TIMEOUT_MS = 5000;
 function snapshotInChild(dir) {
   const code = `import { loadSnapshot } from ${JSON.stringify(pathToFileURL(path.join(here, 'board.mjs')).href)};`
@@ -701,10 +702,11 @@ function snapshotInChild(dir) {
 const hasMkfifo = process.platform !== 'win32' && spawnSync('mkfifo', ['--help'], { stdio: 'ignore' }).error === undefined;
 const taskNode = (tree, file) => tree.tasks.find((t) => t.file === file);
 
-test('parseFrontMatter: front-matter cut by the read cap warns exceeds 64 KB', () => {
-  const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(70000), 'task', true);
+test('parseFrontMatter: front-matter cut by the read cap warns exceeds the read cap', () => {
+  const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(READ_CAP_BYTES + 1), 'task', true);
   assert.equal(r.malformed, true);
-  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+  assert.equal(CAP_WARNING, 'front-matter exceeds 64 KB', 'CAP_WARNING text changed');
+  assert.deepEqual(r.warnings, [CAP_WARNING]);
 });
 
 test('parseFrontMatter: a truncated read with full windows keeps the real verdict', () => {
@@ -716,11 +718,11 @@ test('parseFrontMatter: a truncated read with full windows keeps the real verdic
 test('parseFrontMatter: a cut last line is not a closing fence', () => {
   const r = parseFrontMatter('---\nstatus: inbox\n---', 'task', true);
   assert.equal(r.malformed, true);
-  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(r.warnings, [CAP_WARNING]);
 });
 
-test('parseFrontMatter: a cut read with no opening fence warns exceeds 64 KB, a full one warns no front-matter', () => {
-  assert.deepEqual(parseFrontMatter('a'.repeat(70000), 'task', true).warnings, ['front-matter exceeds 64 KB']);
+test('parseFrontMatter: a cut read with no opening fence warns exceeds the read cap, a full one warns no front-matter', () => {
+  assert.deepEqual(parseFrontMatter('a'.repeat(READ_CAP_BYTES + 1), 'task', true).warnings, [CAP_WARNING]);
   assert.deepEqual(parseFrontMatter('plain text\n'.repeat(12) + 'cut', 'task', true).warnings, ['no front-matter']);
   assert.deepEqual(parseFrontMatter('plain text', 'task').warnings, ['no front-matter']);
 });
@@ -750,10 +752,10 @@ test('loadSnapshot: a front-matter that fills most of the read cap still parses'
 test('loadSnapshot: front-matter that crosses the read cap is malformed', () => {
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
-  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-wide.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(70000)]));
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-wide.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(READ_CAP_BYTES + 1)]));
   const { tree } = loadSnapshot(dir);
   const node = taskNode(tree, '001-wide.md');
-  assert.deepEqual(node.warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(node.warnings, [CAP_WARNING]);
   assert.deepEqual(node.flags, ['malformed']);
   assert.deepEqual(tree.attention.map((a) => a.file), ['001-wide.md']);
 });
@@ -762,7 +764,7 @@ test('loadSnapshot: a symlink to /dev/zero is rejected without a read', { skip: 
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
   fs.symlinkSync('/dev/zero', path.join(dir, '.constellation', 'tasks', '001-zero.md'));
-  const node = taskNode(snapshotInChild(dir), '001-zero.md');
+  const node = taskNode(loadSnapshot(dir).tree, '001-zero.md');
   assert.deepEqual(node.warnings, ['unreadable: outside .constellation']);
   assert.deepEqual(node.flags, ['malformed']);
 });
@@ -902,6 +904,17 @@ function spawnBoard(args, env = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Polls until the predicate returns a truthy value, then returns it. Returns null at the deadline.
+async function waitFor(predicate, timeoutMs, everyMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() >= deadline) return null;
+    await sleep(everyMs);
+  }
+}
+
 async function withBlocker(fn) {
   const blocker = http.createServer((req, res) => res.end('blocker'));
   const port = await listenOnFreePort(blocker);
@@ -929,9 +942,15 @@ test('cli: without --quiet an uninitialized directory still exits 1', async () =
   } finally { run.child.kill('SIGKILL'); }
 });
 
+// Standby timing. The dwell covers three standby windows, so the child must outlive them without exit.
+// Takeover deadline stays well below the 5000 ms default: it fails if BOARD_STANDBY_MS is ignored.
+const STANDBY_TEST_MS = 200;
+const STANDBY_DWELL_MS = 3 * STANDBY_TEST_MS;
+const TAKEOVER_DEADLINE_MS = 3000;
+
 test('cli: without --quiet a taken port still exits 1', async () => {
   await withBlocker(async (port) => {
-    const run = spawnBoard(['--port', String(port), tmpProject()], { BOARD_STANDBY_MS: '200' });
+    const run = spawnBoard(['--port', String(port), tmpProject()], { BOARD_STANDBY_MS: String(STANDBY_TEST_MS) });
     try {
       assert.equal((await run.exit).code, 1);
       assert.ok(run.stderr.includes('in use'), run.stderr);
@@ -939,30 +958,27 @@ test('cli: without --quiet a taken port still exits 1', async () => {
   });
 });
 
-async function waitForSnapshot(port, deadlineMs) {
-  const deadline = Date.now() + deadlineMs;
-  for (;;) {
+function waitForSnapshot(port, deadlineMs) {
+  return waitFor(async () => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}` }).catch(() => null);
-    if (r?.status === 200 && r.body.includes('projectDir')) return JSON.parse(r.body);
-    if (Date.now() > deadline) return null;
-    await sleep(100);
-  }
+    return r?.status === 200 && r.body.includes('projectDir') ? JSON.parse(r.body) : null;
+  }, deadlineMs);
 }
 
 test('cli: --quiet on a taken port stands by, then takes over', async () => {
   await withBlocker(async (port, release) => {
     const dir = tmpProject();
-    const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: '200' });
+    const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: String(STANDBY_TEST_MS) });
     try {
-      await sleep(600);
-      assert.equal(run.child.exitCode, null, 'child still alive');
-      assert.equal(run.stdout, '');
-      assert.equal(run.stderr, '');
+      const exited = await waitFor(() => run.child.exitCode !== null || run.child.signalCode !== null, STANDBY_DWELL_MS);
+      assert.equal(exited, null, 'child exited during standby');
       const blocked = await httpRequest(port, { host: `127.0.0.1:${port}` });
       assert.equal(blocked.body, 'blocker');
       await release();
-      const snap = await waitForSnapshot(port, 2000);
+      const snap = await waitForSnapshot(port, TAKEOVER_DEADLINE_MS);
       assert.equal(snap?.projectDir, dir);
+      assert.equal(run.stdout, '');
+      assert.equal(run.stderr, '');
     } finally { run.child.kill('SIGKILL'); }
   });
 });
@@ -1001,12 +1017,11 @@ test('cli: a task status edit reaches the snapshot feed with its timestamp', asy
     const first = await waitForSnapshot(port, 3000);
     assert.equal(first?.tree.tasks[0].status, 'refined');
     writeItem(dir, 'tasks', '001-a.md', ['status: in-progress']);
-    const deadline = Date.now() + 3000;
-    let snap = first;
-    while (snap.transitions.length === 0 && Date.now() < deadline) {
-      await sleep(100);
-      snap = await waitForSnapshot(port, 500);
-    }
+    const snap = await waitFor(async () => {
+      const next = await waitForSnapshot(port, 500);
+      return next?.transitions.length > 0 ? next : null;
+    }, 3000);
+    assert.ok(snap, 'no transition reached the snapshot within 3 s');
     assert.equal(snap.transitions.length, 1);
     assert.deepEqual([snap.transitions[0].file, snap.transitions[0].from, snap.transitions[0].to], ['001-a.md', 'refined', 'in-progress']);
     assert.ok(!Number.isNaN(Date.parse(snap.transitions[0].ts)));
@@ -1113,33 +1128,37 @@ test('cli: --probe with no listener prints Board not running', async () => {
   assert.ok(r.stdout.includes(`board.mjs" --port ${port}`), r.stdout);
 });
 
-// A server that never finishes its reply. Stops its timer when the connection closes.
-async function withEndlessServer(chunkFor, fn) {
+// A server that writes `chunk` every `everyMs` and never finishes its reply. Stops its timer when
+// the connection closes.
+async function withEndlessServer({ chunk, everyMs }, fn) {
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
-    const timer = setInterval(() => res.write(chunkFor()), chunkFor.everyMs);
+    const timer = setInterval(() => res.write(chunk), everyMs);
     res.on('close', () => clearInterval(timer));
   });
   const port = await listenOnFreePort(server);
   try { await fn(port); } finally { await closeServer(server); }
 }
 
-test('cli: --probe gives up on a reply that never ends', async () => {
-  const drip = () => 'x';
-  drip.everyMs = 100;
-  await withEndlessServer(drip, async (port) => {
-    const r = await runProbeCli(port, tmpProject());
-    assert.equal(r.code, 0);
-    assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
-  });
+// drip: only the absolute deadline ends the read. flood: only the byte cap ends it, so the
+// deadline is pushed out of the way.
+const ENDLESS_REPLIES = [
+  { name: 'drip', chunk: 'x', everyMs: 100, env: {} },
+  { name: 'flood', chunk: 'x'.repeat(64 * 1024), everyMs: 1, env: { BOARD_PROBE_TIMEOUT_MS: '60000' } },
+];
+
+test('cli: --probe calls a reply foreign when it never ends or never stops', async () => {
+  for (const { name, chunk, everyMs, env } of ENDLESS_REPLIES) {
+    await withEndlessServer({ chunk, everyMs }, async (port) => {
+      const r = await runProbeCli(port, tmpProject(), env);
+      assert.equal(r.code, 0, `${name}: exit code`);
+      assert.ok(r.stdout.includes(`Another service holds port ${port}`), `${name}: ${r.stdout}`);
+    });
+  }
 });
 
-test('cli: --probe stops reading at the byte cap', async () => {
-  const flood = () => 'x'.repeat(64 * 1024);
-  flood.everyMs = 1;
-  await withEndlessServer(flood, async (port) => {
-    const r = await runProbeCli(port, tmpProject(), { BOARD_PROBE_TIMEOUT_MS: '60000' });
-    assert.equal(r.code, 0);
-    assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
-  });
+test('board.md: the command runs the probe and never curl', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
+  assert.match(text, /^`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/board\.mjs" --probe`$/m, 'board.md does not run board.mjs --probe');
+  assert.ok(!text.includes('curl'), "board.md calls curl; the reply reaches Claude's context");
 });
