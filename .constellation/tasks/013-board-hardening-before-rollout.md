@@ -1,10 +1,11 @@
 ---
-status: in-progress
+status: done
+commit: d8e7f702f98180157c375f21cd4a7de87fb42d65
 type: fix
 source: user
 related: 008-board-hardening-from-gate-1-review.md
 date-created: 07-10-2026
-last-edit: 07-10-2026
+last-edit: 08-10-2026
 ---
 # Board hardening before rollout
 
