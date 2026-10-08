@@ -296,6 +296,8 @@ function toTaskNode(node, state) {
   return task;
 }
 
+// Unknown fields alone are lenient noise: the row keeps its badge, Needs attention stays for real problems.
+const needsAttention = (n) => n.flags.includes('malformed') || n.warnings.some((w) => !w.startsWith('unknown field: '));
 const summaryOf = ({ kind, file, flags, warnings }) => ({ kind, file, flags, warnings });
 const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
 
@@ -323,7 +325,7 @@ export function buildTree(nodes, state) {
     standaloneTasks: taskTree.orphans.map((t) => t.file),
     orphanPlans: orphanPlans.map((p) => groupNode(p, {})),
     tasks,
-    attention: everyNode.filter((n) => n.flags.length > 0).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(summaryOf),
+    attention: everyNode.filter(needsAttention).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(summaryOf),
     counts,
   };
 }

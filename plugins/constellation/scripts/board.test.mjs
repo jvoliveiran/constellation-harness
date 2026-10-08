@@ -321,6 +321,19 @@ test('buildTree: v1 fixture attaches features, tasks, and plans', () => {
   assert.deepEqual(t.attention, []);
 });
 
+test('buildTree: an item with only unknown field warnings stays out of attention', () => {
+  const t = buildTree([mk('task', '001-a.md', ['status: inbox', 'category: x', 'effort: s'])], null);
+  assert.deepEqual(t.attention, []);
+  assert.deepEqual(t.tasks[0].flags, ['lenient']);
+  assert.deepEqual(t.tasks[0].warnings, ['unknown field: category', 'unknown field: effort']);
+});
+
+test('buildTree: an unknown field next to another warning still needs attention', () => {
+  const t = buildTree([mk('task', '001-a.md', ['status: inbox', 'category: x', 'feature: F999-x.md'])], null);
+  assert.deepEqual(t.attention.map((a) => a.file), ['001-a.md']);
+  assert.deepEqual(t.attention[0].warnings, ['unknown field: category', 'missing link: F999-x.md']);
+});
+
 test('buildTree: task without feature is standalone', () => {
   const t = buildTree([mk('feature', 'F001-a.md', ['status: active']), mk('task', '001-x.md', ['status: inbox'])], null);
   assert.deepEqual(t.standaloneTasks, ['001-x.md']);
@@ -504,6 +517,16 @@ test('renderBacklog: Needs attention lists malformed and lenient items with warn
   assert.ok(attn.includes('005-broken.md') && attn.includes('status missing'));
   assert.ok(attn.includes('004-odd.md') && attn.includes('unknown status: in-progres'));
   assert.ok(!html.includes('<details><summary>Needs'));
+});
+
+test('renderBacklog: an unknown-field-only row keeps its badge outside Needs attention', () => {
+  const tree = buildTree([mk('task', '001-odd.md', ['status: inbox', 'category: x']), mk('task', '002-broken.md', ['type: fix'])], null);
+  const html = renderBacklog(tree, esc);
+  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
+  assert.ok(attn.includes('002-broken.md') && !attn.includes('001-odd.md'));
+  const row = html.slice(html.indexOf('data-file="001-odd.md"'));
+  assert.ok(row.includes('<span class="badge warn">lenient</span>'));
+  assert.ok(row.includes('unknown field: category'));
 });
 
 test('renderBacklog: a task row shows its own warnings right under it', () => {
