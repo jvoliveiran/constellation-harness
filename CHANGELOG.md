@@ -6,7 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-08
+
+### Security
+- **The board sends a strict Content-Security-Policy** (#014). The policy
+  allows only the page script and style by hash.
+- **Every response carries `X-Content-Type-Options: nosniff`** (#014).
+- **Contained reads open the resolved path with `O_NOFOLLOW`** (#014). This
+  covers work items and the JSON files. A swap of the final path component to
+  a symlink after the check fails with `unreadable: ELOOP`. A swap of an
+  intermediate component stays an accepted residual risk.
+- **The probe owner check no longer follows symlinks.** A review found the gap
+  before release.
+
 ### Changed
+- **Behavior change: the board refuses a `.constellation` root that resolves
+  outside the project** (#014). The one exception is a target directory named
+  `.constellation`, for example a shared harness folder. A refused root shows
+  one error. The `--quiet` monitor stays silent. A user with a `.constellation`
+  symlink to a differently named folder loses the board for that project.
+- **Behavior change: `config.json`, `tracks.json`, and `current-workflow.json`
+  must be contained, regular files of at most 1 MB** (#014). The `--quiet`
+  gate now also requires an accepted root and a contained, regular
+  `config.json`. A rejected file shows `<name>: unreadable: <reason>` or
+  `<name>: exceeds 1 MB`. A refused `config.json` keeps the project shown as
+  initialized, and the error line names the cause.
+- **Behavior change: the probe prints the directory of another project only
+  when the path is safe** (#014). The path must be canonical, with no symlink
+  in any part. The user must own it. It must hold a contained `config.json`.
+  Otherwise the probe prints the fixed line "Port N serves the board of
+  another project."
+- **Behavior change: `--port` accepts only an integer from 1 to 65535**
+  (#014). Other values print `board: --port must be an integer from 1 to
+  65535`.
+- **Behavior change: the board serves at most 32 SSE clients** (#014). Above
+  32, the board replies 503 with `retry-after: 5`.
+- **Behavior change: a plan file that duplicates a task shows the warning
+  `duplicate plan for task: <file>`** (#008). Only one plan attaches to each
+  task. A plan follows its `task:` link first. A second plan that claims the
+  same task goes to the orphan plans with this warning. It no longer falls
+  back to the task with its own file name.
+- The probe accepts only HTTP 200 as a board reply (#014).
+- The board shows a repeated error once (#008).
+- The board looks up glyphs by own property only (#008).
+- The board file header describes the current behavior (#008).
 - **Board tests poll with a `waitFor` helper instead of fixed sleeps** (#006,
   #015). The standby and status-edit tests no longer depend on timing.
 - **The `/dev/zero` test runs in-process.**
@@ -15,11 +58,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `board.test.mjs`.**
 - **`READ_CAP_BYTES` and `CAP_WARNING` are exported.** The code derives the
   warning text from the constant. The text is unchanged.
-- The test count stays 103.
+- The test count grows from 103 to 125.
 
 ### Known limitations
 - CI does not pin Node. The moved `board.md` guard can skip silently on a
   runner without Node 20 or later. Task 016 tracks this.
+- Open follow-up tasks in `.constellation/tasks/`:
+  - `016-ci-pins-node-for-board-guards.md`: CI Node pin.
+  - `017-monitor-start-before-workspace-trust.md`: monitors run before workspace
+    trust.
+  - `018-board-bounded-event-log-tail.md`: containment of
+    the event-log tail and of subdirectory listings.
+  - `019-board-test-helper-and-read-buffer-cleanup.md`: test helper and read-buffer
+    cleanup.
+  - `020-board-probe-owner-walk-closes-swap-race.md`: the owner walk closes the swap
+    race.
 
 ## [1.3.2] - 2026-10-08
 
