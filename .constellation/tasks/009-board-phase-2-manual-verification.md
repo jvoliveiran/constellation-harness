@@ -69,6 +69,10 @@ Choose one: add these fields to the spec and to `KNOWN_FIELDS`, or keep
 unknown-field-only items out of Needs attention and show the badge on the
 row only. File the choice as a follow-up task.
 
+Decided on 07-10-2026: keep unknown-field-only items out of Needs
+attention, with the badge on the row only. Task 013 implements it. After
+task 013 ships, expect Needs attention to hold only real problems.
+
 ## 2. The board starts when the orchestrator skill loads
 
 1. Start a session in `/Users/joaooliveira/study/guardei-service`.
