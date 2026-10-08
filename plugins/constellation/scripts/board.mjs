@@ -25,6 +25,8 @@ const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
 const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
+const READ_CAP_BYTES = 64 * 1024;
+const CAP_WARNING = 'front-matter exceeds 64 KB';
 const TASK_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
 const KNOWN_FIELDS = {
   epic: ['status', 'date-created', 'last-edit'],
@@ -179,15 +181,26 @@ function parseFieldValue(raw) {
   return quoted ? quoted[2] : value;
 }
 
-/** Lenient front-matter parser. Never throws. Returns { fields, warnings, malformed }. */
-export function parseFrontMatter(text, kind) {
-  const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/);
+/**
+ * Lenient front-matter parser. Never throws. Returns { fields, warnings, malformed }.
+ * truncated: the text is a byte-capped prefix, so its last line can be cut and a missing
+ * fence may lie beyond the cap. The cap warning replaces a verdict that the prefix cannot prove.
+ */
+export function parseFrontMatter(text, kind, truncated = false) {
+  const all = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const lines = truncated ? all.slice(0, -1) : all;
   const open = lines.slice(0, FRONT_MATTER_OPEN_WINDOW).indexOf('---');
-  if (open < 0) return { fields: {}, warnings: ['no front-matter'], malformed: true };
+  if (open < 0) {
+    const cut = truncated && lines.length < FRONT_MATTER_OPEN_WINDOW;
+    return { fields: {}, warnings: [cut ? CAP_WARNING : 'no front-matter'], malformed: true };
+  }
   const warnings = open > 0 ? ['title before front-matter'] : [];
   const body = lines.slice(open + 1, open + 1 + FRONT_MATTER_CLOSE_WINDOW);
   const close = body.indexOf('---');
-  if (close < 0) return { fields: {}, warnings: [...warnings, 'unclosed front-matter'], malformed: true };
+  if (close < 0) {
+    const cut = truncated && lines.length < open + 1 + FRONT_MATTER_CLOSE_WINDOW;
+    return { fields: {}, warnings: [...warnings, cut ? CAP_WARNING : 'unclosed front-matter'], malformed: true };
+  }
 
   const fields = {};
   for (const line of body.slice(0, close)) {
@@ -204,8 +217,8 @@ export function parseFrontMatter(text, kind) {
 }
 
 /** Build the wire node for one work-item file. Carries no raw front-matter map. */
-export function toNode(kind, file, text, mtime) {
-  const { fields, warnings, malformed } = parseFrontMatter(text, kind);
+export function toNode(kind, file, text, mtime, truncated = false) {
+  const { fields, warnings, malformed } = parseFrontMatter(text, kind, truncated);
   const base = file.replace(/\.md$/, '');
   const dash = base.indexOf('-');
   const prefix = dash < 0 ? base : base.slice(0, dash);
@@ -461,11 +474,34 @@ function paths(projectDir) {
 const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 'tasksDir'], ['plan', 'plansDir']];
 const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
 
-function readWorkItem(kind, dir, name) {
+const readBuffer = Buffer.alloc(READ_CAP_BYTES);
+const rejected = (code) => Object.assign(new Error(code), { code });
+
+/**
+ * Read at most READ_CAP_BYTES of one work-item file. The real path must stay inside the real
+ * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the
+ * open of a FIFO from blocking the event loop. Throws an Error whose code names the reason.
+ */
+function readPrefix(root, file) {
+  const real = fs.realpathSync(file);
+  if (!real.startsWith(root + path.sep)) throw rejected('outside .constellation');
+  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
-    const file = path.join(dir, name);
-    const text = fs.readFileSync(file, 'utf8');
-    return toNode(kind, name, text, fs.statSync(file).mtime.toISOString());
+    const st = fs.fstatSync(fd);
+    if (st.isDirectory()) throw rejected('EISDIR');
+    if (!st.isFile()) throw rejected('not a regular file');
+    let n = 0;
+    for (let r = 1; r > 0 && n < READ_CAP_BYTES; n += r) r = fs.readSync(fd, readBuffer, n, READ_CAP_BYTES - n, n);
+    return { text: readBuffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readWorkItem(kind, dir, name, root) {
+  try {
+    const { text, truncated, mtime } = readPrefix(root, path.join(dir, name));
+    return toNode(kind, name, text, mtime, truncated);
   } catch (e) {
     // ENOENT: a race or a dangling symlink — nothing to show.
     if (e.code === 'ENOENT') return null;
@@ -476,12 +512,14 @@ function readWorkItem(kind, dir, name) {
 
 /** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
 function scanWorkItems(p) {
+  let root;
+  try { root = fs.realpathSync(p.root); } catch { return []; }
   const nodes = [];
   for (const [kind, key] of WORK_DIRS) {
     let names;
     try { names = fs.readdirSync(p[key]).sort(); } catch { continue; }
     for (const name of names.filter(isWorkFile)) {
-      const node = readWorkItem(kind, p[key], name);
+      const node = readWorkItem(kind, p[key], name, root);
       if (node) nodes.push(node);
     }
   }

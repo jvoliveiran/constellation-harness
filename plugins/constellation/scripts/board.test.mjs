@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve,
@@ -623,6 +623,118 @@ test('loadSnapshot: an unreadable entry is malformed with its code', () => {
   assert.deepEqual(tree.tasks[0].warnings, ['unreadable: EISDIR']);
   assert.deepEqual(tree.tasks[0].flags, ['malformed']);
   assert.equal(tree.counts.malformed, 1);
+});
+
+// Bounded reads. A test whose failure mode is a hang runs the loader in a child process with a
+// hard timeout, so the runner never freezes.
+const SNAPSHOT_CHILD_TIMEOUT_MS = 5000;
+function snapshotInChild(dir) {
+  const code = `import { loadSnapshot } from ${JSON.stringify(pathToFileURL(path.join(here, 'board.mjs')).href)};`
+    + ` process.stdout.write(JSON.stringify(loadSnapshot(${JSON.stringify(dir)}).tree));`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: SNAPSHOT_CHILD_TIMEOUT_MS, killSignal: 'SIGKILL' });
+  assert.equal(r.error, undefined, `child did not finish: ${r.error?.message}`);
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+const hasMkfifo = process.platform !== 'win32' && spawnSync('mkfifo', ['--help'], { stdio: 'ignore' }).error === undefined;
+const taskNode = (tree, file) => tree.tasks.find((t) => t.file === file);
+
+test('parseFrontMatter: front-matter cut by the read cap warns exceeds 64 KB', () => {
+  const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(70000), 'task', true);
+  assert.equal(r.malformed, true);
+  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+});
+
+test('parseFrontMatter: a truncated read with full windows keeps the real verdict', () => {
+  const r = parseFrontMatter('---\n' + 'order: 1\n'.repeat(60) + 'cut', 'task', true);
+  assert.equal(r.malformed, true);
+  assert.deepEqual(r.warnings, ['unclosed front-matter']);
+});
+
+test('parseFrontMatter: a cut last line is not a closing fence', () => {
+  const r = parseFrontMatter('---\nstatus: inbox\n---', 'task', true);
+  assert.equal(r.malformed, true);
+  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+});
+
+test('parseFrontMatter: a cut read with no opening fence warns exceeds 64 KB, a full one warns no front-matter', () => {
+  assert.deepEqual(parseFrontMatter('a'.repeat(70000), 'task', true).warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(parseFrontMatter('plain text\n'.repeat(12) + 'cut', 'task', true).warnings, ['no front-matter']);
+  assert.deepEqual(parseFrontMatter('plain text', 'task').warnings, ['no front-matter']);
+});
+
+test('loadSnapshot: a file larger than the read cap parses its front-matter', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-big.md'), doc(['status: inbox']) + '\n' + 'x'.repeat(1024 * 1024));
+  const node = taskNode(loadSnapshot(dir).tree, '001-big.md');
+  assert.equal(node.status, 'inbox');
+  assert.deepEqual(node.warnings, []);
+  assert.deepEqual(node.flags, []);
+});
+
+test('loadSnapshot: front-matter that crosses the read cap is malformed', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-wide.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(70000)]));
+  const { tree } = loadSnapshot(dir);
+  const node = taskNode(tree, '001-wide.md');
+  assert.deepEqual(node.warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(node.flags, ['malformed']);
+  assert.deepEqual(tree.attention.map((a) => a.file), ['001-wide.md']);
+});
+
+test('loadSnapshot: a symlink to /dev/zero is rejected without a read', { skip: !fs.existsSync('/dev/zero') }, () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.symlinkSync('/dev/zero', path.join(dir, '.constellation', 'tasks', '001-zero.md'));
+  const node = taskNode(snapshotInChild(dir), '001-zero.md');
+  assert.deepEqual(node.warnings, ['unreadable: outside .constellation']);
+  assert.deepEqual(node.flags, ['malformed']);
+});
+
+test('loadSnapshot: a symlink outside .constellation is rejected and leaks no key', () => {
+  const dir = tmpProject();
+  const outside = path.join(dir, 'secret.yaml');
+  fs.writeFileSync(outside, doc(['status: inbox', 'secret-key: 1']));
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.symlinkSync(outside, path.join(dir, '.constellation', 'tasks', '001-leak.md'));
+  const { tree } = loadSnapshot(dir);
+  assert.deepEqual(taskNode(tree, '001-leak.md').warnings, ['unreadable: outside .constellation']);
+  assert.ok(!JSON.stringify(tree).includes('secret-key'));
+});
+
+test('loadSnapshot: a symlink to a file inside .constellation parses normally', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  fs.mkdirSync(path.join(dir, '.constellation', 'shared'));
+  fs.writeFileSync(path.join(dir, '.constellation', 'shared', '007.md'), doc(['status: refined']));
+  fs.symlinkSync(path.join('..', 'shared', '007.md'), path.join(dir, '.constellation', 'tasks', '007-link.md'));
+  const node = taskNode(loadSnapshot(dir).tree, '007-link.md');
+  assert.equal(node.status, 'refined');
+  assert.deepEqual(node.flags, []);
+});
+
+test('loadSnapshot: a symlinked .constellation directory still reads its files', () => {
+  const real = tmpProject();
+  writeItem(real, 'tasks', '001-a.md', ['status: inbox']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-link-'));
+  fs.symlinkSync(path.join(real, '.constellation'), path.join(dir, '.constellation'));
+  const node = taskNode(loadSnapshot(dir).tree, '001-a.md');
+  assert.equal(node.status, 'inbox');
+  assert.deepEqual(node.warnings, []);
+});
+
+test('loadSnapshot: a FIFO is rejected without blocking', { skip: !hasMkfifo }, () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+  const fifo = path.join(dir, '.constellation', 'tasks', '008-pipe.md');
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  try {
+    const node = taskNode(snapshotInChild(dir), '008-pipe.md');
+    assert.deepEqual(node.warnings, ['unreadable: not a regular file']);
+    assert.deepEqual(node.flags, ['malformed']);
+  } finally { fs.rmSync(fifo, { force: true }); }
 });
 
 // ---------------------------------------------------------------------------
