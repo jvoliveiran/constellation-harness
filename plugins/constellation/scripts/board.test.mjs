@@ -1128,33 +1128,37 @@ test('cli: --probe with no listener prints Board not running', async () => {
   assert.ok(r.stdout.includes(`board.mjs" --port ${port}`), r.stdout);
 });
 
-// A server that never finishes its reply. Stops its timer when the connection closes.
-async function withEndlessServer(chunkFor, fn) {
+// A server that writes `chunk` every `everyMs` and never finishes its reply. Stops its timer when
+// the connection closes.
+async function withEndlessServer({ chunk, everyMs }, fn) {
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
-    const timer = setInterval(() => res.write(chunkFor()), chunkFor.everyMs);
+    const timer = setInterval(() => res.write(chunk), everyMs);
     res.on('close', () => clearInterval(timer));
   });
   const port = await listenOnFreePort(server);
   try { await fn(port); } finally { await closeServer(server); }
 }
 
-test('cli: --probe gives up on a reply that never ends', async () => {
-  const drip = () => 'x';
-  drip.everyMs = 100;
-  await withEndlessServer(drip, async (port) => {
-    const r = await runProbeCli(port, tmpProject());
-    assert.equal(r.code, 0);
-    assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
-  });
+// drip: only the absolute deadline ends the read. flood: only the byte cap ends it, so the
+// deadline is pushed out of the way.
+const ENDLESS_REPLIES = [
+  { name: 'drip', chunk: 'x', everyMs: 100, env: {} },
+  { name: 'flood', chunk: 'x'.repeat(64 * 1024), everyMs: 1, env: { BOARD_PROBE_TIMEOUT_MS: '60000' } },
+];
+
+test('cli: --probe calls a reply foreign when it never ends or never stops', async () => {
+  for (const { name, chunk, everyMs, env } of ENDLESS_REPLIES) {
+    await withEndlessServer({ chunk, everyMs }, async (port) => {
+      const r = await runProbeCli(port, tmpProject(), env);
+      assert.equal(r.code, 0, `${name}: exit code`);
+      assert.ok(r.stdout.includes(`Another service holds port ${port}`), `${name}: ${r.stdout}`);
+    });
+  }
 });
 
-test('cli: --probe stops reading at the byte cap', async () => {
-  const flood = () => 'x'.repeat(64 * 1024);
-  flood.everyMs = 1;
-  await withEndlessServer(flood, async (port) => {
-    const r = await runProbeCli(port, tmpProject(), { BOARD_PROBE_TIMEOUT_MS: '60000' });
-    assert.equal(r.code, 0);
-    assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
-  });
+test('board.md: the command runs the probe and never curl', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
+  assert.ok(text.includes('--probe'), 'board.md does not run board.mjs --probe');
+  assert.ok(!text.includes('curl'), "board.md calls curl; the reply reaches Claude's context");
 });
