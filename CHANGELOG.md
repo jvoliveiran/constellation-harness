@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Board tests poll with a `waitFor` helper instead of fixed sleeps** (#006,
+  #015). The standby and status-edit tests no longer depend on timing.
+- **The `/dev/zero` test runs in-process.**
+- **One table-driven test replaces the drip and flood probe tests.**
+- **The `board.md` probe check moves from selftest step 11b into
+  `board.test.mjs`.**
+- **`READ_CAP_BYTES` and `CAP_WARNING` are exported.** The code derives the
+  warning text from the constant. The text is unchanged.
+- The test count stays 103.
+
+### Known limitations
+- CI does not pin Node. The moved `board.md` guard can skip silently on a
+  runner without Node 20 or later. Task 016 tracks this.
+
 ## [1.3.2] - 2026-10-08
 
 ### Changed

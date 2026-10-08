@@ -705,7 +705,7 @@ const taskNode = (tree, file) => tree.tasks.find((t) => t.file === file);
 test('parseFrontMatter: front-matter cut by the read cap warns exceeds the read cap', () => {
   const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(READ_CAP_BYTES + 1), 'task', true);
   assert.equal(r.malformed, true);
-  assert.equal(CAP_WARNING, 'front-matter exceeds 64 KB');
+  assert.equal(CAP_WARNING, 'front-matter exceeds 64 KB', 'CAP_WARNING text changed');
   assert.deepEqual(r.warnings, [CAP_WARNING]);
 });
 
@@ -942,9 +942,15 @@ test('cli: without --quiet an uninitialized directory still exits 1', async () =
   } finally { run.child.kill('SIGKILL'); }
 });
 
+// Standby timing. The dwell covers three standby windows, so the child must outlive them without exit.
+// Takeover deadline stays well below the 5000 ms default: it fails if BOARD_STANDBY_MS is ignored.
+const STANDBY_TEST_MS = 200;
+const STANDBY_DWELL_MS = 3 * STANDBY_TEST_MS;
+const TAKEOVER_DEADLINE_MS = 3000;
+
 test('cli: without --quiet a taken port still exits 1', async () => {
   await withBlocker(async (port) => {
-    const run = spawnBoard(['--port', String(port), tmpProject()], { BOARD_STANDBY_MS: '200' });
+    const run = spawnBoard(['--port', String(port), tmpProject()], { BOARD_STANDBY_MS: String(STANDBY_TEST_MS) });
     try {
       assert.equal((await run.exit).code, 1);
       assert.ok(run.stderr.includes('in use'), run.stderr);
@@ -959,18 +965,12 @@ function waitForSnapshot(port, deadlineMs) {
   }, deadlineMs);
 }
 
-// The child must outlive three standby windows without exiting. A fixed window is the only signal:
-// --quiet prints nothing when it stands by.
-const STANDBY_TEST_MS = 200;
-const STANDBY_DWELL_MS = 3 * STANDBY_TEST_MS;
-const TAKEOVER_DEADLINE_MS = 5000;
-
 test('cli: --quiet on a taken port stands by, then takes over', async () => {
   await withBlocker(async (port, release) => {
     const dir = tmpProject();
     const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: String(STANDBY_TEST_MS) });
     try {
-      const exited = await waitFor(() => run.child.exitCode !== null, STANDBY_DWELL_MS);
+      const exited = await waitFor(() => run.child.exitCode !== null || run.child.signalCode !== null, STANDBY_DWELL_MS);
       assert.equal(exited, null, 'child exited during standby');
       const blocked = await httpRequest(port, { host: `127.0.0.1:${port}` });
       assert.equal(blocked.body, 'blocker');
@@ -1159,6 +1159,6 @@ test('cli: --probe calls a reply foreign when it never ends or never stops', asy
 
 test('board.md: the command runs the probe and never curl', () => {
   const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
-  assert.ok(text.includes('--probe'), 'board.md does not run board.mjs --probe');
+  assert.match(text, /^`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/board\.mjs" --probe`$/m, 'board.md does not run board.mjs --probe');
   assert.ok(!text.includes('curl'), "board.md calls curl; the reply reaches Claude's context");
 });
