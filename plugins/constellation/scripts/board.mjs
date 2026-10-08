@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Constellation Harness — board (phase 1): live workflow panel on localhost.
+// Constellation Harness — board: live workflow panel and backlog tree on localhost.
 //
-// Read-only. Watches .constellation/state/ and .constellation/metrics/ of one project,
-// resolves the active track against .constellation/tracks.json with the same rules as the
-// statusline, and serves one HTML page that updates over Server-Sent Events.
+// Read-only. Watches .constellation/ of one project: state/, metrics/, and the epics/,
+// features/, tasks/, and plans/ directories. Resolves the active track against
+// .constellation/tracks.json with the same rules as the statusline, and serves one HTML
+// page that updates over Server-Sent Events.
 //
-//   node board.mjs [projectDir] [--port 4411]
+//   node board.mjs [projectDir] [--port N] [--quiet] [--probe]
 //
 // Zero npm dependencies. Node 20 or later. Binds to 127.0.0.1 only.
 
@@ -284,11 +285,12 @@ function attachPlans(plans, taskByFile) {
   const orphans = [];
   for (const plan of plans) {
     const linked = plan.links.task;
-    const target = [taskByFile.get(linked), taskByFile.get(plan.file)].find((t) => t && !t.plan);
+    // The same-name task is the fallback only when the link is empty or names no task.
+    const target = (linked ? taskByFile.get(linked) : undefined) ?? taskByFile.get(plan.file);
     if (linked && linked !== plan.file) addWarning(plan, 'task link mismatch');
-    if (target) target.plan = { file: plan.file, status: plan.status };
+    if (target && !target.plan) target.plan = { file: plan.file, status: plan.status };
     else {
-      addWarning(plan, 'plan without task');
+      addWarning(plan, target ? `duplicate plan for task: ${target.file}` : 'plan without task');
       orphans.push(plan);
     }
   }
@@ -389,7 +391,8 @@ export function safeRefresh(load, prev, projectDir) {
     return load();
   } catch (e) {
     const base = prev ?? emptySnapshot(projectDir);
-    return { ...base, errors: [...base.errors, `refresh failed: ${e.message}`] };
+    const message = `refresh failed: ${e.message}`;
+    return { ...base, errors: base.errors.includes(message) ? base.errors : [...base.errors, message] };
   }
 }
 
@@ -400,6 +403,7 @@ export function safeRefresh(load, prev, projectDir) {
 export function renderBacklog(tree, esc) {
   var GLYPHS = { inbox: '📥', refined: '📋', 'in-progress': '🔨', parked: '🅿️', done: '✅', dropped: '🚫', other: '❓' };
   var PLAN_GLYPHS = { draft: '📝', approved: '👍' };
+  function glyph(map, key, fallback) { return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback; }
   var OPEN_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other'];
   var COLLAPSED_GROUPS = ['done', 'dropped'];
   var byFile = {};
@@ -414,10 +418,10 @@ export function renderBacklog(tree, esc) {
     return node.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
   }
   function taskRow(t) {
-    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + (PLAN_GLYPHS[t.plan.status] || '📝') + '</span>' : '';
+    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + glyph(PLAN_GLYPHS, t.plan.status, '📝') + '</span>' : '';
     var step = t.inFlight ? ' <span class="run">▶ ' + esc(t.currentStep || '') + '</span>' : '';
     return '<div class="task" data-file="' + esc(t.file) + '" title="' + esc(t.warnings.join('; ')) + '">'
-      + (GLYPHS[t.group] || GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
+      + glyph(GLYPHS, t.group, GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
       + (t.type ? ' <code>' + esc(t.type) + '</code>' : '') + plan + step + badge(t) + '</div>' + warnLines(t);
   }
   function taskGroups(files, groupKey) {
@@ -456,7 +460,7 @@ export function renderBacklog(tree, esc) {
   if (tree.standaloneTasks.length) html += plainGroup('(standalone tasks)', taskGroups(tree.standaloneTasks, 'standalone'));
   if (tree.orphanPlans.length) {
     html += plainGroup('(plans without task)', tree.orphanPlans.map(function (p) {
-      return '<div class="task">' + (PLAN_GLYPHS[p.status] || '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
+      return '<div class="task">' + glyph(PLAN_GLYPHS, p.status, '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
     }).join(''));
   }
   return html;

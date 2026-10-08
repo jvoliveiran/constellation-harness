@@ -416,6 +416,25 @@ test('buildTree: plan without task is orphaned and needs attention', () => {
   assert.equal(t.attention[0].file, '050-x.md');
 });
 
+test('buildTree: a second plan for a linked task is a duplicate, not a fallback', () => {
+  const t = buildTree([
+    mk('task', '014-b.md', ['status: refined']),
+    mk('task', '099-a.md', ['status: inbox']),
+    mk('plan', '014-b.md', ['status: draft', 'task: 014-b.md']),
+    mk('plan', '099-a.md', ['status: draft', 'task: 014-b.md']),
+  ], null);
+  assert.equal(t.tasks.find((x) => x.file === '014-b.md').plan.file, '014-b.md');
+  assert.equal(t.tasks.find((x) => x.file === '099-a.md').plan, null);
+  assert.deepEqual(t.orphanPlans.map((p) => [p.file, p.warnings]), [['099-a.md', ['task link mismatch', 'duplicate plan for task: 014-b.md']]]);
+  assert.ok(t.attention.some((a) => a.file === '099-a.md'), 'the duplicate plan is not in Needs attention');
+});
+
+test('buildTree: a plan with no task link still attaches to its same-name task', () => {
+  const t = buildTree([mk('task', '020-x.md', ['status: refined']), mk('plan', '020-x.md', ['status: draft'])], null);
+  assert.equal(t.tasks[0].plan.file, '020-x.md');
+  assert.deepEqual(t.orphanPlans, []);
+});
+
 test('diffStatuses: status change yields one transition with the mtime', () => {
   const prev = [{ file: '001-a.md', status: 'refined', flags: [], mtime: 'old' }];
   const next = [{ file: '001-a.md', status: 'in-progress', flags: [], mtime: '2026-10-06T10:00:01.000Z' }];
@@ -494,6 +513,14 @@ test('safeRefresh: a throwing loader keeps the previous snapshot', () => {
   assert.equal(fresh.projectDir, '/p');
   assert.deepEqual(fresh.errors, ['refresh failed: boom']);
   assert.equal(safeRefresh(() => ({ ok: 1 }), prev, '/p').ok, 1);
+});
+
+test('safeRefresh: a repeated failure adds its message once', () => {
+  const prev = Object.freeze({ projectDir: '/p', state: null, errors: Object.freeze(['old']) });
+  const boom = () => { throw new Error('boom'); };
+  const twice = safeRefresh(boom, safeRefresh(boom, prev, '/p'), '/p');
+  assert.deepEqual(twice.errors, ['old', 'refresh failed: boom']);
+  assert.deepEqual(prev.errors, ['old']);
 });
 
 const rendererTree = () => buildTree([
@@ -590,6 +617,18 @@ test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
   const html = renderBacklog(tree, esc);
   assert.ok(html.includes('&lt;script&gt;'));
   assert.ok(!html.includes('<script'));
+});
+
+test('renderBacklog: a plan status that names an Object prototype key renders the default glyph', () => {
+  const tree = buildTree([
+    mk('task', '001-open.md', ['status: refined']),
+    mk('plan', '001-open.md', ['status: constructor', 'task: 001-open.md']),
+    mk('plan', '050-x.md', ['status: __proto__', 'task: 050-x.md']),
+  ], null);
+  const html = renderBacklog(tree, esc);
+  assert.equal(html.split('📝').length - 1, 2, 'both plan rows show the default glyph');
+  assert.ok(!html.includes('function'), 'function source text reached the HTML');
+  assert.ok(!html.includes('[object Object]'), 'a prototype object reached the HTML');
 });
 
 test('renderBacklog: source runs with no module scope', () => {
