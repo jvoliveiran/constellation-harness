@@ -27,6 +27,11 @@ const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
 const READ_CAP_BYTES = 64 * 1024;
 const CAP_WARNING = 'front-matter exceeds 64 KB';
+const PROBE_TIMEOUT_MS = 1000;
+const PROBE_MAX_BYTES = 8 * 1024 * 1024;
+// A projectDir that may reach Claude's context: absolute, at most 256 characters, no control
+// characters, quotes, backticks, or shell metacharacters. Spaces stay, macOS paths carry them.
+const SAFE_DIR = /^\/[A-Za-z0-9._@+~\/ -]{0,255}$/;
 const TASK_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
 const KNOWN_FIELDS = {
   epic: ['status', 'date-created', 'last-edit'],
@@ -462,6 +467,27 @@ export function feedText(e, esc) {
   return e.event === 'PostToolUse' ? esc(e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
 }
 
+/**
+ * Judge the reply of a port probe. Only a projectDir that passes SAFE_DIR survives: every other
+ * byte of the reply is dropped, because the reply is untrusted data.
+ */
+export function classifyProbe(body, here) {
+  let dir;
+  try { dir = JSON.parse(body)?.projectDir; } catch { return { kind: 'foreign' }; }
+  if (typeof dir !== 'string' || !SAFE_DIR.test(dir)) return { kind: 'foreign' };
+  return dir === here ? { kind: 'running' } : { kind: 'other', dir };
+}
+
+/** The text that /constellation:board prints for one probe result. */
+export function probeText(result, port, boardFile) {
+  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port + 1}\n`;
+  if (result.kind === 'running') return `Board running: http://127.0.0.1:${port}\n`;
+  if (result.kind === 'other') return `Port ${port} serves the board of another project: ${result.dir}\n${next}`;
+  if (result.kind === 'foreign') return `Another service holds port ${port}. It is not a Constellation board.\n${next}`;
+  const portFlag = port === DEFAULT_PORT ? '' : ` --port ${port}`;
+  return `Board not running.\nThe board starts when the orchestrator skill loads.\nnode "${boardFile}"${portFlag}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem
 // ---------------------------------------------------------------------------
@@ -890,12 +916,52 @@ const PAGE = `<!doctype html>
 // CLI
 // ---------------------------------------------------------------------------
 
+/**
+ * GET the snapshot of the board on a port and resolve with a classified result. The deadline is
+ * absolute: the http timeout option is an idle timeout, which a slow drip never triggers.
+ */
+function probe(port, here) {
+  const deadlineMs = Number(process.env.BOARD_PROBE_TIMEOUT_MS) || PROBE_TIMEOUT_MS;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req.destroy();
+      resolve(result);
+    };
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/snapshot', agent: false }, (res) => {
+      const chunks = [];
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > PROBE_MAX_BYTES) finish({ kind: 'foreign' });
+        else chunks.push(chunk);
+      });
+      res.on('end', () => finish(classifyProbe(Buffer.concat(chunks).toString('utf8'), here)));
+      res.on('error', () => finish({ kind: 'foreign' }));
+    });
+    const timer = setTimeout(() => finish({ kind: 'foreign' }), deadlineMs);
+    req.on('error', (e) => finish({ kind: e.code === 'ECONNREFUSED' ? 'none' : 'foreign' }));
+  });
+}
+
+function runProbe({ projectDir, port }) {
+  let here = projectDir;
+  try { here = fs.realpathSync(projectDir); } catch { /* keep the resolved path */ }
+  probe(port, here).then((result) => {
+    process.stdout.write(probeText(result, port, fileURLToPath(import.meta.url)));
+  });
+}
+
 function parseArgs(argv) {
-  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false };
+  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false, probe: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--quiet') out.quiet = true;
+    else if (a === '--probe') out.probe = true;
     else if (a === '--port') out.port = Number(argv[++i]);
     else if (a.startsWith('--port=')) out.port = Number(a.slice(7));
     else out.projectDir = path.resolve(a);
@@ -911,12 +977,16 @@ function main() {
   }
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet]\n  Read-only live panel of the in-flight Constellation workflow.');
+    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Read-only live panel of the in-flight Constellation workflow.\n  --probe prints whether a board for this project runs on the port, then exits.');
     process.exit(0);
   }
   if (!Number.isInteger(args.port) || args.port <= 0) {
     console.error('board: --port must be a positive integer');
     process.exit(1);
+  }
+  if (args.probe) {
+    runProbe(args);
+    return;
   }
   if (args.quiet) {
     // Started by the plugin monitor in every session: stay silent where the harness is absent.
