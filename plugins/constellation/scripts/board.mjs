@@ -27,6 +27,8 @@ const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
 export const READ_CAP_BYTES = 64 * 1024;
 export const CAP_WARNING = `front-matter exceeds ${READ_CAP_BYTES / 1024} KB`;
+const JSON_CAP_BYTES = 1024 * 1024;
+const ROOT_OUTSIDE = '.constellation resolves outside the project';
 const PROBE_TIMEOUT_MS = 1000;
 const PROBE_MAX_BYTES = 8 * 1024 * 1024;
 // A projectDir that may reach Claude's context: absolute, at most 256 characters, no control
@@ -513,24 +515,61 @@ const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 't
 const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
 
 const readBuffer = Buffer.alloc(READ_CAP_BYTES);
+const jsonBuffer = Buffer.alloc(JSON_CAP_BYTES);
 const rejected = (code) => Object.assign(new Error(code), { code });
 
-/**
- * Read at most READ_CAP_BYTES of one work-item file. The real path must stay inside the real
- * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the
- * open of a FIFO from blocking the event loop. Throws an Error whose code names the reason.
- */
-function readPrefix(root, file) {
+/** The real path of a file, which must stay inside the real .constellation/ root. */
+function containedReal(root, file) {
   const real = fs.realpathSync(file);
   if (!real.startsWith(root + path.sep)) throw rejected('outside .constellation');
-  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+  return real;
+}
+
+/**
+ * Resolve the real .constellation/ root of a project. The root is accepted when it lies inside the
+ * real project directory or when its own name is .constellation (a shared root). A missing root
+ * yields { root: null, error: null }.
+ */
+function resolveRoot(projectDir) {
+  let project, root;
+  try {
+    project = fs.realpathSync(projectDir);
+    root = fs.realpathSync(path.join(projectDir, '.constellation'));
+  } catch (e) {
+    return { root: null, error: e.code === 'ENOENT' ? null : `.constellation: unreadable: ${e.code ?? 'error'}` };
+  }
+  const inside = root.startsWith(project + path.sep);
+  if (!inside && path.basename(root) !== '.constellation') return { root: null, error: ROOT_OUTSIDE };
+  return { root, error: null };
+}
+
+/** True when the project holds a contained .constellation root and a regular config.json in it. */
+function hasHarness(projectDir) {
+  const { root } = resolveRoot(projectDir);
+  if (!root) return false;
+  try {
+    return fs.statSync(containedReal(root, path.join(projectDir, '.constellation', 'config.json'))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read at most buffer.length bytes of one file. The real path must stay inside the real
+ * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the open
+ * of a FIFO from blocking the event loop. O_NOFOLLOW makes a swap of the final component to a
+ * symlink after the real-path check fail with ELOOP. Throws an Error whose code names the reason.
+ */
+function readPrefix(root, file, buffer = readBuffer) {
+  const real = containedReal(root, file);
+  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const st = fs.fstatSync(fd);
     if (st.isDirectory()) throw rejected('EISDIR');
     if (!st.isFile()) throw rejected('not a regular file');
     let n = 0;
-    for (let r = 1; r > 0 && n < READ_CAP_BYTES; n += r) r = fs.readSync(fd, readBuffer, n, READ_CAP_BYTES - n, n);
-    return { text: readBuffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
+    for (let r = 1; r > 0 && n < buffer.length; n += r) r = fs.readSync(fd, buffer, n, buffer.length - n, n);
+    return { text: buffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
   } finally {
     fs.closeSync(fd);
   }
@@ -549,9 +588,8 @@ function readWorkItem(kind, dir, name, root) {
 }
 
 /** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
-function scanWorkItems(p) {
-  let root;
-  try { root = fs.realpathSync(p.root); } catch { return []; }
+function scanWorkItems(p, root) {
+  if (!root) return [];
   const nodes = [];
   for (const [kind, key] of WORK_DIRS) {
     let names;
@@ -564,16 +602,19 @@ function scanWorkItems(p) {
   return nodes;
 }
 
-function readJson(file) {
-  // { value, missing, error }
-  let text;
+/** Read one JSON file under the root, at most JSON_CAP_BYTES. Returns { value, missing, error }. */
+function readJson(root, file) {
+  if (!root) return { value: null, missing: true, error: null };
+  let read;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    read = readPrefix(root, file, jsonBuffer);
   } catch (e) {
-    return { value: null, missing: e.code === 'ENOENT', error: e.code === 'ENOENT' ? null : String(e.message) };
+    const missing = e.code === 'ENOENT';
+    return { value: null, missing, error: missing ? null : `unreadable: ${e.code ?? 'error'}` };
   }
+  if (read.truncated) return { value: null, missing: false, error: `exceeds ${JSON_CAP_BYTES / 1024 / 1024} MB` };
   try {
-    return { value: JSON.parse(text), missing: false, error: null };
+    return { value: JSON.parse(read.text), missing: false, error: null };
   } catch (e) {
     return { value: null, missing: false, error: `parse: ${e.message}` };
   }
@@ -595,10 +636,12 @@ function readTail(file, maxLines) {
 export function loadSnapshot(projectDir, prev = null) {
   const p = paths(projectDir);
   const errors = [];
+  const { root, error: rootError } = resolveRoot(projectDir);
+  if (rootError) return { ...emptySnapshot(projectDir), errors: [rootError] };
 
-  const tracksR = readJson(p.tracks);
-  const configR = readJson(p.config);
-  const stateR = readJson(p.state);
+  const tracksR = readJson(root, p.tracks);
+  const configR = readJson(root, p.config);
+  const stateR = readJson(root, p.state);
   if (tracksR.error) errors.push(`tracks.json: ${tracksR.error}`);
   if (configR.error) errors.push(`config.json: ${configR.error}`);
 
@@ -615,7 +658,7 @@ export function loadSnapshot(projectDir, prev = null) {
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
   const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
-  const tree = buildTree(scanWorkItems(p), state);
+  const tree = buildTree(scanWorkItems(p, root), state);
   const transitions = [
     ...collapseBurst(diffStatuses(prev?.tree?.tasks ?? null, tree.tasks)),
     ...(prev?.transitions ?? []),
@@ -990,7 +1033,7 @@ function main() {
   }
   if (args.quiet) {
     // Started by the plugin monitor in every session: stay silent where the harness is absent.
-    if (!fs.existsSync(paths(args.projectDir).config)) process.exit(0);
+    if (!hasHarness(args.projectDir)) process.exit(0);
   } else if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
     console.error(`board: ${args.projectDir}/.constellation not found — pass an initialized project directory`);
     process.exit(1);

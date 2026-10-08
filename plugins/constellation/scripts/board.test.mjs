@@ -815,6 +815,76 @@ test('loadSnapshot: a symlinked .constellation directory still reads its files',
   assert.deepEqual(node.warnings, []);
 });
 
+// A directory outside the project that looks like a project's .constellation/ content.
+function outsideRoot(name = 'home-like') {
+  const out = path.join(mkTmp('board-out-'), name);
+  fs.mkdirSync(path.join(out, 'tasks'), { recursive: true });
+  fs.writeFileSync(path.join(out, 'tasks', '001-a.md'), doc(['status: inbox']));
+  fs.writeFileSync(path.join(out, 'config.json'), '{}');
+  fs.copyFileSync(path.join(here, '..', 'templates', 'tracks.json'), path.join(out, 'tracks.json'));
+  return out;
+}
+
+const symlinkRoot = (target) => {
+  const dir = mkTmp('board-proj-');
+  fs.symlinkSync(target, path.join(dir, '.constellation'));
+  return dir;
+};
+
+test('loadSnapshot: a .constellation symlink that leaves the project is refused with one error', () => {
+  const snap = loadSnapshot(symlinkRoot(outsideRoot()));
+  assert.equal(snap.tree, null);
+  assert.deepEqual(snap.errors, ['.constellation resolves outside the project']);
+  assert.equal(snap.hasTracks, false);
+});
+
+test('loadSnapshot: a .constellation symlink to a directory inside the project reads its files', () => {
+  const dir = mkTmp('board-proj-');
+  const inner = path.join(dir, 'harness');
+  fs.mkdirSync(path.join(inner, 'tasks'), { recursive: true });
+  fs.writeFileSync(path.join(inner, 'tasks', '001-a.md'), doc(['status: inbox']));
+  fs.symlinkSync(inner, path.join(dir, '.constellation'));
+  const snap = loadSnapshot(dir);
+  const node = taskNode(snap.tree, '001-a.md');
+  assert.equal(node.status, 'inbox');
+  assert.deepEqual(node.warnings, []);
+  assert.deepEqual(snap.errors, []);
+});
+
+// Bounded JSON reads. /dev/zero is refused by containment before any open, so this runs in-process.
+const writeJsonFile = (dir, name, value) => fs.writeFileSync(path.join(dir, '.constellation', name), JSON.stringify(value));
+const templateTracks = () => JSON.parse(fs.readFileSync(path.join(here, '..', 'templates', 'tracks.json'), 'utf8'));
+const KB = 1024;
+
+test('loadSnapshot: config.json and tracks.json as symlinks to /dev/zero are refused without a read', { skip: !fs.existsSync('/dev/zero') }, () => {
+  const dir = tmpProject();
+  for (const name of ['config.json', 'tracks.json']) {
+    fs.rmSync(path.join(dir, '.constellation', name));
+    fs.symlinkSync('/dev/zero', path.join(dir, '.constellation', name));
+  }
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, ['tracks.json: unreadable: outside .constellation', 'config.json: unreadable: outside .constellation']);
+  assert.equal(snap.initialized, true);
+  assert.equal(snap.hasTracks, false);
+});
+
+test('loadSnapshot: a tracks.json over 1 MB is an error, not a parse', () => {
+  const dir = tmpProject();
+  writeJsonFile(dir, 'tracks.json', { ...templateTracks(), pad: 'x'.repeat(1100 * KB) });
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, ['tracks.json: exceeds 1 MB']);
+  assert.equal(snap.hasTracks, false);
+});
+
+test('loadSnapshot: a config.json under 1 MB parses', () => {
+  const dir = tmpProject();
+  writeJsonFile(dir, 'config.json', { ...planReviewOn, pad: 'x'.repeat(900 * KB) });
+  writeJsonFile(dir, 'state/current-workflow.json', { track: 'planned', currentStep: 'architect', completedSteps: [] });
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, []);
+  assert.ok(snap.progress.steps.some((s) => s.id === 'plan-review'), 'cross-model config was not parsed');
+});
+
 test('loadSnapshot: a FIFO is rejected without blocking', { skip: !hasMkfifo }, () => {
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
@@ -931,6 +1001,23 @@ test('cli: --quiet without config.json exits 0 and prints nothing', async () => 
     assert.equal(run.stdout, '');
     assert.equal(run.stderr, '');
   } finally { run.child.kill('SIGKILL'); }
+});
+
+test('cli: --quiet stays silent when the root or config.json leaves its container', async () => {
+  const rootOutside = symlinkRoot(outsideRoot());
+  const configOutside = tmpProject();
+  const stray = path.join(mkTmp('board-out-'), 'config.json');
+  fs.writeFileSync(stray, '{}');
+  fs.rmSync(path.join(configOutside, '.constellation', 'config.json'));
+  fs.symlinkSync(stray, path.join(configOutside, '.constellation', 'config.json'));
+  for (const [name, dir] of [['root outside', rootOutside], ['config outside', configOutside]]) {
+    const run = spawnBoard(['--quiet', '--port', String(await freePort()), dir]);
+    try {
+      assert.equal((await run.exit).code, 0, name);
+      assert.equal(run.stdout, '', name);
+      assert.equal(run.stderr, '', name);
+    } finally { run.child.kill('SIGKILL'); }
+  }
 });
 
 test('cli: without --quiet an uninitialized directory still exits 1', async () => {
