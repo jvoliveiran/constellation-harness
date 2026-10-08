@@ -25,8 +25,8 @@ const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
 const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
-const READ_CAP_BYTES = 64 * 1024;
-const CAP_WARNING = 'front-matter exceeds 64 KB';
+export const READ_CAP_BYTES = 64 * 1024;
+export const CAP_WARNING = `front-matter exceeds ${READ_CAP_BYTES / 1024} KB`;
 const PROBE_TIMEOUT_MS = 1000;
 const PROBE_MAX_BYTES = 8 * 1024 * 1024;
 // A projectDir that may reach Claude's context: absolute, at most 256 characters, no control

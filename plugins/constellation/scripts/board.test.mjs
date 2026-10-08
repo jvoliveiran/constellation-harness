@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
+  READ_CAP_BYTES, CAP_WARNING,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -687,8 +688,8 @@ test('loadSnapshot: an unreadable entry is malformed with its code', () => {
   assert.deepEqual(tree.attention, [{ kind: 'task', file: '003-dir.md', flags: ['malformed'], warnings: ['unreadable: EISDIR'] }]);
 });
 
-// Bounded reads. A test whose failure mode is a hang runs the loader in a child process with a
-// hard timeout, so the runner never freezes.
+// Bounded reads. Only a FIFO can hang the loader, so that test runs it in a child process with a
+// hard timeout and the runner never freezes.
 const SNAPSHOT_CHILD_TIMEOUT_MS = 5000;
 function snapshotInChild(dir) {
   const code = `import { loadSnapshot } from ${JSON.stringify(pathToFileURL(path.join(here, 'board.mjs')).href)};`
@@ -701,10 +702,11 @@ function snapshotInChild(dir) {
 const hasMkfifo = process.platform !== 'win32' && spawnSync('mkfifo', ['--help'], { stdio: 'ignore' }).error === undefined;
 const taskNode = (tree, file) => tree.tasks.find((t) => t.file === file);
 
-test('parseFrontMatter: front-matter cut by the read cap warns exceeds 64 KB', () => {
-  const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(70000), 'task', true);
+test('parseFrontMatter: front-matter cut by the read cap warns exceeds the read cap', () => {
+  const r = parseFrontMatter('---\nstatus: inbox\nnote: ' + 'a'.repeat(READ_CAP_BYTES + 1), 'task', true);
   assert.equal(r.malformed, true);
-  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+  assert.equal(CAP_WARNING, 'front-matter exceeds 64 KB');
+  assert.deepEqual(r.warnings, [CAP_WARNING]);
 });
 
 test('parseFrontMatter: a truncated read with full windows keeps the real verdict', () => {
@@ -716,11 +718,11 @@ test('parseFrontMatter: a truncated read with full windows keeps the real verdic
 test('parseFrontMatter: a cut last line is not a closing fence', () => {
   const r = parseFrontMatter('---\nstatus: inbox\n---', 'task', true);
   assert.equal(r.malformed, true);
-  assert.deepEqual(r.warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(r.warnings, [CAP_WARNING]);
 });
 
-test('parseFrontMatter: a cut read with no opening fence warns exceeds 64 KB, a full one warns no front-matter', () => {
-  assert.deepEqual(parseFrontMatter('a'.repeat(70000), 'task', true).warnings, ['front-matter exceeds 64 KB']);
+test('parseFrontMatter: a cut read with no opening fence warns exceeds the read cap, a full one warns no front-matter', () => {
+  assert.deepEqual(parseFrontMatter('a'.repeat(READ_CAP_BYTES + 1), 'task', true).warnings, [CAP_WARNING]);
   assert.deepEqual(parseFrontMatter('plain text\n'.repeat(12) + 'cut', 'task', true).warnings, ['no front-matter']);
   assert.deepEqual(parseFrontMatter('plain text', 'task').warnings, ['no front-matter']);
 });
@@ -750,10 +752,10 @@ test('loadSnapshot: a front-matter that fills most of the read cap still parses'
 test('loadSnapshot: front-matter that crosses the read cap is malformed', () => {
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
-  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-wide.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(70000)]));
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-wide.md'), doc(['status: inbox', 'note: ' + 'a'.repeat(READ_CAP_BYTES + 1)]));
   const { tree } = loadSnapshot(dir);
   const node = taskNode(tree, '001-wide.md');
-  assert.deepEqual(node.warnings, ['front-matter exceeds 64 KB']);
+  assert.deepEqual(node.warnings, [CAP_WARNING]);
   assert.deepEqual(node.flags, ['malformed']);
   assert.deepEqual(tree.attention.map((a) => a.file), ['001-wide.md']);
 });
@@ -762,7 +764,7 @@ test('loadSnapshot: a symlink to /dev/zero is rejected without a read', { skip: 
   const dir = tmpProject();
   fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
   fs.symlinkSync('/dev/zero', path.join(dir, '.constellation', 'tasks', '001-zero.md'));
-  const node = taskNode(snapshotInChild(dir), '001-zero.md');
+  const node = taskNode(loadSnapshot(dir).tree, '001-zero.md');
   assert.deepEqual(node.warnings, ['unreadable: outside .constellation']);
   assert.deepEqual(node.flags, ['malformed']);
 });
