@@ -6,11 +6,12 @@ import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
-  READ_CAP_BYTES, CAP_WARNING,
+  READ_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -909,7 +910,18 @@ const httpRequest = (port, { host, method = 'GET', url = '/api/snapshot' }) => n
   const req = http.request({ host: '127.0.0.1', port, method, path: url, headers: { host }, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
     let body = '';
     res.on('data', (c) => { body += c; });
-    res.on('end', () => resolve({ status: res.statusCode, body }));
+    res.on('end', () => resolve({ status: res.statusCode, body, headers: res.headers }));
+  });
+  req.on('timeout', () => req.destroy(new Error('request timeout')));
+  req.on('error', reject);
+  req.end();
+});
+
+// Opens GET /events and leaves the stream open. The caller destroys `req`.
+const openEvents = (port, host = `127.0.0.1:${port}`) => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path: '/events', headers: { host }, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    res.resume();
+    resolve({ status: res.statusCode, headers: res.headers, req, res });
   });
   req.on('timeout', () => req.destroy(new Error('request timeout')));
   req.on('error', reject);
@@ -955,6 +967,78 @@ test('serve: POST with a correct Host returns 405', async () => {
   await withBoardServer(async (port) => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}`, method: 'POST' });
     assert.equal(r.status, 405);
+  });
+});
+
+const sha256Source = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
+const fetchPage = (port) => httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
+
+test('serve: the page CSP hashes match the inline script and style', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const csp = r.headers['content-security-policy'];
+    const script = /<script>([\s\S]*?)<\/script>/.exec(r.body)[1];
+    const style = /<style>([\s\S]*?)<\/style>/.exec(r.body)[1];
+    const directives = new Set(csp.split('; '));
+    assert.ok(directives.has(`script-src ${sha256Source(script)}`), `script hash is not in: ${csp}`);
+    assert.ok(directives.has(`style-src ${sha256Source(style)}`), `style hash is not in: ${csp}`);
+    for (const directive of ["default-src 'none'", "connect-src 'self'", 'img-src data:', "frame-ancestors 'none'"]) {
+      assert.ok(directives.has(directive), `missing ${directive} in: ${csp}`);
+    }
+    assert.ok(!csp.includes('unsafe-inline'), csp);
+  });
+});
+
+test('serve: the page has no inline style attribute', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    assert.ok(!r.body.includes('style="'), 'the page holds a style attribute that the CSP blocks');
+  });
+});
+
+test('serve: every response carries nosniff', async () => {
+  await withBoardServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    const cases = [
+      ['/ 200', () => httpRequest(port, { host, url: '/' }), 200],
+      ['/api/snapshot 200', () => httpRequest(port, { host }), 200],
+      ['/events 200', () => openEvents(port), 200],
+      ['/nope 404', () => httpRequest(port, { host, url: '/nope' }), 404],
+      ['POST / 405', () => httpRequest(port, { host, method: 'POST', url: '/' }), 405],
+      ['foreign Host 403', () => httpRequest(port, { host: 'attacker.example:' + port }), 403],
+    ];
+    for (const [name, request, status] of cases) {
+      const r = await request();
+      try {
+        assert.equal(r.status, status, name);
+        assert.equal(r.headers['x-content-type-options'], 'nosniff', name);
+      } finally { r.req?.destroy(); }
+    }
+  });
+});
+
+test('serve: the 33rd events client gets 503 and a closed client frees a slot', async () => {
+  await withBoardServer(async (port) => {
+    const open = [];
+    try {
+      for (let i = 0; i < SSE_CLIENT_CAP; i++) {
+        const client = await openEvents(port);
+        open.push(client);
+        assert.equal(client.status, 200, `client ${i + 1}`);
+      }
+      const refused = await openEvents(port);
+      assert.equal(refused.status, 503);
+      assert.equal(refused.headers['x-content-type-options'], 'nosniff');
+      open[0].req.destroy();
+      const freed = await waitFor(async () => {
+        const client = await openEvents(port);
+        if (client.status === 200) return client;
+        client.req.destroy();
+        return null;
+      }, 2000);
+      assert.ok(freed, 'no slot freed within 2 s of a closed client');
+      open.push(freed);
+    } finally { open.forEach((c) => c.req.destroy()); }
   });
 });
 
