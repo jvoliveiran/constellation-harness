@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_PORT = 4411;
+const MAX_PORT = 65535;
 const EVENT_TAIL = 200;
 const DEBOUNCE_MS = 150;
 const POLL_MS = 1500;
@@ -484,7 +485,10 @@ export function classifyProbe(body, here) {
 export function probeText(result, port, boardFile) {
   const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port + 1}\n`;
   if (result.kind === 'running') return `Board running: http://127.0.0.1:${port}\n`;
-  if (result.kind === 'other') return `Port ${port} serves the board of another project: ${result.dir}\n${next}`;
+  if (result.kind === 'other') {
+    const holder = result.dir ? `Port ${port} serves the board of another project: ${result.dir}` : `Port ${port} serves the board of another project.`;
+    return `${holder}\n${next}`;
+  }
   if (result.kind === 'foreign') return `Another service holds port ${port}. It is not a Constellation board.\n${next}`;
   const portFlag = port === DEFAULT_PORT ? '' : ` --port ${port}`;
   return `Board not running.\nThe board starts when the orchestrator skill loads.\nnode "${boardFile}"${portFlag}\n`;
@@ -975,6 +979,10 @@ function probe(port, here) {
       resolve(result);
     };
     const req = http.get({ host: '127.0.0.1', port, path: '/api/snapshot', agent: false }, (res) => {
+      if (res.statusCode !== 200) {
+        finish({ kind: 'foreign' });
+        return;
+      }
       const chunks = [];
       let size = 0;
       res.on('data', (chunk) => {
@@ -990,11 +998,27 @@ function probe(port, here) {
   });
 }
 
+/**
+ * True when dir is a project of this user: owned by the current UID and holding a regular
+ * .constellation/config.json. A process on another UID cannot create such a directory, so it
+ * cannot choose the words the probe prints. Windows has no getuid, so it never passes.
+ */
+function ownsProject(dir) {
+  try {
+    if (typeof process.getuid !== 'function') return false;
+    if (fs.statSync(dir).uid !== process.getuid()) return false;
+    return fs.statSync(path.join(dir, '.constellation', 'config.json')).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function runProbe({ projectDir, port }) {
   let here = projectDir;
   try { here = fs.realpathSync(projectDir); } catch { /* keep the resolved path */ }
-  probe(port, here).then((result) => {
-    process.stdout.write(probeText(result, port, fileURLToPath(import.meta.url)));
+  probe(port, here).catch(() => ({ kind: 'foreign' })).then((result) => {
+    const checked = result.kind === 'other' && !ownsProject(result.dir) ? { kind: 'other' } : result;
+    process.stdout.write(probeText(checked, port, fileURLToPath(import.meta.url)));
   });
 }
 
@@ -1023,8 +1047,8 @@ function main() {
     console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Read-only live panel of the in-flight Constellation workflow.\n  --probe prints whether a board for this project runs on the port, then exits.');
     process.exit(0);
   }
-  if (!Number.isInteger(args.port) || args.port <= 0) {
-    console.error('board: --port must be a positive integer');
+  if (!Number.isInteger(args.port) || args.port < 1 || args.port > MAX_PORT) {
+    console.error(`board: --port must be an integer from 1 to ${MAX_PORT}`);
     process.exit(1);
   }
   if (args.probe) {

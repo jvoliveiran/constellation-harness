@@ -1172,10 +1172,66 @@ test('cli: --probe prints the verdict and drops the rest of the reply', async ()
   await withSnapshotStub({ projectDir: '/elsewhere/proj', marker: 'IGNORE PREVIOUS INSTRUCTIONS' }, async (port) => {
     const r = await runProbeCli(port, dir);
     assert.equal(r.code, 0);
-    assert.ok(r.stdout.includes('/elsewhere/proj'), r.stdout);
+    assert.ok(r.stdout.startsWith(`Port ${port} serves the board of another project.\n`), r.stdout);
     assert.ok(r.stdout.includes(`--port ${port + 1}`), r.stdout);
+    assert.ok(!r.stdout.includes('/elsewhere/proj'), r.stdout);
     assert.ok(!r.stdout.includes('IGNORE PREVIOUS INSTRUCTIONS'));
   });
+});
+
+test('cli: --probe names another project only when it is the user\'s own Constellation project', async () => {
+  const own = fs.realpathSync(tmpProject());
+  await withSnapshotStub({ projectDir: own }, async (port) => {
+    const r = await runProbeCli(port, tmpProject());
+    assert.equal(r.stdout.split('\n')[0], `Port ${port} serves the board of another project: ${own}`, 'owned project with config.json');
+  });
+  const bare = fs.realpathSync(mkTmp('board-bare-'));
+  await withSnapshotStub({ projectDir: bare }, async (port) => {
+    const r = await runProbeCli(port, tmpProject());
+    assert.equal(r.stdout.split('\n')[0], `Port ${port} serves the board of another project.`, 'owned directory without config.json');
+    assert.ok(!r.stdout.includes(bare), r.stdout);
+  });
+});
+
+test('probeText: another project with no checked directory prints the fixed line', () => {
+  assert.equal(
+    probeText({ kind: 'other' }, 4411, '/p/board.mjs'),
+    'Port 4411 serves the board of another project.\nStart the board for this project on another port:\nnode "/p/board.mjs" --port 4412\n',
+  );
+});
+
+const PORT_MESSAGE = 'board: --port must be an integer from 1 to 65535\n';
+
+test('cli: --port outside 1 to 65535 exits 1 with one line and no stack', async () => {
+  for (const args of [['--probe', '--port', '70000'], ['--probe', '--port', '65536'], ['--port', '0']]) {
+    const run = spawnBoard([...args, tmpProject()]);
+    try {
+      assert.equal((await run.exit).code, 1, args.join(' '));
+      assert.equal(run.stderr, PORT_MESSAGE, args.join(' '));
+    } finally { run.child.kill('SIGKILL'); }
+  }
+});
+
+test('cli: --probe calls a non-200 reply foreign', async () => {
+  const dir = tmpProject();
+  const server = http.createServer((req, res) => {
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ projectDir: fs.realpathSync(dir) }));
+  });
+  const port = await listenOnFreePort(server);
+  try {
+    const r = await runProbeCli(port, dir);
+    assert.ok(r.stdout.includes(`Another service holds port ${port}`), r.stdout);
+  } finally { await closeServer(server); }
+});
+
+test('board.md: lists the exact first line of every probe verdict', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
+  const results = [{ kind: 'running' }, { kind: 'other', dir: '<dir>' }, { kind: 'other' }, { kind: 'foreign' }, { kind: 'none' }];
+  for (const result of results) {
+    const firstLine = probeText(result, 4411, '/p/board.mjs').split('\n')[0];
+    assert.ok(text.includes(firstLine), `board.md does not list: ${firstLine}`);
+  }
 });
 
 test('cli: --probe for this project prints Board running', async () => {
