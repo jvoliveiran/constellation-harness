@@ -4,7 +4,7 @@ type: feature
 source: software-architect
 related: 002-board-backlog-tree-and-packaging.md
 date-created: 06-10-2026
-last-edit: 06-10-2026
+last-edit: 07-10-2026
 ---
 # Board parser CLI for the portfolio commands
 
@@ -23,3 +23,4 @@ One deterministic parser gives the page and the commands the same answer.
 
 - **One source for the status glyphs.** `board.mjs` holds `GLYPHS` and `PLAN_GLYPHS`, and `commands/backlog.md` holds the same mapping as prose. Define the glyphs once in the extracted module, add one test that every glyph appears in `backlog.md`, and replace the inline `|| '📝'` fallbacks with one `planGlyph(status)` helper. Effort S.
 - **Move the page string out of `board.mjs`.** The file is about 980 lines and mixes parser, tree, differ, server, watcher, CLI, and an HTML page in a string. Move the page to `board.page.html`, read once at startup. No bundler, no template library. Effort M.
+- **Move the probe client out of `board.mjs` too.** Since task 013 the file is about 1036 lines and holds a probe client (`probe`, `classifyProbe`, `probeText`, `runProbe`, `SAFE_DIR`, the `PROBE_*` constants) that shares no state with the server. Move it to a sibling `board-probe.mjs` of about 60 lines in the same extraction. Effort S.

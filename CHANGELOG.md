@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-08
+
+### Changed
+- **`/constellation:board` runs `board.mjs --probe` instead of a curl of the
+  full snapshot** (#013). On guardei-service, the curl put about 119 KB,
+  roughly 31k tokens, into the conversation on every call. The probe prints
+  fixed text for four verdicts. It has an absolute 1 s deadline and an 8 MB
+  cap. The probe narrows what a hostile reply can put into Claude's context. The
+  directory of another project's board is still printed after a character
+  filter. Task 014 tracks the removal of that output.
+- **Needs attention lists real problems only** (#013). An item whose only
+  warnings are unknown fields keeps its `lenient` badge and its row warning.
+  The item stays out of Needs attention. On guardei-service, the count went
+  from 121 to 0 of 210 items.
+- **Behavior change**: when `tasks/` or another work directory is a symlink
+  that points outside `.constellation/`, the board now shows every entry as
+  `unreadable: outside .constellation`.
+
+### Security
+- **Bounded, contained reads of work items** (#013). A symlink must resolve
+  inside `.constellation/`. The board rejects FIFOs, devices, and sockets.
+  Each read has a 64 KB cap. A front-matter block that the cap cuts warns
+  `front-matter exceeds 64 KB`. The board lists each rejected entry as
+  malformed with an `unreadable:` reason.
+
+### Fixed
+- **The feed escapes `tool_name`** (#013). This fixes a gap from phase 1.
+
+### Added
+- **Selftest step 11b** checks that `board.md` uses the probe.
+
+### Known limitations
+- Open follow-up tasks:
+  `.constellation/tasks/014-board-probe-and-containment-follow-ups.md` and
+  `015-board-test-helpers-and-cap-constant.md`. Items 4 to 10 of
+  `008-board-hardening-from-gate-1-review.md` stay open.
+- Plan: `.constellation/plans/013-board-hardening-before-rollout.md`.
+
 ## [1.3.1] - 2026-10-07
 
 ### Fixed

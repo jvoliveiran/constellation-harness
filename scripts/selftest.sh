@@ -214,5 +214,11 @@ else
   say "11. board tests SKIPPED (node 20+ not on PATH) — hook event log checked"
 fi
 
+# 11b. /constellation:board reads the port through the probe, never through curl.
+BOARD_MD="$ROOT/plugins/constellation/commands/board.md"
+grep -q -- '--probe' "$BOARD_MD" || fail "board.md: does not run board.mjs --probe"
+grep -q 'curl' "$BOARD_MD" && fail "board.md: still calls curl — the reply reaches Claude's context"
+say "11b. board command probe checked"
+
 [ "$FAIL" -eq 0 ] && say "selftest: ALL GREEN" || say "selftest: FAILURES ABOVE"
 exit "$FAIL"

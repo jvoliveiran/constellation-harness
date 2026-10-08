@@ -25,6 +25,13 @@ const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
 const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
+const READ_CAP_BYTES = 64 * 1024;
+const CAP_WARNING = 'front-matter exceeds 64 KB';
+const PROBE_TIMEOUT_MS = 1000;
+const PROBE_MAX_BYTES = 8 * 1024 * 1024;
+// A projectDir that may reach Claude's context: absolute, at most 256 characters, no control
+// characters, quotes, backticks, or shell metacharacters. Spaces stay, macOS paths carry them.
+const SAFE_DIR = /^\/[A-Za-z0-9._@+~\/ -]{0,255}$/;
 const TASK_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
 const KNOWN_FIELDS = {
   epic: ['status', 'date-created', 'last-edit'],
@@ -179,15 +186,26 @@ function parseFieldValue(raw) {
   return quoted ? quoted[2] : value;
 }
 
-/** Lenient front-matter parser. Never throws. Returns { fields, warnings, malformed }. */
-export function parseFrontMatter(text, kind) {
-  const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/);
+/**
+ * Lenient front-matter parser. Never throws. Returns { fields, warnings, malformed }.
+ * truncated: the text is a byte-capped prefix, so its last line can be cut and a missing
+ * fence may lie beyond the cap. The cap warning replaces a verdict that the prefix cannot prove.
+ */
+export function parseFrontMatter(text, kind, truncated = false) {
+  const all = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const lines = truncated ? all.slice(0, -1) : all;
   const open = lines.slice(0, FRONT_MATTER_OPEN_WINDOW).indexOf('---');
-  if (open < 0) return { fields: {}, warnings: ['no front-matter'], malformed: true };
+  if (open < 0) {
+    const cut = truncated && lines.length < FRONT_MATTER_OPEN_WINDOW;
+    return { fields: {}, warnings: [cut ? CAP_WARNING : 'no front-matter'], malformed: true };
+  }
   const warnings = open > 0 ? ['title before front-matter'] : [];
   const body = lines.slice(open + 1, open + 1 + FRONT_MATTER_CLOSE_WINDOW);
   const close = body.indexOf('---');
-  if (close < 0) return { fields: {}, warnings: [...warnings, 'unclosed front-matter'], malformed: true };
+  if (close < 0) {
+    const cut = truncated && lines.length < open + 1 + FRONT_MATTER_CLOSE_WINDOW;
+    return { fields: {}, warnings: [...warnings, cut ? CAP_WARNING : 'unclosed front-matter'], malformed: true };
+  }
 
   const fields = {};
   for (const line of body.slice(0, close)) {
@@ -204,8 +222,8 @@ export function parseFrontMatter(text, kind) {
 }
 
 /** Build the wire node for one work-item file. Carries no raw front-matter map. */
-export function toNode(kind, file, text, mtime) {
-  const { fields, warnings, malformed } = parseFrontMatter(text, kind);
+export function toNode(kind, file, text, mtime, truncated = false) {
+  const { fields, warnings, malformed } = parseFrontMatter(text, kind, truncated);
   const base = file.replace(/\.md$/, '');
   const dash = base.indexOf('-');
   const prefix = dash < 0 ? base : base.slice(0, dash);
@@ -283,6 +301,8 @@ function toTaskNode(node, state) {
   return task;
 }
 
+// Unknown fields alone are lenient noise: the row keeps its badge, Needs attention stays for real problems.
+const needsAttention = (n) => n.flags.includes('malformed') || n.warnings.some((w) => !w.startsWith('unknown field: '));
 const summaryOf = ({ kind, file, flags, warnings }) => ({ kind, file, flags, warnings });
 const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
 
@@ -310,7 +330,7 @@ export function buildTree(nodes, state) {
     standaloneTasks: taskTree.orphans.map((t) => t.file),
     orphanPlans: orphanPlans.map((p) => groupNode(p, {})),
     tasks,
-    attention: everyNode.filter((n) => n.flags.length > 0).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(summaryOf),
+    attention: everyNode.filter(needsAttention).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(summaryOf),
     counts,
   };
 }
@@ -437,6 +457,37 @@ export function renderBacklog(tree, esc) {
   return html;
 }
 
+/**
+ * Render one Activity feed entry as an HTML string. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import.
+ */
+export function feedText(e, esc) {
+  if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
+  if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
+  return e.event === 'PostToolUse' ? esc(e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
+}
+
+/**
+ * Judge the reply of a port probe. Only a projectDir that passes SAFE_DIR survives: every other
+ * byte of the reply is dropped, because the reply is untrusted data.
+ */
+export function classifyProbe(body, here) {
+  let dir;
+  try { dir = JSON.parse(body)?.projectDir; } catch { return { kind: 'foreign' }; }
+  if (typeof dir !== 'string' || !SAFE_DIR.test(dir)) return { kind: 'foreign' };
+  return dir === here ? { kind: 'running' } : { kind: 'other', dir };
+}
+
+/** The text that /constellation:board prints for one probe result. */
+export function probeText(result, port, boardFile) {
+  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port + 1}\n`;
+  if (result.kind === 'running') return `Board running: http://127.0.0.1:${port}\n`;
+  if (result.kind === 'other') return `Port ${port} serves the board of another project: ${result.dir}\n${next}`;
+  if (result.kind === 'foreign') return `Another service holds port ${port}. It is not a Constellation board.\n${next}`;
+  const portFlag = port === DEFAULT_PORT ? '' : ` --port ${port}`;
+  return `Board not running.\nThe board starts when the orchestrator skill loads.\nnode "${boardFile}"${portFlag}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem
 // ---------------------------------------------------------------------------
@@ -461,11 +512,34 @@ function paths(projectDir) {
 const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 'tasksDir'], ['plan', 'plansDir']];
 const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
 
-function readWorkItem(kind, dir, name) {
+const readBuffer = Buffer.alloc(READ_CAP_BYTES);
+const rejected = (code) => Object.assign(new Error(code), { code });
+
+/**
+ * Read at most READ_CAP_BYTES of one work-item file. The real path must stay inside the real
+ * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the
+ * open of a FIFO from blocking the event loop. Throws an Error whose code names the reason.
+ */
+function readPrefix(root, file) {
+  const real = fs.realpathSync(file);
+  if (!real.startsWith(root + path.sep)) throw rejected('outside .constellation');
+  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
-    const file = path.join(dir, name);
-    const text = fs.readFileSync(file, 'utf8');
-    return toNode(kind, name, text, fs.statSync(file).mtime.toISOString());
+    const st = fs.fstatSync(fd);
+    if (st.isDirectory()) throw rejected('EISDIR');
+    if (!st.isFile()) throw rejected('not a regular file');
+    let n = 0;
+    for (let r = 1; r > 0 && n < READ_CAP_BYTES; n += r) r = fs.readSync(fd, readBuffer, n, READ_CAP_BYTES - n, n);
+    return { text: readBuffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readWorkItem(kind, dir, name, root) {
+  try {
+    const { text, truncated, mtime } = readPrefix(root, path.join(dir, name));
+    return toNode(kind, name, text, mtime, truncated);
   } catch (e) {
     // ENOENT: a race or a dangling symlink — nothing to show.
     if (e.code === 'ENOENT') return null;
@@ -476,12 +550,14 @@ function readWorkItem(kind, dir, name) {
 
 /** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
 function scanWorkItems(p) {
+  let root;
+  try { root = fs.realpathSync(p.root); } catch { return []; }
   const nodes = [];
   for (const [kind, key] of WORK_DIRS) {
     let names;
     try { names = fs.readdirSync(p[key]).sort(); } catch { continue; }
     for (const name of names.filter(isWorkFile)) {
-      const node = readWorkItem(kind, p[key], name);
+      const node = readWorkItem(kind, p[key], name, root);
       if (node) nodes.push(node);
     }
   }
@@ -740,6 +816,7 @@ const PAGE = `<!doctype html>
   var snap = null;
   var connected = false, lostAt = null;
   var renderBacklog = ${renderBacklog.toString()};
+  var feedText = ${feedText.toString()};
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
@@ -808,17 +885,12 @@ const PAGE = `<!doctype html>
       if (activity.length) {
         feed += '<h2 style="margin-top:16px">Activity</h2><ul>';
         activity.forEach(function (e) {
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e) + '</span></li>';
+          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
         });
         feed += '</ul>';
       }
     }
     document.getElementById('feed').innerHTML = feed;
-  }
-  function feedText(e) {
-    if (e.kind === 'transition') return '<code>' + esc(e.file) + '</code> ' + esc(e.from == null ? 'new' : e.from) + ' → ' + esc(e.to);
-    if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
-    return e.event === 'PostToolUse' ? (e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
   }
   function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
   function tick() {
@@ -844,12 +916,52 @@ const PAGE = `<!doctype html>
 // CLI
 // ---------------------------------------------------------------------------
 
+/**
+ * GET the snapshot of the board on a port and resolve with a classified result. The deadline is
+ * absolute: the http timeout option is an idle timeout, which a slow drip never triggers.
+ */
+function probe(port, here) {
+  const deadlineMs = Number(process.env.BOARD_PROBE_TIMEOUT_MS) || PROBE_TIMEOUT_MS;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req.destroy();
+      resolve(result);
+    };
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/snapshot', agent: false }, (res) => {
+      const chunks = [];
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > PROBE_MAX_BYTES) finish({ kind: 'foreign' });
+        else chunks.push(chunk);
+      });
+      res.on('end', () => finish(classifyProbe(Buffer.concat(chunks).toString('utf8'), here)));
+      res.on('error', () => finish({ kind: 'foreign' }));
+    });
+    const timer = setTimeout(() => finish({ kind: 'foreign' }), deadlineMs);
+    req.on('error', (e) => finish({ kind: e.code === 'ECONNREFUSED' ? 'none' : 'foreign' }));
+  });
+}
+
+function runProbe({ projectDir, port }) {
+  let here = projectDir;
+  try { here = fs.realpathSync(projectDir); } catch { /* keep the resolved path */ }
+  probe(port, here).then((result) => {
+    process.stdout.write(probeText(result, port, fileURLToPath(import.meta.url)));
+  });
+}
+
 function parseArgs(argv) {
-  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false };
+  const out = { projectDir: process.cwd(), port: DEFAULT_PORT, help: false, quiet: false, probe: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--quiet') out.quiet = true;
+    else if (a === '--probe') out.probe = true;
     else if (a === '--port') out.port = Number(argv[++i]);
     else if (a.startsWith('--port=')) out.port = Number(a.slice(7));
     else out.projectDir = path.resolve(a);
@@ -865,12 +977,16 @@ function main() {
   }
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet]\n  Read-only live panel of the in-flight Constellation workflow.');
+    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Read-only live panel of the in-flight Constellation workflow.\n  --probe prints whether a board for this project runs on the port, then exits.');
     process.exit(0);
   }
   if (!Number.isInteger(args.port) || args.port <= 0) {
     console.error('board: --port must be a positive integer');
     process.exit(1);
+  }
+  if (args.probe) {
+    runProbe(args);
+    return;
   }
   if (args.quiet) {
     // Started by the plugin monitor in every session: stay silent where the harness is absent.
