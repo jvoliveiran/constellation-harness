@@ -489,7 +489,7 @@ export function classifyProbe(body, here) {
 
 /** The text that /constellation:board prints for one probe result. */
 export function probeText(result, port, boardFile) {
-  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port + 1}\n`;
+  const next = `Start the board for this project on another port:\nnode "${boardFile}" --port ${port < MAX_PORT ? port + 1 : port - 1}\n`;
   if (result.kind === 'running') return `Board running: http://127.0.0.1:${port}\n`;
   if (result.kind === 'other') {
     const holder = result.dir ? `Port ${port} serves the board of another project: ${result.dir}` : `Port ${port} serves the board of another project.`;
@@ -525,7 +525,9 @@ const WORK_DIRS = [['epic', 'epicsDir'], ['feature', 'featuresDir'], ['task', 't
 const isWorkFile = (name) => name.endsWith('.md') && !name.startsWith('.');
 
 const readBuffer = Buffer.alloc(READ_CAP_BYTES);
-const jsonBuffer = Buffer.alloc(JSON_CAP_BYTES);
+let jsonBuffer = null;
+// Allocated on the first JSON read, then reused: probe runs and test imports never pay for 1 MB.
+const getJsonBuffer = () => (jsonBuffer ??= Buffer.alloc(JSON_CAP_BYTES));
 const rejected = (code) => Object.assign(new Error(code), { code });
 
 /** The real path of a file, which must stay inside the real .constellation/ root. */
@@ -617,7 +619,7 @@ function readJson(root, file) {
   if (!root) return { value: null, missing: true, error: null };
   let read;
   try {
-    read = readPrefix(root, file, jsonBuffer);
+    read = readPrefix(root, file, getJsonBuffer());
   } catch (e) {
     const missing = e.code === 'ENOENT';
     return { value: null, missing, error: missing ? null : `unreadable: ${e.code ?? 'error'}` };
@@ -1032,15 +1034,23 @@ function probe(port, here) {
 }
 
 /**
- * True when dir is a project of this user: owned by the current UID and holding a regular
- * .constellation/config.json. A process on another UID cannot create such a directory, so it
- * cannot choose the words the probe prints. Windows has no getuid, so it never passes.
+ * True when dir is a project of this user: a real path (no symlink in any component of the text
+ * that the probe prints), a directory owned by the current UID, and a harness project by the same
+ * rule as the --quiet gate. A process on another UID cannot create such a directory, so it cannot
+ * choose the words the probe prints. A symlink would pass a plain stat, because stat checks the
+ * target and the probe prints the link path.
+ * Accepted residual risk: an intermediate component can still be swapped between the realpath and
+ * the lstat calls (see D5 of plan 014).
+ * Cost: a real board that started through a symlinked path gets the fixed line. The next-port
+ * command still prints. Windows has no getuid, so it never passes.
  */
 function ownsProject(dir) {
   try {
     if (typeof process.getuid !== 'function') return false;
-    if (fs.statSync(dir).uid !== process.getuid()) return false;
-    return fs.statSync(path.join(dir, '.constellation', 'config.json')).isFile();
+    if (fs.realpathSync(dir) !== dir) return false;
+    const st = fs.lstatSync(dir);
+    if (!st.isDirectory() || st.uid !== process.getuid()) return false;
+    return hasHarness(dir);
   } catch {
     return false;
   }
