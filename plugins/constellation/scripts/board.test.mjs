@@ -904,6 +904,17 @@ function spawnBoard(args, env = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Polls until the predicate returns a truthy value, then returns it. Returns null at the deadline.
+async function waitFor(predicate, timeoutMs, everyMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() >= deadline) return null;
+    await sleep(everyMs);
+  }
+}
+
 async function withBlocker(fn) {
   const blocker = http.createServer((req, res) => res.end('blocker'));
   const port = await listenOnFreePort(blocker);
@@ -941,30 +952,33 @@ test('cli: without --quiet a taken port still exits 1', async () => {
   });
 });
 
-async function waitForSnapshot(port, deadlineMs) {
-  const deadline = Date.now() + deadlineMs;
-  for (;;) {
+function waitForSnapshot(port, deadlineMs) {
+  return waitFor(async () => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}` }).catch(() => null);
-    if (r?.status === 200 && r.body.includes('projectDir')) return JSON.parse(r.body);
-    if (Date.now() > deadline) return null;
-    await sleep(100);
-  }
+    return r?.status === 200 && r.body.includes('projectDir') ? JSON.parse(r.body) : null;
+  }, deadlineMs);
 }
+
+// The child must outlive three standby windows without exiting. A fixed window is the only signal:
+// --quiet prints nothing when it stands by.
+const STANDBY_TEST_MS = 200;
+const STANDBY_DWELL_MS = 3 * STANDBY_TEST_MS;
+const TAKEOVER_DEADLINE_MS = 5000;
 
 test('cli: --quiet on a taken port stands by, then takes over', async () => {
   await withBlocker(async (port, release) => {
     const dir = tmpProject();
-    const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: '200' });
+    const run = spawnBoard(['--quiet', '--port', String(port), dir], { BOARD_STANDBY_MS: String(STANDBY_TEST_MS) });
     try {
-      await sleep(600);
-      assert.equal(run.child.exitCode, null, 'child still alive');
-      assert.equal(run.stdout, '');
-      assert.equal(run.stderr, '');
+      const exited = await waitFor(() => run.child.exitCode !== null, STANDBY_DWELL_MS);
+      assert.equal(exited, null, 'child exited during standby');
       const blocked = await httpRequest(port, { host: `127.0.0.1:${port}` });
       assert.equal(blocked.body, 'blocker');
       await release();
-      const snap = await waitForSnapshot(port, 2000);
+      const snap = await waitForSnapshot(port, TAKEOVER_DEADLINE_MS);
       assert.equal(snap?.projectDir, dir);
+      assert.equal(run.stdout, '');
+      assert.equal(run.stderr, '');
     } finally { run.child.kill('SIGKILL'); }
   });
 });
@@ -1003,12 +1017,11 @@ test('cli: a task status edit reaches the snapshot feed with its timestamp', asy
     const first = await waitForSnapshot(port, 3000);
     assert.equal(first?.tree.tasks[0].status, 'refined');
     writeItem(dir, 'tasks', '001-a.md', ['status: in-progress']);
-    const deadline = Date.now() + 3000;
-    let snap = first;
-    while (snap.transitions.length === 0 && Date.now() < deadline) {
-      await sleep(100);
-      snap = await waitForSnapshot(port, 500);
-    }
+    const snap = await waitFor(async () => {
+      const next = await waitForSnapshot(port, 500);
+      return next?.transitions.length > 0 ? next : null;
+    }, 3000);
+    assert.ok(snap, 'no transition reached the snapshot within 3 s');
     assert.equal(snap.transitions.length, 1);
     assert.deepEqual([snap.transitions[0].file, snap.transitions[0].from, snap.transitions[0].to], ['001-a.md', 'refined', 'in-progress']);
     assert.ok(!Number.isNaN(Date.parse(snap.transitions[0].ts)));
