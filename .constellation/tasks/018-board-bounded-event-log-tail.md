@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: f70b84c5b752ad5d567a7a6628ebd025a39a707e
 type: fix
 source: software-architect
 related: 014-board-probe-and-containment-follow-ups.md
