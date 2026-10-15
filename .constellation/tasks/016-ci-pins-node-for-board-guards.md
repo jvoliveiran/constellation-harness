@@ -1,10 +1,10 @@
 ---
-status: inbox
+status: in-progress
 type: fix
 source: security-analyst
 related: 015-board-test-helpers-and-cap-constant.md
 date-created: 08-10-2026
-last-edit: 08-10-2026
+last-edit: 15-10-2026
 ---
 # CI pins Node so the board guards cannot skip
 

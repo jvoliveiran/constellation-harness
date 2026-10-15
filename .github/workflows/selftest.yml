@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pin Node: the board guards (step 11) skip without Node 20+, and the
+      # runner image's Node version is not guaranteed. Node 24 is active LTS.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       # jq + bash are preinstalled on ubuntu runners; the claude CLI is not —
       # selftest.sh skips plugin validation automatically when it's absent.
       - run: scripts/selftest.sh

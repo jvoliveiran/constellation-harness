@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **CI pins Node, so the board guards cannot skip** (#016). The selftest
+  workflow installs Node 24 before it runs `scripts/selftest.sh`. Step 11 now
+  fails when `CI=true` and Node 20+ is absent. Local runs still skip.
+
 ## [1.3.3] - 2026-10-08
 
 ### Security
