@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: d91433ec4761cafa796065e82033900a626f9583
 type: fix
 source: security-analyst
 related: 014-board-probe-and-containment-follow-ups.md
