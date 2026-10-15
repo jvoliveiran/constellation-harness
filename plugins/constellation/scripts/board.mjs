@@ -1099,14 +1099,17 @@ const MODE_STICKY = 0o1000;
 /**
  * True when no other UID can rename an entry inside this directory. A root-owned directory that
  * group or other can write to, without the sticky bit, fails. The sticky bit (as on /tmp) limits
- * rename to the entry owner. Directories of the user are tested for other-write only: on Linux a
- * private user group makes mode 775 common, and a rename there needs a member of that group.
+ * rename to the entry owner.
  */
 function isRenameSafeRootOwnedDir(st) {
   return !(st.mode & MODE_GROUP_OTHER_WRITE) || Boolean(st.mode & MODE_STICKY);
 }
 
-/** Other-writable without the sticky bit: any UID can rename entries inside. */
+/**
+ * Other-writable without the sticky bit: any UID can rename entries inside. Directories of the
+ * user are tested for this only: on Linux a private user group makes mode 775 common, and a
+ * rename there needs a member of that group.
+ */
 function isOtherWritableWithoutSticky(st) {
   return Boolean(st.mode & MODE_OTHER_WRITE) && !(st.mode & MODE_STICKY);
 }
@@ -1133,11 +1136,13 @@ function pathPrefixes(dir) {
  * trusted, only the user or root can rename inside it. So every later lookup of the same text,
  * including the realpath calls in hasHarness(dir), sees only state that the user or root made.
  * A root-owned component that group or other can write to, without the sticky bit, fails
- * (see isRenameSafeRootOwnedDir). A user-owned component that other can write to, without the
- * sticky bit, also fails.
+ * (see isRenameSafeRootOwnedDir). A non-final user-owned component that other can write to,
+ * without the sticky bit, also fails. The final component is exempt: its content decides only the
+ * hasHarness result, while the trusted prefixes already fix the printed text.
  * Accepted residuals: a user-owned component that is group-writable with a shared group (for
- * example macOS staff), macOS ACLs that grant rename rights outside the mode bits, and
- * filesystems that report a false owner (FUSE allow_other, network mounts). Root and the
+ * example macOS staff), macOS ACLs that grant rename rights outside the mode bits, filesystems
+ * that report a false owner (FUSE allow_other, network mounts), and a project directory that
+ * other UIDs can write, which lets them flip the hasHarness result. Root and the
  * processes of the user are trusted. Windows always gets the fixed line.
  * Cost: a real board that started through a symlinked path gets the fixed line. The next-port
  * command still prints. Windows has no getuid, so it never passes.

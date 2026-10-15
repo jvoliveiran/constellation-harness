@@ -6,7 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-10-15
+
 ### Security
+- **The probe owner check walks every path component** (#020). Each
+  component from `/` down to the project must be a real directory, not a
+  symlink. The user or root must own it. The project directory itself must
+  belong to the user. This closes the swap race that a process on another
+  UID could win between the checks.
+- **The walk also refuses components that another UID can rename in**
+  (#020). It refuses a root-owned component that group or other can write
+  without the sticky bit. It refuses a user-owned parent that other can
+  write without the sticky bit. `/tmp` and `/private/tmp` stay accepted.
 - **The board reads the event log through a bounded, contained tail** (#018).
   `metrics/events.jsonl` must resolve inside `.constellation/` and be a
   regular file. The board opens it with `O_NOFOLLOW` and reads at most the
@@ -26,12 +37,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Behavior change: a work directory that is not a directory, or is
   unreadable, shows `<dir>: unreadable: <code>`** (#018). Version 1.3.3
   skipped it in silence. A missing directory stays silent.
-- The board test count grows from 125 to 133 (#018).
+- The board test count grows from 125 to 138 (#018, #020).
 
 ### Fixed
 - **CI pins Node, so the board guards cannot skip** (#016). The selftest
   workflow installs Node 24 before it runs `scripts/selftest.sh`. Step 11 now
   fails when `CI=true` and Node 20+ is absent. Local runs still skip.
+
+### Known limitations
+- The probe owner walk trusts the mode bits that `lstat` reports (#020). It
+  does not see these cases:
+  - A user-owned component that a shared group can write, for example the
+    macOS `staff` group.
+  - A macOS ACL that gives another user the right to rename.
+  - A filesystem that reports a false owner, for example a FUSE mount with
+    `allow_other` or a network mount.
+  - A project directory that other UIDs can write. Another UID can then
+    change the yes or no result of the harness check, but not the printed
+    path.
+- Windows has no `getuid`, so the probe always prints the fixed line.
+- Open follow-up tasks in `.constellation/tasks/`:
+  - `017-monitor-start-before-workspace-trust.md`: monitors run before
+    workspace trust.
+  - `019-board-test-helper-and-read-buffer-cleanup.md`: test helper,
+    read-buffer cleanup, and one shared read loop.
+  - `021-board-tail-read-errors-and-contained-stamps.md`: tail read errors
+    stay local, and poll stamps follow containment.
 
 ## [1.3.3] - 2026-10-08
 
