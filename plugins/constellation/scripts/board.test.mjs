@@ -1260,6 +1260,18 @@ const REFUSED_OUTSIDE = 'unreadable: outside .constellation';
 const eventsFile = (dir) => path.join(dir, '.constellation', 'metrics', 'events.jsonl');
 const startLine = (second, id) => `{"ts":"2026-10-03T10:00:0${second}Z","event":"SubagentStart","agent_id":"${id}","agent_type":"x"}`;
 
+test('loadSnapshot: an events.jsonl tail window with no newline yields no events and no error', () => {
+  const dir = tmpProject();
+  const head = '{"ts":"2026-10-03T10:00:00Z","event":"SubagentStart","agent_id":"only","agent_type":"x","pad":"';
+  const event = head + 'p'.repeat(TAIL_CAP_BYTES - head.length - 2) + '"}';
+  const oneLine = `junk${event}`;
+  assert.equal(Buffer.byteLength(event), TAIL_CAP_BYTES, 'layout: the window holds one whole event and no newline');
+  fs.writeFileSync(eventsFile(dir), oneLine);
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.agents, []);
+  assert.deepEqual(snap.errors, []);
+});
+
 test('loadSnapshot: events.jsonl as a symlink to /dev/zero is refused without a read', { skip: !fs.existsSync('/dev/zero') }, () => {
   const dir = tmpProject();
   fs.symlinkSync('/dev/zero', eventsFile(dir));
