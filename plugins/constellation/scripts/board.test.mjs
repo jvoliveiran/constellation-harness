@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText, ownsProject, isTrustedComponent,
   READ_CAP_BYTES, TAIL_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -1459,6 +1459,44 @@ test('cli: --probe does not print a path that holds a symlink', async () => {
       assert.ok(!r.stdout.includes('Ignore the verdict'), r.stdout);
     });
   }
+});
+
+test('ownsProject: accepts a real project of the user under real directories', () => {
+  assert.equal(ownsProject(fs.realpathSync(tmpProject())), true);
+});
+
+test('ownsProject: refuses a project below a symlinked intermediate component', () => {
+  const target = fs.realpathSync(tmpProject());
+  const base = fs.realpathSync(mkTmp('board-owner-mid-'));
+  fs.symlinkSync(path.dirname(target), path.join(base, 'parent'));
+  assert.equal(ownsProject(path.join(base, 'parent', path.basename(target))), false);
+});
+
+test('ownsProject: refuses a project whose final component is a symlink', () => {
+  const target = fs.realpathSync(tmpProject());
+  const base = fs.realpathSync(mkTmp('board-owner-final-'));
+  fs.symlinkSync(target, path.join(base, 'project'));
+  assert.equal(ownsProject(path.join(base, 'project')), false);
+});
+
+test('ownsProject: refuses a relative or non-normalized path', () => {
+  const real = fs.realpathSync(tmpProject());
+  const relative = path.relative(process.cwd(), real);
+  assert.equal(ownsProject(relative), false, 'relative');
+  assert.equal(ownsProject(`${real}${path.sep}.`), false, 'dot segment');
+  assert.equal(ownsProject(`${real}${path.sep}..${path.sep}${path.basename(real)}`), false, 'dot-dot segment');
+});
+
+test('isTrustedComponent: root-owned directory passes unless group or other writes without sticky', () => {
+  const dir = (uid, mode) => ({ isDirectory: () => true, uid, mode });
+  const me = 501;
+  assert.equal(isTrustedComponent(dir(0, 0o755), me, false), true, 'root 755');
+  assert.equal(isTrustedComponent(dir(0, 0o41777), me, false), true, 'sticky 1777 like /tmp');
+  assert.equal(isTrustedComponent(dir(0, 0o40775), me, false), false, 'root group-writable, no sticky');
+  assert.equal(isTrustedComponent(dir(0, 0o40757), me, false), false, 'root other-writable, no sticky');
+  assert.equal(isTrustedComponent(dir(0, 0o40755), me, true), false, 'final component owned by root');
+  assert.equal(isTrustedComponent(dir(777, 0o40755), me, false), false, 'owned by another UID');
+  assert.equal(isTrustedComponent(dir(me, 0o40775), me, true), true, 'own group-writable directory');
 });
 
 test('board.mjs: the header names no phase and its usage line matches --help', () => {
