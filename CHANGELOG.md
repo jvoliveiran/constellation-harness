@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Behavior change: a work directory that is not a directory, or is
   unreadable, shows `<dir>: unreadable: <code>`** (#018). Version 1.3.3
   skipped it in silence. A missing directory stays silent.
-- The board test count grows from 125 to 132 (#018).
+- The board test count grows from 125 to 133 (#018).
 
 ### Fixed
 - **CI pins Node, so the board guards cannot skip** (#016). The selftest
