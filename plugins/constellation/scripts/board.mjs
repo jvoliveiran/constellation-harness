@@ -1093,23 +1093,29 @@ function probe(port, here) {
 
 const ROOT_UID = 0;
 const MODE_GROUP_OTHER_WRITE = 0o022;
+const MODE_OTHER_WRITE = 0o002;
 const MODE_STICKY = 0o1000;
 
 /**
  * True when no other UID can rename an entry inside this directory. A root-owned directory that
  * group or other can write to, without the sticky bit, fails. The sticky bit (as on /tmp) limits
- * rename to the entry owner. Directories of the user are not tested: on Linux a private user
- * group makes mode 775 common, and a rename there needs a member of that group.
+ * rename to the entry owner. Directories of the user are tested for other-write only: on Linux a
+ * private user group makes mode 775 common, and a rename there needs a member of that group.
  */
-export function isRenameSafeRootDir(st) {
+function isRenameSafeRootOwnedDir(st) {
   return !(st.mode & MODE_GROUP_OTHER_WRITE) || Boolean(st.mode & MODE_STICKY);
+}
+
+/** Other-writable without the sticky bit: any UID can rename entries inside. */
+function isOtherWritableWithoutSticky(st) {
+  return Boolean(st.mode & MODE_OTHER_WRITE) && !(st.mode & MODE_STICKY);
 }
 
 /** True when the lstat of one path component is a trusted directory. A link fails isDirectory(). */
 export function isTrustedComponent(st, uid, isFinal) {
   if (!st.isDirectory()) return false;
-  if (st.uid === uid) return true;
-  return !isFinal && st.uid === ROOT_UID && isRenameSafeRootDir(st);
+  if (st.uid === uid) return isFinal || !isOtherWritableWithoutSticky(st);
+  return !isFinal && st.uid === ROOT_UID && isRenameSafeRootOwnedDir(st);
 }
 
 /** Every prefix of an absolute normalized path, from the root down to the path itself. */
@@ -1123,18 +1129,23 @@ function pathPrefixes(dir) {
  * real directory (never a symlink), owned by the current UID or by root, with the final component
  * owned by the current UID, and a harness project by the same rule as the --quiet gate.
  * A symlink would pass a plain stat, because stat checks the target and the probe prints the link
- * path. The walk also closes the swap race: a process on another UID could rename an intermediate
- * component between a symlink and a directory, but it owns no component and cannot rename inside
- * one. A root-owned component that group or other can write to, without the sticky bit, fails for
- * the same reason (see isRenameSafeRootDir). Each lstat reads the component itself, so a swap
- * between two calls cannot change which owner the walk checks.
+ * path. The walk also closes the swap race by induction. It runs top-down. Once a prefix is
+ * trusted, only the user or root can rename inside it. So every later lookup of the same text,
+ * including the realpath calls in hasHarness(dir), sees only state that the user or root made.
+ * A root-owned component that group or other can write to, without the sticky bit, fails
+ * (see isRenameSafeRootOwnedDir). A user-owned component that other can write to, without the
+ * sticky bit, also fails.
+ * Accepted residuals: a user-owned component that is group-writable with a shared group (for
+ * example macOS staff), macOS ACLs that grant rename rights outside the mode bits, and
+ * filesystems that report a false owner (FUSE allow_other, network mounts). Root and the
+ * processes of the user are trusted. Windows always gets the fixed line.
  * Cost: a real board that started through a symlinked path gets the fixed line. The next-port
  * command still prints. Windows has no getuid, so it never passes.
  */
 export function ownsProject(dir) {
   try {
     if (typeof process.getuid !== 'function') return false;
-    if (!path.isAbsolute(dir) || path.resolve(dir) !== dir) return false;
+    if (path.resolve(dir) !== dir) return false;
     const uid = process.getuid();
     const prefixes = pathPrefixes(dir);
     const trusted = prefixes.every((prefix, i) => (
