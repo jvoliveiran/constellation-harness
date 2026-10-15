@@ -204,12 +204,15 @@ rm -rf "$GDTMP"
 say "10. git guard destructive-discard checked"
 
 # 11. Board phase 1 — the hook event logger and the board's pure functions. The hook test
-#     needs jq (it self-skips otherwise); the board tests need Node 20+ (skipped without).
+#     needs jq (it self-skips otherwise); the board tests need Node 20+. Without Node 20+ they
+#     are skipped locally, but FAIL when CI=true so a missing Node cannot pass silently.
 bash "$ROOT/plugins/constellation/scripts/log-event.test.sh" >/dev/null 2>&1 || fail "log-event.sh tests"
 if command -v node >/dev/null 2>&1 && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 20')" = "true" ]; then
   node --test "$ROOT"/plugins/constellation/scripts/*.test.mjs >/dev/null 2>&1 || fail "board.mjs tests (node --test)"
   node --check "$ROOT/plugins/constellation/scripts/board.mjs" 2>/dev/null || fail "board.mjs syntax"
   say "11. board + hook event log checked"
+elif [ "${CI:-}" = "true" ]; then
+  fail "board tests need node 20+ on PATH in CI (add actions/setup-node)"
 else
   say "11. board tests SKIPPED (node 20+ not on PATH) — hook event log checked"
 fi
