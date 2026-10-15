@@ -1091,24 +1091,72 @@ function probe(port, here) {
   });
 }
 
+const ROOT_UID = 0;
+const MODE_GROUP_OTHER_WRITE = 0o022;
+const MODE_OTHER_WRITE = 0o002;
+const MODE_STICKY = 0o1000;
+
 /**
- * True when dir is a project of this user: a real path (no symlink in any component of the text
- * that the probe prints), a directory owned by the current UID, and a harness project by the same
- * rule as the --quiet gate. A process on another UID cannot create such a directory, so it cannot
- * choose the words the probe prints. A symlink would pass a plain stat, because stat checks the
- * target and the probe prints the link path.
- * Accepted residual risk: an intermediate component can still be swapped between the realpath and
- * the lstat calls (see D5 of plan 014).
+ * True when no other UID can rename an entry inside this directory. A root-owned directory that
+ * group or other can write to, without the sticky bit, fails. The sticky bit (as on /tmp) limits
+ * rename to the entry owner.
+ */
+function isRenameSafeRootOwnedDir(st) {
+  return !(st.mode & MODE_GROUP_OTHER_WRITE) || Boolean(st.mode & MODE_STICKY);
+}
+
+/**
+ * Other-writable without the sticky bit: any UID can rename entries inside. Directories of the
+ * user are tested for this only: on Linux a private user group makes mode 775 common, and a
+ * rename there needs a member of that group.
+ */
+function isOtherWritableWithoutSticky(st) {
+  return Boolean(st.mode & MODE_OTHER_WRITE) && !(st.mode & MODE_STICKY);
+}
+
+/** True when the lstat of one path component is a trusted directory. A link fails isDirectory(). */
+export function isTrustedComponent(st, uid, isFinal) {
+  if (!st.isDirectory()) return false;
+  if (st.uid === uid) return isFinal || !isOtherWritableWithoutSticky(st);
+  return !isFinal && st.uid === ROOT_UID && isRenameSafeRootOwnedDir(st);
+}
+
+/** Every prefix of an absolute normalized path, from the root down to the path itself. */
+function pathPrefixes(dir) {
+  const parts = dir.split(path.sep).filter(Boolean);
+  return [path.sep, ...parts.map((_, i) => path.sep + parts.slice(0, i + 1).join(path.sep))];
+}
+
+/**
+ * True when dir is a project of this user: an absolute normalized path whose every component is a
+ * real directory (never a symlink), owned by the current UID or by root, with the final component
+ * owned by the current UID, and a harness project by the same rule as the --quiet gate.
+ * A symlink would pass a plain stat, because stat checks the target and the probe prints the link
+ * path. The walk also closes the swap race by induction. It runs top-down. Once a prefix is
+ * trusted, only the user or root can rename inside it. So every later lookup of the same text,
+ * including the realpath calls in hasHarness(dir), sees only state that the user or root made.
+ * A root-owned component that group or other can write to, without the sticky bit, fails
+ * (see isRenameSafeRootOwnedDir). A non-final user-owned component that other can write to,
+ * without the sticky bit, also fails. The final component is exempt: its content decides only the
+ * hasHarness result, while the trusted prefixes already fix the printed text.
+ * Accepted residuals: a user-owned component that is group-writable with a shared group (for
+ * example macOS staff), macOS ACLs that grant rename rights outside the mode bits, filesystems
+ * that report a false owner (FUSE allow_other, network mounts), and a project directory that
+ * other UIDs can write, which lets them flip the hasHarness result. Root and the
+ * processes of the user are trusted. Windows always gets the fixed line.
  * Cost: a real board that started through a symlinked path gets the fixed line. The next-port
  * command still prints. Windows has no getuid, so it never passes.
  */
-function ownsProject(dir) {
+export function ownsProject(dir) {
   try {
     if (typeof process.getuid !== 'function') return false;
-    if (fs.realpathSync(dir) !== dir) return false;
-    const st = fs.lstatSync(dir);
-    if (!st.isDirectory() || st.uid !== process.getuid()) return false;
-    return hasHarness(dir);
+    if (path.resolve(dir) !== dir) return false;
+    const uid = process.getuid();
+    const prefixes = pathPrefixes(dir);
+    const trusted = prefixes.every((prefix, i) => (
+      isTrustedComponent(fs.lstatSync(prefix), uid, i === prefixes.length - 1)
+    ));
+    return trusted && hasHarness(dir);
   } catch {
     return false;
   }

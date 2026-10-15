@@ -1,10 +1,10 @@
 ---
-status: inbox
+status: in-progress
 type: fix
 source: security-analyst
 related: 014-board-probe-and-containment-follow-ups.md
 date-created: 08-10-2026
-last-edit: 08-10-2026
+last-edit: 15-10-2026
 ---
 # Board probe: an owner walk of every path component closes the swap race
 
