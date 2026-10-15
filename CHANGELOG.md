@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **The board reads the event log through a bounded, contained tail** (#018).
+  `metrics/events.jsonl` must resolve inside `.constellation/` and be a
+  regular file. The board opens it with `O_NOFOLLOW` and reads at most the
+  last 256 KB. It drops the first line of the window when the window cuts
+  that line. A refused file shows `events.jsonl: unreadable: <reason>` and an
+  empty feed. This closes the 1.3.3 known limitation.
+- **The board lists, polls, and watches only work directories inside
+  `.constellation/`** (#018). `epics/`, `features/`, `tasks/`, and `plans/`
+  must resolve inside the real root. A refused directory shows one line,
+  `<dir>: unreadable: outside .constellation`, and none of its file names.
+
+### Changed
+- **Behavior change: a work directory symlink that leaves `.constellation/`
+  shows one error line instead of one row per file** (#018). Version 1.3.3
+  listed each name with `unreadable: outside .constellation`. A symlink to a
+  directory inside `.constellation/` still works.
+- **Behavior change: a work directory that is not a directory, or is
+  unreadable, shows `<dir>: unreadable: <code>`** (#018). Version 1.3.3
+  skipped it in silence. A missing directory stays silent.
+- The board test count grows from 125 to 132 (#018).
+
 ### Fixed
 - **CI pins Node, so the board guards cannot skip** (#016). The selftest
   workflow installs Node 24 before it runs `scripts/selftest.sh`. Step 11 now
