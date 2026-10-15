@@ -4,7 +4,7 @@ type: debt
 source: dx-analyst
 related: 014-board-probe-and-containment-follow-ups.md
 date-created: 08-10-2026
-last-edit: 08-10-2026
+last-edit: 15-10-2026
 ---
 # Board test helper and read-buffer cleanup
 
@@ -17,3 +17,7 @@ last-edit: 08-10-2026
 - Change `readPrefix` to take a byte cap, `readPrefix(root, file, cap = READ_CAP_BYTES)`, and allocate per read. This removes the shared-buffer hazard. The cost is a short-lived allocation for three small reads per refresh.
 
 **Effort**: S — **Category**: duplication
+
+## Addition from the task 018 review (15-10-2026)
+
+**Share one read loop.** `readPrefix` and the new `readTail` hold the same fill-the-buffer loop. They differ only in the file position (`n` against `start + n`). Add `readFully(fd, buffer, start = 0)` that holds the loop once and returns the byte count. Do this in the same edit as the `readPrefix` cap change, because both touch the same lines.
