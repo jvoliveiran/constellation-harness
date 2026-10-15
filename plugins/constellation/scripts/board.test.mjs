@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText,
-  READ_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
+  READ_CAP_BYTES, TAIL_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1249,6 +1249,108 @@ test('cli: a task status edit reaches the snapshot feed with its timestamp', asy
     assert.deepEqual([snap.transitions[0].file, snap.transitions[0].from, snap.transitions[0].to], ['001-a.md', 'refined', 'in-progress']);
     assert.ok(!Number.isNaN(Date.parse(snap.transitions[0].ts)));
     assert.equal(snap.feed[0].kind, 'transition');
+  } finally { run.child.kill('SIGKILL'); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 018 — bounded, contained event-log tail and contained work directories
+// ---------------------------------------------------------------------------
+
+const REFUSED_OUTSIDE = 'unreadable: outside .constellation';
+const eventsFile = (dir) => path.join(dir, '.constellation', 'metrics', 'events.jsonl');
+const startLine = (second, id) => `{"ts":"2026-10-03T10:00:0${second}Z","event":"SubagentStart","agent_id":"${id}","agent_type":"x"}`;
+
+test('loadSnapshot: events.jsonl as a symlink to /dev/zero is refused without a read', { skip: !fs.existsSync('/dev/zero') }, () => {
+  const dir = tmpProject();
+  fs.symlinkSync('/dev/zero', eventsFile(dir));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, [`events.jsonl: ${REFUSED_OUTSIDE}`]);
+  assert.deepEqual(snap.agents, []);
+  assert.deepEqual(snap.activity, []);
+});
+
+test('loadSnapshot: events.jsonl keeps the last 256 KB and drops the cut first line', () => {
+  const dir = tmpProject();
+  const old = startLine(0, 'old');
+  const last = startLine(2, 'new');
+  const cutHead = '{"ts":"2026-10-03T10:00:01Z","event":"SubagentStart","agent_id":"cut","agent_type":"x","pad":"';
+  const cut = cutHead + 'p'.repeat(TAIL_CAP_BYTES - last.length - 2 - cutHead.length - 2) + '"}';
+  const file = `${old}\n${'x'.repeat(10)}${cut}\n${last}\n`;
+  assert.equal(Buffer.byteLength(file) - TAIL_CAP_BYTES, old.length + 1 + 10, 'layout: the window starts at the cut line');
+  fs.writeFileSync(eventsFile(dir), file);
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.agents.map((a) => a.agent_id), ['new']);
+  assert.deepEqual(snap.errors, []);
+});
+
+test('loadSnapshot: a metrics symlink that leaves the project reads no events', () => {
+  const dir = tmpProject();
+  const outside = mkTmp('board-outside-');
+  fs.writeFileSync(path.join(outside, 'events.jsonl'), startLine(0, 'leak') + '\n');
+  fs.rmSync(path.join(dir, '.constellation', 'metrics'), { recursive: true });
+  fs.symlinkSync(outside, path.join(dir, '.constellation', 'metrics'));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, [`events.jsonl: ${REFUSED_OUTSIDE}`]);
+  assert.deepEqual(snap.agents, []);
+});
+
+test('loadSnapshot: an events.jsonl directory is an error, not a feed', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(eventsFile(dir));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(snap.errors, ['events.jsonl: unreadable: EISDIR']);
+  assert.deepEqual(snap.agents, []);
+});
+
+test('loadSnapshot: a work directory symlink that leaves the project is skipped with one error', () => {
+  const dir = tmpProject();
+  for (const sub of ['epics', 'features', 'tasks', 'plans']) {
+    const outside = mkTmp(`board-outside-${sub}-`);
+    fs.writeFileSync(path.join(outside, '001-a.md'), doc(['status: inbox']));
+    fs.symlinkSync(outside, path.join(dir, '.constellation', sub));
+  }
+  const snap = loadSnapshot(dir);
+  assert.deepEqual(
+    [snap.tree.epics, snap.tree.orphanFeatures, snap.tree.tasks, snap.tree.orphanPlans],
+    [[], [], [], []],
+  );
+  assert.deepEqual(snap.errors, ['epics', 'features', 'tasks', 'plans'].map((sub) => `${sub}: ${REFUSED_OUTSIDE}`));
+  assert.ok(!JSON.stringify(snap).includes('001-a.md'), 'a file name from an outside directory leaked');
+});
+
+test('loadSnapshot: a work directory symlink inside .constellation reads its files', () => {
+  const dir = tmpProject();
+  const archive = path.join(dir, '.constellation', 'archive', 'tasks');
+  fs.mkdirSync(archive, { recursive: true });
+  fs.writeFileSync(path.join(archive, '001-a.md'), doc(['status: inbox']));
+  fs.symlinkSync(archive, path.join(dir, '.constellation', 'tasks'));
+  const snap = loadSnapshot(dir);
+  const node = taskNode(snap.tree, '001-a.md');
+  assert.equal(node.status, 'inbox');
+  assert.deepEqual(node.warnings, []);
+  assert.deepEqual(snap.errors, []);
+});
+
+test('cli: a work directory that leaves the project is neither listed nor watched', async () => {
+  const dir = tmpProject();
+  const outside = mkTmp('board-outside-tasks-');
+  fs.writeFileSync(path.join(outside, '001-a.md'), doc(['status: inbox']));
+  fs.symlinkSync(outside, path.join(dir, '.constellation', 'tasks'));
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir]);
+  try {
+    const first = await waitForSnapshot(port, 3000);
+    assert.deepEqual(first?.errors, [`tasks: ${REFUSED_OUTSIDE}`]);
+    assert.deepEqual(first.tree.tasks, []);
+    assert.ok(!JSON.stringify(first).includes('001-a.md'));
+    fs.writeFileSync(path.join(outside, '002-b.md'), doc(['status: inbox']));
+    const changed = await waitFor(async () => {
+      const next = await waitForSnapshot(port, 500);
+      return next && next.at !== first.at ? next : null;
+    }, 3000);
+    assert.equal(changed, null, 'the board refreshed because of a file in an outside directory');
   } finally { run.child.kill('SIGKILL'); }
 });
 

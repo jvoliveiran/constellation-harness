@@ -32,6 +32,7 @@ const FRONT_MATTER_CLOSE_WINDOW = 40;
 export const READ_CAP_BYTES = 64 * 1024;
 export const CAP_WARNING = `front-matter exceeds ${READ_CAP_BYTES / 1024} KB`;
 const JSON_CAP_BYTES = 1024 * 1024;
+export const TAIL_CAP_BYTES = 256 * 1024;
 const ROOT_OUTSIDE = '.constellation resolves outside the project';
 const PROBE_TIMEOUT_MS = 1000;
 const PROBE_MAX_BYTES = 8 * 1024 * 1024;
@@ -530,10 +531,10 @@ let jsonBuffer = null;
 const getJsonBuffer = () => (jsonBuffer ??= Buffer.alloc(JSON_CAP_BYTES));
 const rejected = (code) => Object.assign(new Error(code), { code });
 
-/** The real path of a file, which must stay inside the real .constellation/ root. */
+/** The real path of an entry, file or directory, that lies at or under the real .constellation/ root. */
 function containedReal(root, file) {
   const real = fs.realpathSync(file);
-  if (!real.startsWith(root + path.sep)) throw rejected('outside .constellation');
+  if (real !== root && !real.startsWith(root + path.sep)) throw rejected('outside .constellation');
   return real;
 }
 
@@ -567,18 +568,30 @@ function hasHarness(projectDir) {
 }
 
 /**
- * Read at most buffer.length bytes of one file. The real path must stay inside the real
+ * Open one contained regular file for a bounded read. The real path must stay inside the real
  * .constellation/ root, and the open descriptor must be a regular file. O_NONBLOCK keeps the open
  * of a FIFO from blocking the event loop. O_NOFOLLOW makes a swap of the final component to a
  * symlink after the real-path check fail with ELOOP. Throws an Error whose code names the reason.
+ * The caller owns fd and closes it.
  */
-function readPrefix(root, file, buffer = readBuffer) {
+function openContained(root, file) {
   const real = containedReal(root, file);
   const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const st = fs.fstatSync(fd);
     if (st.isDirectory()) throw rejected('EISDIR');
     if (!st.isFile()) throw rejected('not a regular file');
+    return { fd, st };
+  } catch (e) {
+    fs.closeSync(fd);
+    throw e;
+  }
+}
+
+/** Read at most buffer.length bytes from the start of one contained regular file. */
+function readPrefix(root, file, buffer = readBuffer) {
+  const { fd, st } = openContained(root, file);
+  try {
     let n = 0;
     for (let r = 1; r > 0 && n < buffer.length; n += r) r = fs.readSync(fd, buffer, n, buffer.length - n, n);
     return { text: buffer.toString('utf8', 0, n), truncated: st.size > n, mtime: st.mtime.toISOString() };
@@ -599,19 +612,29 @@ function readWorkItem(kind, dir, name, root) {
   }
 }
 
-/** Read every epic, feature, task, and plan file. A missing directory yields no nodes. */
+/**
+ * Read every epic, feature, task, and plan file. A missing directory is silent. A directory that
+ * resolves outside the root, or that cannot be listed, adds one error and yields no nodes.
+ */
 function scanWorkItems(p, root) {
-  if (!root) return [];
   const nodes = [];
+  const errors = [];
+  if (!root) return { nodes, errors };
   for (const [kind, key] of WORK_DIRS) {
-    let names;
-    try { names = fs.readdirSync(p[key]).sort(); } catch { continue; }
+    let dir, names;
+    try {
+      dir = containedReal(root, p[key]);
+      names = fs.readdirSync(dir).sort();
+    } catch (e) {
+      if (e.code !== 'ENOENT') errors.push(`${path.basename(p[key])}: unreadable: ${e.code ?? 'error'}`);
+      continue;
+    }
     for (const name of names.filter(isWorkFile)) {
-      const node = readWorkItem(kind, p[key], name, root);
+      const node = readWorkItem(kind, dir, name, root);
       if (node) nodes.push(node);
     }
   }
-  return nodes;
+  return { nodes, errors };
 }
 
 /** Read one JSON file under the root, at most JSON_CAP_BYTES. Returns { value, missing, error }. */
@@ -632,12 +655,33 @@ function readJson(root, file) {
   }
 }
 
-function readTail(file, maxLines) {
+/**
+ * Read the last maxLines lines of one contained regular file, from at most the last
+ * TAIL_CAP_BYTES. A window that starts after offset 0 cuts its first line, so that line is dropped.
+ * Returns { text, error }. A missing file is silent.
+ */
+function readTail(root, file, maxLines) {
+  if (!root) return { text: '', error: null };
+  let fd, st;
   try {
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
-    return lines.slice(Math.max(0, lines.length - maxLines - 1)).join('\n');
-  } catch {
-    return '';
+    ({ fd, st } = openContained(root, file));
+  } catch (e) {
+    return { text: '', error: e.code === 'ENOENT' ? null : `unreadable: ${e.code ?? 'error'}` };
+  }
+  try {
+    const start = Math.max(0, st.size - TAIL_CAP_BYTES);
+    const buffer = Buffer.alloc(Math.min(st.size, TAIL_CAP_BYTES));
+    let n = 0;
+    for (let r = 1; r > 0 && n < buffer.length; n += r) r = fs.readSync(fd, buffer, n, buffer.length - n, start + n);
+    let text = buffer.toString('utf8', 0, n);
+    if (start > 0) {
+      const newline = text.indexOf('\n');
+      text = newline < 0 ? '' : text.slice(newline + 1);
+    }
+    const lines = text.split('\n');
+    return { text: lines.slice(Math.max(0, lines.length - maxLines - 1)).join('\n'), error: null };
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -669,8 +713,12 @@ export function loadSnapshot(projectDir, prev = null) {
 
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
-  const { agents, activity, helperStops } = pairEvents(parseEventLines(readTail(p.events, EVENT_TAIL)));
-  const tree = buildTree(scanWorkItems(p, root), state);
+  const eventsR = readTail(root, p.events, EVENT_TAIL);
+  if (eventsR.error) errors.push(`events.jsonl: ${eventsR.error}`);
+  const { agents, activity, helperStops } = pairEvents(parseEventLines(eventsR.text));
+  const scan = scanWorkItems(p, root);
+  errors.push(...scan.errors);
+  const tree = buildTree(scan.nodes, state);
   const transitions = [
     ...collapseBurst(diffStatuses(prev?.tree?.tasks ?? null, tree.tasks)),
     ...(prev?.transitions ?? []),
@@ -706,8 +754,9 @@ function watch(projectDir, onChange) {
     timer = setTimeout(onChange, DEBOUNCE_MS);
   };
 
-  const arm = (dir) => {
-    if (watchers.has(dir) || !fathomDir(dir)) return;
+  const liveRoot = () => resolveRoot(projectDir).root;
+  const arm = (root, dir) => {
+    if (watchers.has(dir) || !fathomDir(root, dir)) return;
     try {
       const w = fs.watch(dir, { persistent: true }, () => {
         fire();
@@ -722,13 +771,15 @@ function watch(projectDir, onChange) {
       // directory vanished between the check and the watch — the poll covers it
     }
   };
-  const armAll = () => [p.root, p.stateDir, p.metricsDir, p.epicsDir, p.featuresDir, p.tasksDir, p.plansDir].forEach(arm);
+  const armAll = (root = liveRoot()) =>
+    [p.root, p.stateDir, p.metricsDir, p.epicsDir, p.featuresDir, p.tasksDir, p.plansDir].forEach((dir) => arm(root, dir));
   armAll();
 
-  let sig = signature(p);
+  let sig = signature(p, liveRoot());
   const poll = setInterval(() => {
-    armAll();
-    const next = signature(p);
+    const root = liveRoot();
+    armAll(root);
+    const next = signature(p, root);
     if (next !== sig) {
       sig = next;
       fire();
@@ -741,15 +792,22 @@ function watch(projectDir, onChange) {
   };
 }
 
-function fathomDir(dir) {
+/** True when dir resolves to a directory at or under the root. Missing, outside, or not a directory gives false. */
+function fathomDir(root, dir) {
+  if (!root) return false;
+  try { return fs.statSync(containedReal(root, dir)).isDirectory(); } catch { return false; }
+}
+
+function isDirectory(dir) {
   try { return fs.statSync(dir).isDirectory(); } catch { return false; }
 }
 
-function signature(p) {
+function signature(p, root) {
   const stamp = (f) => {
     try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
   };
   const dirStamp = (dir) => {
+    if (!fathomDir(root, dir)) return '-';
     let names;
     try { names = fs.readdirSync(dir); } catch { return '-'; }
     return names.filter(isWorkFile).sort().map((n) => `${n}=${stamp(path.join(dir, n))}`).join(',');
@@ -1101,7 +1159,7 @@ function main() {
   if (args.quiet) {
     // Started by the plugin monitor in every session: stay silent where the harness is absent.
     if (!hasHarness(args.projectDir)) process.exit(0);
-  } else if (!fathomDir(path.join(args.projectDir, '.constellation'))) {
+  } else if (!isDirectory(path.join(args.projectDir, '.constellation'))) {
     console.error(`board: ${args.projectDir}/.constellation not found — pass an initialized project directory`);
     process.exit(1);
   }
