@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   re-exports `board-model.mjs` (snapshot functions) and `board-render.mjs`
   (render functions). The page HTML, CSS, and JS live in
   `scripts/board-ui/`. The CSP hashes still cover the served text.
-- The board test count grows from 138 to 155 (#022).
+- The board test count grows from 138 to 160 (#022).
 
 ## [1.3.4] - 2026-10-15
 
