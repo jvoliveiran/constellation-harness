@@ -42,7 +42,7 @@ step change, because the panel follows the in-flight task live.
 - Plan dialog on the native `<dialog>` and the `#/plan/<file>` route.
   Every other hash renders the overview.
 - `.md` prose styles (§7) and the Dialog component (§4.2).
-- Task 029 folds in here (all four items, criteria 13 to 16). The
+- Task 029 folds in here (all four items, criteria 14 to 17). The
   orchestrator closes 029 with the commit of this task.
 
 ## Out of scope — assigned or parked
