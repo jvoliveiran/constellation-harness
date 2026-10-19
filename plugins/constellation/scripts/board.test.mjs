@@ -1658,3 +1658,51 @@ test('board-model.mjs: imports nothing from node', () => {
   assert.ok(!text.includes("from 'node:"), 'board-model.mjs imports a node: module');
   assert.ok(!text.includes('import.meta'), 'board-model.mjs reads import.meta');
 });
+
+// ---------------------------------------------------------------------------
+// Task 022: the page comes from board-ui/ files
+// ---------------------------------------------------------------------------
+
+const uiText = (name) => fs.readFileSync(path.join(here, 'board-ui', name), 'utf8');
+const inlineBlock = (html, tag) => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(html)?.[1];
+
+test('serve: the page serves page.css and page.js byte for byte', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const style = inlineBlock(r.body, 'style');
+    const script = inlineBlock(r.body, 'script');
+    assert.equal(style, uiText('page.css'));
+    assert.ok(script.endsWith(uiText('page.js')), 'the script does not end with page.js');
+    const prelude = script.slice(0, script.length - uiText('page.js').length);
+    assert.ok(prelude.includes(`var renderBacklog = ${renderBacklog.toString()};`), 'the prelude lacks renderBacklog');
+    assert.ok(prelude.includes(`var feedText = ${feedText.toString()};`), 'the prelude lacks feedText');
+  });
+});
+
+test('board-render.mjs: every export is a function that runs with no module scope', async () => {
+  const render = await import('./board-render.mjs');
+  for (const [name, fn] of Object.entries(render)) {
+    assert.equal(typeof fn, 'function', `${name} is not a function`);
+    const isolated = new Function(`return ${fn.toString()}`)();
+    assert.equal(typeof isolated, 'function', `${name} does not compile alone`);
+  }
+  const isolatedBacklog = new Function(`return ${render.renderBacklog.toString()}`)();
+  assert.equal(isolatedBacklog(null, esc), render.renderBacklog(null, esc));
+  const isolatedFeed = new Function(`return ${render.feedText.toString()}`)();
+  const entry = { kind: 'transition', file: 'a.md', from: null, to: 'refined' };
+  assert.equal(isolatedFeed(entry, esc), render.feedText(entry, esc));
+});
+
+test('serve: the page holds one script, one style, and the script compiles', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    assert.equal(r.body.split('<script>').length - 1, 1, 'script blocks');
+    assert.equal(r.body.split('<style>').length - 1, 1, 'style blocks');
+    assert.doesNotThrow(() => new Function(inlineBlock(r.body, 'script')), 'inline script has a syntax error');
+    const directives = r.headers['content-security-policy'].split('; ');
+    for (const name of ['script-src', 'style-src']) {
+      const directive = directives.find((d) => d.startsWith(`${name} `));
+      assert.equal(directive.split('sha256-').length - 1, 1, `${name} holds one hash: ${directive}`);
+    }
+  });
+});

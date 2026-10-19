@@ -16,7 +16,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
-import { renderBacklog, feedText } from './board-render.mjs';
+import * as render from './board-render.mjs';
 
 export * from './board-model.mjs';
 export * from './board-render.mjs';
@@ -430,172 +430,22 @@ export function serve(getSnapshot, subscribe) {
   return server;
 }
 
-const PAGE_STYLE = `
-  :root { color-scheme: dark; --bg:#0f1117; --panel:#171a23; --line:#262a36; --fg:#e6e6e6; --dim:#8b91a1; --ok:#5ad38a; --cur:#ffcb47; --warn:#ff6b6b; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; padding:0 16px 32px; }
-  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px; padding:18px 0 12px; border-bottom:1px solid var(--line); }
-  h1 { font-size:18px; margin:0; }
-  .meta { color:var(--dim); font-size:12px; display:flex; gap:12px; flex-wrap:wrap; }
-  .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--dim); }
-  .badge.warn { color:var(--warn); border-color:var(--warn); }
-  main { display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:16px; }
-  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 12px; }
-  .strip { display:flex; flex-wrap:wrap; gap:8px; }
-  .step { flex:1 1 90px; min-width:90px; border:1px solid var(--line); border-radius:8px; padding:8px; text-align:center; opacity:.55; }
-  .step .e { font-size:20px; }
-  .step .l { font-size:12px; color:var(--dim); }
-  .step.done { opacity:.9; border-color:var(--ok); }
-  .step.done .l { color:var(--ok); }
-  .step.current { opacity:1; border-color:var(--cur); box-shadow:0 0 0 2px rgba(255,203,71,.18); }
-  .step.current .l { color:var(--cur); font-weight:600; }
-  .mods { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; }
-  .mods .badge { color:var(--cur); border-color:var(--cur); }
-  .facts { margin-top:14px; display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:10px; }
-  .fact .k { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
-  .fact .v { font-size:15px; font-variant-numeric: tabular-nums; }
-  .empty { color:var(--dim); padding:24px 0; text-align:center; }
-  ul { list-style:none; margin:0; padding:0; }
-  li { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; align-items:baseline; }
-  li:last-child { border-bottom:0; }
-  .t { color:var(--dim); font-variant-numeric: tabular-nums; min-width:62px; }
-  .run { color:var(--cur); }
-  .dur { color:var(--dim); margin-left:auto; font-variant-numeric: tabular-nums; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:var(--dim); }
-  .errs { color:var(--warn); font-size:12px; margin-top:10px; }
-  .warn-line { font-size:11px; color:var(--dim); margin:0 0 4px 24px; }
-  details summary { cursor:pointer; color:var(--dim); }
-  .task { padding:3px 0; font-size:13px; }
-  .grp, .epic { margin:8px 0 8px 12px; }
-  .gh { font-weight:600; margin:6px 0 2px; }
-  .mt16 { margin-top:16px; }
-  .mb12 { margin-bottom:12px; }
-  .attn { border:1px solid var(--warn); border-radius:8px; padding:8px 12px; margin-bottom:12px; }
-`;
+/** The page receives every export of board-render.mjs as a top-level `var name = function name(...)`. */
+const renderPrelude = Object.entries(render).map(([name, fn]) => `var ${name} = ${fn.toString()};`).join('\n');
 
-const PAGE_SCRIPT = `
-(function () {
-  var snap = null;
-  var connected = false, lostAt = null;
-  var renderBacklog = ${renderBacklog.toString()};
-  var feedText = ${feedText.toString()};
-  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
-  var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
-  var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
-  var nowMs = function () { return connected ? Date.now() : (lostAt || Date.now()); };
-  var since = function (iso) { if (!iso) return null; var ms = nowMs() - Date.parse(iso); return isNaN(ms) ? null : Math.max(0, Math.round(ms/1000)); };
-  var fmtTok = function (n) { if (n == null) return '—'; return n >= 1e6 ? (n/1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); };
+// The page files belong to the plugin, not to the watched project, so openContained does not apply.
+// The read happens at module load: a missing file fails the import, in the test file and in main alike.
+const uiFile = (name) => fs.readFileSync(new URL(`./board-ui/${name}`, import.meta.url), 'utf8');
+const PAGE_STYLE = uiFile('page.css');
+const PAGE_SCRIPT = `${renderPrelude}\n${uiFile('page.js')}`;
 
-  function render() {
-    if (!snap) return;
-    var meta = '<span><code>' + esc(snap.projectDir) + '</code></span>';
-    if (!snap.initialized) meta += '<span class="badge warn">not initialized — no .constellation/config.json</span>';
-    if (!snap.hasTracks) meta += '<span class="badge warn">tracks.json missing</span>';
-    if (snap.stale) meta += '<span class="badge warn">stale — state file unreadable, showing last good</span>';
-    if (!connected && lostAt) meta += '<span class="badge warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
-    meta += '<span>updated ' + hhmm(snap.at) + '</span>';
-    document.getElementById('meta').innerHTML = meta;
-
-    var now = '';
-    var s = snap.state, p = snap.progress;
-    if (!s) {
-      now = '<div class="empty">No workflow in flight<br><code>watching ' + esc(snap.projectDir) + '/.constellation/</code></div>';
-    } else {
-      var head = '<div class="meta mb12">'
-        + '<span class="badge">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
-        + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
-        + (s.task ? '<span>task <code>' + esc(s.task) + '</code></span>' : '')
-        + '</div>';
-      var strip = '<div class="strip">';
-      p.steps.forEach(function (st) {
-        strip += '<div class="step ' + st.state + '"><div class="e">' + esc(st.emoji || '⚙️') + '</div><div class="l">' + esc(st.label || st.id) + '</div></div>';
-      });
-      if (p.unknownCurrent) strip += '<div class="step current"><div class="e">⚙️</div><div class="l">' + esc(p.unknownCurrent) + '</div></div>';
-      if (!p.steps.length && !p.unknownCurrent) strip += '<div class="empty">track <code>' + esc(p.track) + '</code> has no steps in tracks.json</div>';
-      strip += '</div>';
-      var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="badge">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
-      var facts = '<div class="facts">'
-        + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, '', fmtDur(since(s.startedAt)) || '—') + '</div></div>'
-        + fact('last save', hhmm(s.lastUpdatedAt))
-        + fact('tokens spent', fmtTok(snap.tokenDelta))
-        + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
-        + fact('PR', s.prNumber != null ? '#' + s.prNumber : '—')
-        + fact('model profile', s.modelProfile || '—')
-        + '</div>';
-      now = head + strip + mods + facts;
-    }
-    if (snap.errors && snap.errors.length) now += '<div class="errs">' + snap.errors.map(esc).join('<br>') + '</div>';
-    document.getElementById('now').innerHTML = now;
-
-    var open = [];
-    document.querySelectorAll('#backlog details[open]').forEach(function (d) { open.push(d.getAttribute('data-group')); });
-    var backlog = document.getElementById('backlog');
-    backlog.innerHTML = renderBacklog(snap.tree, esc);
-    backlog.querySelectorAll('details').forEach(function (d) { if (open.indexOf(d.getAttribute('data-group')) >= 0) d.setAttribute('open', ''); });
-
-    var activity = snap.feed || [];
-    var feed = '';
-    if (!snap.agents.length && !activity.length) {
-      feed = '<div class="empty">No events yet<br><code>.constellation/metrics/events.jsonl</code></div>';
-    } else {
-      feed += '<ul>';
-      snap.agents.forEach(function (a) {
-        var dur = a.running ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
-        feed += '<li><span class="t">' + hhmm(a.start) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + esc((a.agent_type || 'agent').replace(/^constellation:/, '')) + '</span>' + dur + '</li>';
-      });
-      feed += '</ul>';
-      if (activity.length) {
-        feed += '<h2 class="mt16">Activity</h2><ul>';
-        activity.forEach(function (e) {
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
-        });
-        feed += '</ul>';
-      }
-    }
-    document.getElementById('feed').innerHTML = feed;
-  }
-  function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
-  function tick() {
-    document.querySelectorAll('[data-since]').forEach(function (el) {
-      var secs = since(el.getAttribute('data-since'));
-      if (secs != null) el.textContent = el.getAttribute('data-prefix') + fmtDur(secs);
-    });
-  }
-  function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
-
-  var es = new EventSource('/events');
-  es.onopen = function () { connected = true; lostAt = null; render(); };
-  es.onmessage = function (ev) { connected = true; lostAt = null; try { snap = JSON.parse(ev.data); render(); } catch (e) { /* ignore */ } };
-  es.onerror = function () { connected = false; if (lostAt == null) lostAt = Date.now(); render(); };
-  setInterval(tick, 1000);
-})();
-`;
-
-const PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Constellation board</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ctext y=%2726%27 font-size=%2726%27%3E%F0%9F%8C%8C%3C/text%3E%3C/svg%3E">
-<style>${PAGE_STYLE}</style>
-</head>
-<body>
-<header>
-  <h1>🌌 Constellation board</h1>
-  <div class="meta" id="meta"></div>
-</header>
-<main>
-  <section><h2>Now</h2><div id="now"></div></section>
-  <section><h2>Agents</h2><div id="feed"></div></section>
-</main>
-<section class="mt16"><h2>Backlog</h2><div id="backlog"></div></section>
-<script>${PAGE_SCRIPT}</script>
-</body>
-</html>
-`;
+/** Replace one marker with text that may hold `$`: split and join never expand `$&`, as replace does. */
+function fillMarker(html, marker, text) {
+  const parts = html.split(marker);
+  if (parts.length !== 2) throw new Error(`board: page.html must hold ${marker} exactly once`);
+  return parts.join(text);
+}
+const PAGE = fillMarker(fillMarker(uiFile('page.html'), '@@CSS@@', PAGE_STYLE), '@@SCRIPT@@', PAGE_SCRIPT);
 
 /** The CSP source for one inline text: the base64 SHA-256 of its exact UTF-8 bytes. */
 const cspHash = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;

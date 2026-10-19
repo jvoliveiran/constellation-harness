@@ -209,7 +209,9 @@ say "10. git guard destructive-discard checked"
 bash "$ROOT/plugins/constellation/scripts/log-event.test.sh" >/dev/null 2>&1 || fail "log-event.sh tests"
 if command -v node >/dev/null 2>&1 && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 20')" = "true" ]; then
   node --test "$ROOT"/plugins/constellation/scripts/*.test.mjs >/dev/null 2>&1 || fail "board.mjs tests (node --test)"
-  node --check "$ROOT/plugins/constellation/scripts/board.mjs" 2>/dev/null || fail "board.mjs syntax"
+  for f in board.mjs board-model.mjs board-render.mjs board-ui/page.js; do
+    node --check "$ROOT/plugins/constellation/scripts/$f" 2>/dev/null || fail "$f syntax"
+  done
   say "11. board + hook event log checked"
 elif [ "${CI:-}" = "true" ]; then
   fail "board tests need node 20+ on PATH in CI (add actions/setup-node)"
