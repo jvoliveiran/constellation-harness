@@ -445,16 +445,29 @@ function fillMarker(html, marker, text) {
   if (parts.length !== 2) throw new Error(`board: page.html must hold ${marker} exactly once`);
   return parts.join(text);
 }
-const PAGE = fillMarker(fillMarker(uiFile('page.html'), '@@CSS@@', PAGE_STYLE), '@@SCRIPT@@', PAGE_SCRIPT);
+
+/** The vendored markdown-it text, or null. A missing file logs one line: the page then shows bodies in <pre>. */
+function readVendor() {
+  try {
+    return fs.readFileSync(new URL('./board-vendor/markdown-it.min.js', import.meta.url), 'utf8');
+  } catch (e) {
+    console.error(`board: board-vendor/markdown-it.min.js missing (${e.code ?? 'error'}) — task and plan bodies render as plain text`);
+    return null;
+  }
+}
+const VENDOR = readVendor();
+const PAGE = fillMarker(fillMarker(fillMarker(uiFile('page.html'), '@@CSS@@', PAGE_STYLE), '@@VENDOR@@', VENDOR == null ? '' : `<script>${VENDOR}</script>`), '@@SCRIPT@@', PAGE_SCRIPT);
 
 /** The CSP source for one inline text: the base64 SHA-256 of its exact UTF-8 bytes. */
 const cspHash = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
 
-// The page loads one inline script and one inline style, and nothing else. The hashes cover the
-// exact text that is served, so an edit of either text without a rebuild breaks the page at once.
+// The page loads two inline scripts (the vendored markdown-it, then the page script) and one inline
+// style, and nothing else. The hashes cover the exact text that is served, so an edit of any text
+// without a rebuild breaks the page at once. A missing vendor file leaves one script hash.
+const SCRIPT_HASHES = [VENDOR, PAGE_SCRIPT].filter((t) => t != null).map(cspHash).join(' ');
 const PAGE_CSP = [
   "default-src 'none'",
-  `script-src ${cspHash(PAGE_SCRIPT)}`,
+  `script-src ${SCRIPT_HASHES}`,
   `style-src ${cspHash(PAGE_STYLE)}`,
   "connect-src 'self'",
   'img-src data:',

@@ -1,0 +1,7 @@
+name: markdown-it
+version: 14.3.0
+file: markdown-it.min.js
+source: https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.0.tgz (package/dist/markdown-it.min.js)
+tarball-integrity: sha512-RCEsPjR+sr0x+AuYp601tKTkgFG4YEPLCzHST3cQ/fhlJkqAkz1L2/Qbp1j9qw5SBwQHFBoW8+hoN5xssOF0Tw==
+license: MIT (markdown-it.LICENSE)
+sha256: 70fe17bd06c7fa819f03a1ed10957904318103624198845dc893b309bf495e28

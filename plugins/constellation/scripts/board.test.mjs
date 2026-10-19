@@ -1023,15 +1023,17 @@ test('serve: POST with a correct Host returns 405', async () => {
 
 const sha256Source = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
 const fetchPage = (port) => httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
+// Every inline block of one tag, in page order. The vendor script is [0], the page script is [1].
+const inlineBlocks = (html, tag) => [...html.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))].map((m) => m[1]);
 
-test('serve: the page CSP hashes match the inline script and style', async () => {
+test('serve: the page CSP hashes match the inline scripts and style', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
     const csp = r.headers['content-security-policy'];
-    const script = /<script>([\s\S]*?)<\/script>/.exec(r.body)[1];
-    const style = /<style>([\s\S]*?)<\/style>/.exec(r.body)[1];
+    const scripts = inlineBlocks(r.body, 'script');
+    const style = inlineBlocks(r.body, 'style')[0];
     const directives = new Set(csp.split('; '));
-    assert.ok(directives.has(`script-src ${sha256Source(script)}`), `script hash is not in: ${csp}`);
+    assert.ok(directives.has(`script-src ${scripts.map(sha256Source).join(' ')}`), `script hashes are not in: ${csp}`);
     assert.ok(directives.has(`style-src ${sha256Source(style)}`), `style hash is not in: ${csp}`);
     for (const directive of ["default-src 'none'", "connect-src 'self'", 'img-src data:', "frame-ancestors 'none'"]) {
       assert.ok(directives.has(directive), `missing ${directive} in: ${csp}`);
@@ -1216,7 +1218,7 @@ test('serve: the page script compiles and embeds the backlog renderer', async ()
   await withBoardServer(async (port) => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
     assert.equal(r.status, 200);
-    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.ok(script, 'page has an inline script');
     assert.ok(script.includes('function renderBacklog('));
     assert.doesNotThrow(() => new Function(script), 'inline script has a syntax error');
@@ -1226,7 +1228,7 @@ test('serve: the page script compiles and embeds the backlog renderer', async ()
 test('serve: the page script embeds feedText from the module', async () => {
   await withBoardServer(async (port) => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
-    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.ok(script.includes(`var feedText = ${feedText.toString()};`));
     assert.equal(script.split('function feedText(').length - 1, 1, 'one feedText definition in the page');
     assert.ok(script.includes('feedText(e, esc)'));
@@ -1665,13 +1667,12 @@ test('board-model.mjs: imports nothing from node', () => {
 // ---------------------------------------------------------------------------
 
 const uiText = (name) => fs.readFileSync(path.join(here, 'board-ui', name), 'utf8');
-const inlineBlock = (html, tag) => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(html)?.[1];
 
 test('serve: the page serves page.css and page.js byte for byte', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
-    const style = inlineBlock(r.body, 'style');
-    const script = inlineBlock(r.body, 'script');
+    const style = inlineBlocks(r.body, 'style')[0];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.equal(style, uiText('page.css'));
     assert.ok(script.endsWith(uiText('page.js')), 'the script does not end with page.js');
     const prelude = script.slice(0, script.length - uiText('page.js').length);
@@ -1698,18 +1699,93 @@ test('board-render.mjs: every export is a function that runs with no module scop
   assert.equal(isolatedFeed(entry, esc), render.feedText(entry, esc));
 });
 
-test('serve: the page holds one script, one style, and the script compiles', async () => {
+// Task 022 test, body edited for two scripts: the old 'one script' count no longer holds.
+test('serve: the page holds one style, the page script compiles, and every directive holds a hash per block', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
-    assert.equal(r.body.split('<script>').length - 1, 1, 'script blocks');
-    assert.equal(r.body.split('<style>').length - 1, 1, 'style blocks');
-    assert.doesNotThrow(() => new Function(inlineBlock(r.body, 'script')), 'inline script has a syntax error');
+    assert.equal(inlineBlocks(r.body, 'style').length, 1, 'style blocks');
+    assert.doesNotThrow(() => new Function(inlineBlocks(r.body, 'script').at(-1)), 'inline script has a syntax error');
     const directives = r.headers['content-security-policy'].split('; ');
-    for (const name of ['script-src', 'style-src']) {
+    for (const [name, tag] of [['script-src', 'script'], ['style-src', 'style']]) {
       const directive = directives.find((d) => d.startsWith(`${name} `));
-      assert.equal(directive.split('sha256-').length - 1, 1, `${name} holds one hash: ${directive}`);
+      assert.equal(directive.split('sha256-').length - 1, inlineBlocks(r.body, tag).length, `${name}: ${directive}`);
     }
   });
+});
+
+const vendorDir = path.join(here, 'board-vendor');
+const vendorText = fs.readFileSync(path.join(vendorDir, 'markdown-it.min.js'), 'utf8');
+const versionField = (name) => new RegExp(`^${name}: *(.*)$`, 'm').exec(fs.readFileSync(path.join(vendorDir, 'VERSION'), 'utf8'))?.[1];
+
+test('board-vendor: VERSION pins the vendor file', () => {
+  assert.equal(versionField('version'), '14.3.0');
+  assert.equal(versionField('license').split(' ')[0], 'MIT');
+  assert.ok(versionField('source').startsWith('https://'), versionField('source'));
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(vendorDir, 'markdown-it.min.js'))).digest('hex');
+  assert.equal(versionField('sha256'), digest);
+});
+
+test('serve: the page holds two scripts, the vendor first, and both compile', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const scripts = inlineBlocks(r.body, 'script');
+    assert.equal(scripts.length, 2, 'script blocks');
+    assert.equal(inlineBlocks(r.body, 'style').length, 1, 'style blocks');
+    assert.equal(scripts[0], vendorText);
+    assert.ok(scripts[1].endsWith(uiText('page.js')), 'block 1 does not end with page.js');
+    for (const block of scripts) assert.doesNotThrow(() => new Function(block), 'inline script has a syntax error');
+  });
+});
+
+test('serve: the CSP lists two script hashes, one style hash, and the vendor hash is the VERSION sha256', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const directives = r.headers['content-security-policy'].split('; ');
+    const scriptSrc = directives.find((d) => d.startsWith('script-src '));
+    const styleSrc = directives.find((d) => d.startsWith('style-src '));
+    const hashes = scriptSrc.match(/'sha256-[^']+'/g);
+    assert.deepEqual(hashes, inlineBlocks(r.body, 'script').map(sha256Source));
+    assert.equal(styleSrc.split('sha256-').length - 1, 1, styleSrc);
+    const vendorHex = Buffer.from(hashes[0].slice("'sha256-".length, -1), 'base64').toString('hex');
+    assert.equal(vendorHex, versionField('sha256'));
+  });
+});
+
+test('page sources cannot end their element: no script or comment opener in our code, none in the vendor', async () => {
+  const render = await import('./board-render.mjs');
+  const ours = { 'page.js': uiText('page.js'), ...Object.fromEntries(Object.entries(render).map(([n, fn]) => [n, fn.toString()])) };
+  for (const [name, text] of Object.entries(ours)) {
+    assert.ok(!/<\/script/i.test(text), `${name} holds a script closer`);
+    assert.ok(!text.includes('<!--'), `${name} holds a comment opener`);
+  }
+  assert.ok(!/<\/style/i.test(uiText('page.css')), 'page.css holds a style closer');
+  assert.ok(!/<\/script/i.test(vendorText), 'the vendor file holds a script closer');
+  assert.ok(!/<script/i.test(vendorText), 'the vendor file holds a script opener');
+});
+
+test('cli: a missing vendor file logs one line and serves the page with one script hash', async () => {
+  // The real path: board.mjs runs main() only when argv[1] equals its resolved module path.
+  const copy = fs.realpathSync(mkTmp('board-novendor-'));
+  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
+  fs.cpSync(path.join(here, 'board-ui'), path.join(copy, 'board-ui'), { recursive: true });
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const child = spawn(process.execPath, [path.join(copy, 'board.mjs'), '--quiet', '--port', String(port), tmpProject()], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (c) => { stderr += c; });
+  try {
+    const r = await waitFor(async () => {
+      const res = await fetchPage(port).catch(() => null);
+      return res?.status === 200 ? res : null;
+    }, CHILD_TIMEOUT_MS);
+    assert.ok(r, 'the board did not serve the page');
+    assert.equal(inlineBlocks(r.body, 'script').length, 1);
+    assert.equal(r.headers['content-security-policy'].match(/script-src [^;]*/)[0].split('sha256-').length - 1, 1);
+    const lines = stderr.trim().split('\n');
+    assert.equal(lines.length, 1, stderr);
+    assert.ok(lines[0].startsWith('board: board-vendor/markdown-it.min.js missing'), lines[0]);
+  } finally { child.kill('SIGKILL'); }
 });
 
 // ---------------------------------------------------------------------------

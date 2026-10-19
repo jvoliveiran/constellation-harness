@@ -219,5 +219,13 @@ else
   say "11. board tests SKIPPED (node 20+ not on PATH) — hook event log checked"
 fi
 
+# 12. Vendor integrity — the sha256 of board-vendor/markdown-it.min.js must equal the value in VERSION.
+VDIR="$ROOT/plugins/constellation/scripts/board-vendor"
+if command -v sha256sum >/dev/null 2>&1; then VSUM="$(sha256sum "$VDIR/markdown-it.min.js" | cut -d' ' -f1)"
+else VSUM="$(shasum -a 256 "$VDIR/markdown-it.min.js" | cut -d' ' -f1)"; fi
+VPIN="$(sed -n 's/^sha256: *//p' "$VDIR/VERSION")"
+[ -n "$VPIN" ] && [ "$VSUM" = "$VPIN" ] || fail "board-vendor: markdown-it.min.js sha256 ${VSUM:-none} does not match VERSION (${VPIN:-none})"
+say "12. vendor integrity checked"
+
 [ "$FAIL" -eq 0 ] && say "selftest: ALL GREEN" || say "selftest: FAILURES ABOVE"
 exit "$FAIL"
