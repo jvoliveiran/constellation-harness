@@ -3,6 +3,10 @@
   var snap = null;
   var showAllAgents = false;
   var connected = false, lostAt = null;
+  // The task body and the plan dialog each remember what they show. A reply writes the DOM only when it is still the newest request.
+  var taskBody = { file: null, mtime: null };
+  var taskSeq = 0;
+  var dialogFile = null, dialogSeq = 0, routeBefore = null;
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
@@ -13,9 +17,10 @@
   function render() {
     if (!snap) return;
     renderMeta();
-    renderNow();
+    renderNowCard();
     renderBacklogCard();
     renderAgentsCard();
+    syncRoute();
     tick();
   }
 
@@ -29,37 +34,84 @@
     document.getElementById('meta').innerHTML = meta;
   }
 
-  function renderNow() {
-    var now = '';
-    var s = snap.state, p = snap.progress;
-    if (!s) {
-      now = '<div class="empty">No workflow in flight<br><code>watching ' + esc(snap.projectDir) + '/.constellation/</code></div>';
-    } else {
-      var head = '<div class="meta mb12">'
-        + '<span class="chip">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
-        + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
-        + (s.task ? '<span>task <code>' + esc(s.task) + '</code></span>' : '')
-        + '</div>';
-      var strip = '<div class="strip">';
-      p.steps.forEach(function (st) {
-        strip += '<div class="step ' + st.state + '"><div class="e">' + esc(st.emoji || '⚙️') + '</div><div class="l">' + esc(st.label || st.id) + '</div></div>';
-      });
-      if (p.unknownCurrent) strip += '<div class="step current"><div class="e">⚙️</div><div class="l">' + esc(p.unknownCurrent) + '</div></div>';
-      if (!p.steps.length && !p.unknownCurrent) strip += '<div class="empty">track <code>' + esc(p.track) + '</code> has no steps in tracks.json</div>';
-      strip += '</div>';
-      var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="chip">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
-      var facts = '<div class="facts">'
-        + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, '', fmtDur(since(s.startedAt)) || '—') + '</div></div>'
-        + fact('last save', hhmm(s.lastUpdatedAt))
-        + fact('tokens spent', fmtTok(snap.tokenDelta))
-        + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
-        + fact('PR', s.prNumber != null ? '#' + s.prNumber : '—')
-        + fact('model profile', s.modelProfile || '—')
-        + '</div>';
-      now = head + strip + mods + facts;
+  function renderNowCard() {
+    var s = snap.state;
+    var tasks = snap.tree ? snap.tree.tasks : [];
+    var task = s && s.task ? tasks.filter(function (t) { return t.file === s.task; })[0] || null : null;
+    document.getElementById('now').innerHTML = renderNow({
+      state: s, progress: snap.progress, task: task, tokenDelta: snap.tokenDelta, projectDir: snap.projectDir,
+      hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok, since: since,
+    }, esc);
+    document.getElementById('now-errs').innerHTML = snap.errors && snap.errors.length ? snap.errors.map(esc).join('<br>') : '';
+    var actions = document.getElementById('now-actions');
+    actions.innerHTML = renderNowActions({ state: s, tree: snap.tree }, esc);
+    actions.hidden = !s;
+    document.getElementById('desc').hidden = !(s && s.task);
+    syncTaskBody(task);
+  }
+
+  function loadItem(kind, file) {
+    return fetch('/api/item?kind=' + kind + '&file=' + encodeURIComponent(file))
+      .then(function (r) { return r.ok ? r.json() : { error: r.status }; })
+      .catch(function () { return { error: 'network' }; });
+  }
+
+  // The body is fetched once per task file and mtime, so the region keeps its scroll position between snapshots.
+  function syncTaskBody(task) {
+    var s = snap.state;
+    if (!s || !s.task) { taskBody = { file: null, mtime: null }; taskSeq++; return; }
+    var mtime = task ? task.mtime : null;
+    if (taskBody.file === s.task && taskBody.mtime === mtime) return;
+    taskBody = { file: s.task, mtime: mtime };
+    var seq = ++taskSeq;
+    loadItem('task', s.task).then(function (item) {
+      if (seq !== taskSeq) return;
+      document.getElementById('desc').innerHTML = item.error
+        ? '<p class="muted">task body unavailable (' + esc(item.error) + ')</p>'
+        : renderItemBody(item, window.markdownit, esc);
+    });
+  }
+
+  // The plan of a route, from the tree: the plan of a task, or a plan with no task.
+  function planView(file) {
+    var tasks = snap.tree ? snap.tree.tasks : [];
+    var owner = tasks.filter(function (t) { return t.plan && t.plan.file === file; })[0];
+    if (owner) return { file: file, status: owner.plan.status, title: owner.plan.title, taskId: owner.id };
+    var orphan = (snap.tree ? snap.tree.orphanPlans : []).filter(function (p) { return p.file === file; })[0];
+    return { file: file, status: orphan ? orphan.status : null, title: orphan ? orphan.title : null, taskId: null };
+  }
+
+  function openPlan(file, dialog) {
+    dialogFile = file;
+    var seq = ++dialogSeq;
+    loadItem('plan', file).then(function (item) {
+      if (seq !== dialogSeq) return;
+      dialog.innerHTML = renderPlanDialog({ plan: planView(file), item: item, markdownit: window.markdownit }, esc);
+      if (!dialog.open) dialog.showModal();
+    });
+  }
+
+  // The route decides the dialog. A plan route that the tree does not hold shows the overview and keeps the hash.
+  function syncRoute() {
+    var route = parseRoute(location.hash);
+    var dialog = document.getElementById('dialog');
+    if (route.view === 'plan' && treeHolds(snap.tree, 'plan', route.file)) {
+      if (dialogFile !== route.file) openPlan(route.file, dialog);
+      return;
     }
-    if (snap.errors && snap.errors.length) now += '<div class="errs">' + snap.errors.map(esc).join('<br>') + '</div>';
-    document.getElementById('now').innerHTML = now;
+    dialogSeq++;
+    dialogFile = null;
+    if (dialog.open) dialog.close();
+  }
+
+  // Esc and the close button end here. replaceState fires no hashchange, so syncRoute runs by hand.
+  function onDialogClose() {
+    dialogFile = null;
+    if (parseRoute(location.hash).view === 'plan') {
+      history.replaceState(null, '', routeBefore || '#/');
+      routeBefore = null;
+      if (snap) syncRoute();
+    }
   }
 
   function renderBacklogCard() {
@@ -89,14 +141,12 @@
     return '<h2 class="mt16">Activity</h2><ul>' + rows + '</ul>';
   }
 
-  function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
   function tick() {
     document.querySelectorAll('[data-since]').forEach(function (el) {
       var secs = since(el.getAttribute('data-since'));
       if (secs != null) el.textContent = el.getAttribute('data-prefix') + fmtDur(secs);
     });
   }
-  function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
 
   // Theme: the OS theme applies through CSS alone. A stored choice sets data-theme, which wins.
   function effectiveTheme() {
@@ -126,6 +176,17 @@
     var target = ev.target;
     if (target && target.getAttribute && target.getAttribute('data-action') === 'show-all') { showAllAgents = true; render(); }
   });
+  document.getElementById('now-actions').addEventListener('click', function (ev) {
+    var button = ev.target && ev.target.closest && ev.target.closest('[data-action="view-plan"]');
+    if (!button) return;
+    routeBefore = location.hash || '#/';
+    location.hash = '#/plan/' + button.getAttribute('data-file');
+  });
+  document.getElementById('dialog').addEventListener('click', function (ev) {
+    if (ev.target && ev.target.closest && ev.target.closest('[data-action="close-dialog"]')) document.getElementById('dialog').close();
+  });
+  document.getElementById('dialog').addEventListener('close', onDialogClose);
+  window.addEventListener('hashchange', function () { if (snap) syncRoute(); });
 
   var es = new EventSource('/events');
   es.onopen = function () { connected = true; lostAt = null; render(); };

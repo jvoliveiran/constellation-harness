@@ -167,3 +167,84 @@ export function parseRoute(hash) {
   var match = /^#\/plan\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(String(hash || ''));
   return match ? { view: 'plan', file: match[1] } : { view: 'overview' };
 }
+
+/**
+ * Render the step strip of the Now card as an HTML string. progress is the resolveSteps result.
+ * The page receives this function through toString(), so the body uses no module-scope symbol
+ * and no import.
+ */
+export function renderSteps(progress, esc) {
+  var html = '<div class="strip">';
+  progress.steps.forEach(function (st) {
+    html += '<div class="step ' + st.state + '"><div class="e">' + esc(st.emoji || '⚙️') + '</div><div class="l">' + esc(st.label || st.id) + '</div></div>';
+  });
+  if (progress.unknownCurrent) html += '<div class="step current"><div class="e">⚙️</div><div class="l">' + esc(progress.unknownCurrent) + '</div></div>';
+  if (!progress.steps.length && !progress.unknownCurrent) html += '<div class="empty">track <code>' + esc(progress.track) + '</code> has no steps in tracks.json</div>';
+  return html + '</div>';
+}
+
+/**
+ * Render the Now card (header, step strip, modifiers, facts) as an HTML string, or the empty
+ * state when no workflow runs. view = { state, progress, task, tokenDelta, projectDir, hhmm,
+ * fmtDur, fmtTok, since }. task is the tree node of state.task, or null. The snapshot errors
+ * are not part of this markup: the page writes them to their own region. The page receives this
+ * function through toString(); renderSteps is its top-level neighbor on the page.
+ */
+export function renderNow(view, esc) {
+  var s = view.state, p = view.progress, task = view.task;
+  if (!s) return '<div class="empty">No workflow in flight<br><code>watching ' + esc(view.projectDir) + '/.constellation/</code></div>';
+  function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
+  function sinceSpan(iso, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="">' + esc(text) + '</span>'; }
+  var taskLabel = task && task.title ? '<code>' + esc(task.id || s.task) + '</code> ' + esc(task.title) : '<code>' + esc(s.task) + '</code>';
+  var head = '<div class="meta mb12">'
+    + '<span class="chip">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
+    + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
+    + (s.task ? '<span>task ' + taskLabel + '</span>' : '')
+    + '</div>';
+  var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="chip">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
+  var facts = '<div class="facts">'
+    + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, view.fmtDur(view.since(s.startedAt)) || '—') + '</div></div>'
+    + fact('last save', view.hhmm(s.lastUpdatedAt))
+    + fact('tokens spent', view.fmtTok(view.tokenDelta))
+    + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
+    + fact('PR', s.prNumber != null ? '#' + s.prNumber : '—')
+    + fact('model profile', s.modelProfile || '—')
+    + '</div>';
+  return head + renderSteps(p, esc) + mods + facts;
+}
+
+/**
+ * Render the Now card actions: the View plan button, or '' when no workflow runs. The button is
+ * disabled, with the reason in its title, when the state names no plan or the tree does not hold
+ * it. view = { state, tree }. The page receives this function through toString(), so the body
+ * uses no module-scope symbol and no import; treeHolds is its top-level neighbor on the page.
+ */
+export function renderNowActions(view, esc) {
+  var s = view.state;
+  if (!s) return '';
+  var base = '<button type="button" class="btn primary" ';
+  if (!s.plan) return base + 'disabled title="no plan in the workflow state">View plan</button>';
+  if (!treeHolds(view.tree, 'plan', s.plan)) return base + 'disabled title="' + esc('plan ' + s.plan + ' is not in .constellation/plans/') + '">View plan</button>';
+  return base + 'data-action="view-plan" data-file="' + esc(s.plan) + '">View plan</button>';
+}
+
+/**
+ * Render the inner HTML of the plan dialog: the header (title, file, status chip, task id, close
+ * button) and the body. view = { plan: { file, status, title, taskId }, item, markdownit }. item is
+ * a /api/item reply or { error }. The status class maps through a fixed allow-list. The page
+ * receives this function through toString(); renderItemBody is its top-level neighbor.
+ */
+export function renderPlanDialog(view, esc) {
+  var plan = view.plan, item = view.item;
+  var STATUS_CLASSES = ['draft', 'approved'];
+  var statusClass = STATUS_CLASSES.indexOf(plan.status) >= 0 ? 'p-' + plan.status : 'p-other';
+  var head = '<div class="dlg-head"><span id="dialog-title">' + esc(plan.title || plan.file) + '</span>'
+    + '<code>' + esc(plan.file) + '</code>'
+    + '<span class="chip ' + statusClass + '">' + esc(plan.status || '') + '</span>'
+    + (plan.taskId ? '<span class="muted">task ' + esc(plan.taskId) + '</span>' : '')
+    + '<button type="button" class="btn secondary" data-action="close-dialog" aria-label="Close">✕</button></div>';
+  var body = !item || item.error
+    ? '<p class="muted">plan unavailable (' + esc(item && item.error ? item.error : 'no reply') + ')</p>'
+    : renderItemBody(item, view.markdownit, esc);
+  return head + '<div class="dlg-body md">' + body + '</div>';
+}

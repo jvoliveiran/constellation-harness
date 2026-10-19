@@ -14,7 +14,8 @@ import {
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute } from './board-render.mjs';
+import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog } from './board-render.mjs';
+import * as renderModule from './board-render.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
@@ -1943,13 +1944,22 @@ test('renderAgents: a running row carries data-since and the run class', () => {
   assert.ok(finished.includes('<span class="dur">31s</span>'), finished);
 });
 
-// Task 022, criterion 5: run the shipped page.js against stub browser objects.
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) => {
+// Task 022, criterion 5, grown in task 023: run the shipped page against stub browser objects.
+// The script is the render prelude plus page.js, built as board.mjs builds it.
+const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${name} = ${fn.toString()};`).join('\n');
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
   const els = {};
-  const stub = (id) => els[id] ??= { innerHTML: '', addEventListener() {}, getAttribute: () => null };
+  const stub = (id) => els[id] ??= {
+    id, innerHTML: '', hidden: false, handlers: {}, open: false, showModals: 0,
+    addEventListener(t, fn) { this.handlers[t] = fn; }, getAttribute: () => null, querySelectorAll: () => [],
+    showModal() { this.open = true; this.showModals += 1; },
+    close() { if (!this.open) return; this.open = false; this.handlers.close?.(); },
+  };
   const writes = [];
   const localStorage = {
     getItem() { if (storageThrows) throw new Error('denied'); return stored; },
@@ -1960,13 +1970,29 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) =>
     getElementById: (id) => (id === 'theme' ? button : stub(id)),
     querySelectorAll: () => [],
   };
-  const sandbox = {
-    document, localStorage, console,
-    window: { matchMedia: () => ({ matches: os === 'light' }) },
-    EventSource: function () {}, setInterval: () => 0, Date,
+  const windowHandlers = {};
+  const location = {
+    current: hash,
+    get hash() { return this.current; },
+    set hash(value) { if (value !== this.current) { this.current = value; windowHandlers.hashchange?.(); } },
   };
-  vm.runInNewContext(uiText('page.js'), sandbox);
-  return { attrs, button, writes, click: () => button.handlers.click() };
+  const replaced = [];
+  const history = { replaceState: (state, title, url) => { location.current = url; replaced.push(url); } };
+  const fetches = [];
+  const fetchStub = (url) => {
+    fetches.push(url);
+    const item = reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` };
+    return Promise.resolve(item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
+  };
+  const sources = [];
+  const sandbox = {
+    document, localStorage, console, location, history, fetch: fetchStub,
+    window: { matchMedia: () => ({ matches: os === 'light' }), addEventListener: (t, fn) => { windowHandlers[t] = fn; }, markdownit: stubFactory() },
+    EventSource: function () { sources.push(this); }, setInterval: () => 0, Date,
+  };
+  vm.runInNewContext(`${renderPrelude}\n${uiText('page.js')}`, sandbox);
+  const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
+  return { attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click() };
 };
 
 test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
@@ -2197,4 +2223,128 @@ test('serve: /api/item refuses a symlink that leaves .constellation and a FIFO, 
       if (hasMkfifo) assert.equal((await get(itemUrl('task', '005-pipe.md'))).status, 404);
     });
   } finally { fs.rmSync(fifo, { force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: Now card, View plan, plan dialog, page runtime, CSS
+// ---------------------------------------------------------------------------
+
+const nowState = {
+  track: 'planned', currentStep: 'engineer', completedSteps: ['architect', 'devops-branch'], task: '023-x.md', plan: '023-x.md',
+  branch: 'feat/x', startedAt: '2026-10-19T10:00:00.000Z', lastUpdatedAt: '2026-10-19T10:05:00.000Z',
+  reviewLoopCount: 1, prNumber: 7, modelProfile: 'balanced',
+};
+const nowView = (extra = {}) => ({
+  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokenDelta: 1500, projectDir: '/p',
+  hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => `${n}t`, since: () => 65, ...extra,
+});
+const taskCard = '<span>task <code>';
+
+test('renderNow: the header shows the task id and its title', () => {
+  const head = (html) => html.slice(0, html.indexOf('<div class="strip">'));
+  const titled = head(renderNow(nowView({ task: { id: '023', title: 'Board UI: markdown' } }), esc));
+  assert.ok(titled.includes(`${taskCard}023</code> Board UI: markdown</span>`), titled);
+  assert.ok(head(renderNow(nowView({ task: null }), esc)).includes(`${taskCard}023-x.md</code></span>`));
+  assert.ok(head(renderNow(nowView({ task: { id: '023', title: null } }), esc)).includes(`${taskCard}023-x.md</code></span>`));
+  assert.ok(head(renderNow(nowView({ task: { id: '023', title: 'a <b> & c' } }), esc)).includes('a &lt;b&gt; &amp; c'));
+});
+
+test('renderNow: a null state renders the empty state and a state renders the strip, modifiers, and facts', () => {
+  const empty = renderNow(nowView({ state: null, progress: null }), esc);
+  assert.ok(empty.includes('No workflow in flight') && empty.includes('<code>watching /p/.constellation/</code>'), empty);
+  const html = renderNow(nowView(), esc);
+  assert.equal(html.split('class="step current"').length - 1, 1);
+  assert.ok(html.includes('🔁 loop 1/3'), html);
+  assert.equal(html.split('class="fact"').length - 1, 6);
+  assert.ok(html.includes('data-since="2026-10-19T10:00:00.000Z"') && html.includes('65s'), html);
+});
+
+test('renderNowActions: View plan is enabled only when the state names a plan that the tree holds', () => {
+  const tree = buildTree([mk('task', '023-x.md', ['status: in-progress']), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md'])], null);
+  const none = renderNowActions({ state: { ...nowState, plan: undefined }, tree }, esc);
+  assert.ok(none.includes('disabled') && none.includes('title="no plan in the workflow state"'), none);
+  const missing = renderNowActions({ state: nowState, tree: buildTree([mk('task', '023-x.md', ['status: in-progress'])], null) }, esc);
+  assert.ok(missing.includes('disabled') && missing.includes('title="plan 023-x.md is not in .constellation/plans/"'), missing);
+  const ok = renderNowActions({ state: nowState, tree }, esc);
+  assert.ok(!ok.includes('disabled'), ok);
+  assert.ok(ok.includes('data-action="view-plan"') && ok.includes('data-file="023-x.md"'), ok);
+  assert.equal(renderNowActions({ state: null, tree }, esc), '');
+});
+
+test('renderPlanDialog: the header shows title, file, status chip, task id, and close; the body is the rendered plan', () => {
+  const plan = { file: '023-x.md', status: 'approved', title: 'Plan T', taskId: '023' };
+  const html = renderPlanDialog({ plan, item: { text: 'plan text', truncated: false }, markdownit: stubFactory() }, esc);
+  for (const part of ['<span id="dialog-title">Plan T</span>', '<code>023-x.md</code>', 'class="chip p-approved"', 'task 023', 'data-action="close-dialog"', 'R(plan text)']) {
+    assert.ok(html.includes(part), `${part} in ${html}`);
+  }
+  const weird = renderPlanDialog({ plan: { ...plan, status: 'weird' }, item: { text: 'x' }, markdownit: stubFactory() }, esc);
+  assert.ok(weird.includes('class="chip p-other"') && !weird.includes('p-weird'), weird);
+  const failed = renderPlanDialog({ plan, item: { error: 404 }, markdownit: stubFactory() }, esc);
+  assert.ok(failed.includes('plan unavailable (404)'), failed);
+});
+
+const pageTree = (...extra) => buildTree([
+  mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
+], null);
+const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
+  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null,
+  progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
+});
+
+test('page.js: a snapshot on #/plan/<file> fetches the plan and opens the dialog', async () => {
+  const page = bootPage({ hash: '#/plan/023-x.md' });
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.fetches.includes('/api/item?kind=plan&file=023-x.md'), page.fetches.join());
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(page.els.dialog.innerHTML.includes('R(body of /api/item?kind=plan&file=023-x.md)'), page.els.dialog.innerHTML);
+  page.feed(pageSnapshot());
+  await flush();
+  assert.equal(page.fetches.filter((u) => u.includes('kind=plan')).length, 1, 'a second snapshot does not refetch the plan');
+  const absent = bootPage({ hash: '#/plan/023-x.md' });
+  absent.feed(pageSnapshot({ tree: buildTree([mk('task', '023-x.md', ['status: in-progress'])], null) }));
+  await flush();
+  assert.ok(!absent.fetches.some((u) => u.includes('kind=plan')), absent.fetches.join());
+  assert.equal(absent.els.dialog.showModals, 0);
+  assert.equal(absent.location.hash, '#/plan/023-x.md', 'the hash stays');
+});
+
+test('page.js: View plan sets the route, and closing the dialog restores the route before the click', async () => {
+  const page = bootPage({ hash: '#/other' });
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.els['now-actions'].innerHTML.includes('data-action="view-plan"'));
+  const button = { getAttribute: (name) => (name === 'data-file' ? '023-x.md' : null) };
+  page.els['now-actions'].handlers.click({ target: { closest: (selector) => (selector === '[data-action="view-plan"]' ? button : null) } });
+  await flush();
+  assert.equal(page.location.hash, '#/plan/023-x.md');
+  assert.equal(page.els.dialog.open, true);
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/other');
+  assert.deepEqual(page.replaced, ['#/other']);
+  assert.equal(page.els.dialog.open, false);
+});
+
+test('page.js: the task body is fetched once per task mtime, not per snapshot', async () => {
+  const page = bootPage();
+  const at = (mtime) => pageSnapshot({ tree: pageTree(mtime) });
+  for (const mtime of [MTIME, MTIME, MTIME, '2026-10-19T12:00:00.000Z']) {
+    page.feed(at(mtime));
+    await flush();
+  }
+  assert.equal(page.fetches.filter((u) => u === '/api/item?kind=task&file=023-x.md').length, 2);
+  assert.equal(page.els.desc.hidden, false);
+  assert.ok(page.els.desc.innerHTML.startsWith('R(body of /api/item?kind=task'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ state: null }));
+  await flush();
+  assert.equal(page.els.desc.hidden, true);
+});
+
+test('page.css: the description scrolls inside 50vh, prose is 72ch, and the dialog has the §4.2 size', () => {
+  const css = uiText('page.css');
+  const desc = ruleBodies(css, '#desc').join(' ');
+  assert.ok(desc.includes('max-height: 50vh') && desc.includes('overflow: auto'), desc);
+  assert.ok(ruleBodies(css, '.md').join(' ').includes('max-width: 72ch'));
+  const dialog = ruleBodies(css, 'dialog').join(' ');
+  assert.ok(dialog.includes('width: min(960px, 92vw)') && dialog.includes('height: 85vh'), dialog);
 });
