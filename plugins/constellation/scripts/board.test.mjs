@@ -11,10 +11,10 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents } from './board-render.mjs';
+import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute } from './board-render.mjs';
 import {
   loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
@@ -2004,4 +2004,114 @@ test('page.js: refused storage does not stop the page or the toggle', () => {
   assert.equal(page.attrs['data-theme'], undefined);
   page.click();
   assert.equal(page.attrs['data-theme'], 'dark');
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: titles, markdown rendering, and the route parser
+// ---------------------------------------------------------------------------
+
+test('extractTitle: the first H1 after the front matter, else null', () => {
+  assert.equal(extractTitle('---\nstatus: x\n---\n# Title\nbody'), 'Title');
+  assert.equal(extractTitle('---\nstatus: x\n# note\n---\n# Real\n'), 'Real');
+  assert.equal(extractTitle('---\nstatus: x\n---\n#Title\n'), null);
+  assert.equal(extractTitle('---\nstatus: x\n---\nno heading\n## sub\n'), null);
+  assert.equal(extractTitle('---\r\nstatus: x\r\n---\r\n# Title  \r\nbody'), 'Title');
+  assert.equal(extractTitle('﻿---\nstatus: x\n---\n# Title\n'), 'Title');
+  assert.equal(extractTitle(null), null);
+});
+
+test('toNode: a node carries its title', () => {
+  assert.equal(mk('task', '001-a.md', ['status: inbox']).title, 'Title');
+  assert.equal(toNode('task', '002-b.md', '---\nstatus: inbox\n---\nno heading', MTIME).title, null);
+});
+
+test('buildTree: epic, feature, orphan plan, and task.plan carry title', () => {
+  const t = buildTree(v1Nodes(), null);
+  assert.equal(t.epics[0].title, 'Title');
+  assert.equal(t.epics[0].features[0].title, 'Title');
+  assert.equal(t.tasks.find((x) => x.file === '002-two.md').plan.title, 'Title');
+  const orphan = buildTree([mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md'])], null);
+  assert.equal(orphan.orphanPlans[0].title, 'Title');
+});
+
+// The vendor file ends in a // comment with no newline: the newline keeps `markdownit` out of it.
+const loadVendor = () => vm.runInNewContext(`${vendorText}\n;markdownit`, {});
+const stubFactory = (record = {}) => (options) => {
+  record.options = options;
+  return { render: (text) => `R(${text})`, renderer: { rules: {} } };
+};
+
+test('renderMarkdown: strips the front matter, drops the first H1, and passes the §7 options', () => {
+  const record = {};
+  const html = renderMarkdown('---\nstatus: x\n---\n# T\nbody text\n', stubFactory(record), esc);
+  assert.equal(html, 'R(body text\n)');
+  assert.deepEqual(record.options, { html: false, linkify: false, typographer: false, breaks: false });
+});
+
+test('renderMarkdown: only the first H1 goes, a later H1 and an H2 stay', () => {
+  const html = renderMarkdown('# A\ntext\n# B\n## C\n', (() => ({ render: (t) => t, renderer: { rules: {} } })), esc);
+  assert.ok(!html.includes('# A'), html);
+  assert.ok(html.includes('# B') && html.includes('## C'), html);
+});
+
+test('renderMarkdown: no library renders the body in a pre, escaped', () => {
+  assert.equal(renderMarkdown('---\nstatus: x\n---\n# T\n<b>x</b>', null, esc), '<pre class="md-raw">&lt;b&gt;x&lt;/b&gt;</pre>');
+});
+
+test('renderItemBody: a truncated item ends with the muted line', () => {
+  const marker = '<p class="muted">truncated at 512 KB</p>';
+  assert.ok(renderItemBody({ text: 'x', truncated: true }, null, esc).endsWith(marker));
+  assert.ok(!renderItemBody({ text: 'x', truncated: false }, null, esc).includes('truncated'));
+});
+
+test('renderMarkdown with the vendored library: raw HTML is text, unsafe and relative links lose href, http links open in a new tab', () => {
+  const md = loadVendor();
+  const html = renderMarkdown([
+    '<img src=x onerror=alert(1)>', '', '[a](javascript:alert(1))', '', '[b](014-x.md)', '',
+    '[c](https://example.com)', '', '[d](#top)',
+  ].join('\n'), md, esc);
+  assert.ok(html.includes('&lt;img'), html);
+  assert.ok(!html.includes('<img'), html);
+  // markdown-it 14 refuses the javascript: target outright: the source stays as plain text, with no anchor.
+  assert.ok(html.includes('<p>[a](javascript:alert(1))</p>'), html);
+  assert.ok(!/<a[^>]*>a<\/a>/.test(html), html);
+  assert.ok(html.includes('<a>b</a>'), html);
+  assert.ok(html.includes('<a href="https://example.com" rel="noopener noreferrer" target="_blank">c</a>'), html);
+  assert.ok(html.includes('<a>d</a>'), html);
+  assert.ok(!/href="(javascript|014|#)/.test(html), html);
+});
+
+test('renderMarkdown with the vendored library: images render as links with their alt text', () => {
+  const md = loadVendor();
+  const html = renderMarkdown('![alt](https://example.com/i.png)\n\n![alt2](./i.png)\n\n![](https://example.com/j.png)', md, esc);
+  assert.ok(html.includes('<a href="https://example.com/i.png" rel="noopener noreferrer" target="_blank">alt</a>'), html);
+  assert.ok(html.includes('<a>alt2</a>'), html);
+  assert.ok(html.includes('target="_blank">https://example.com/j.png</a>'), html);
+  assert.ok(!html.includes('<img'), html);
+  assert.ok(!html.includes('href="./i.png"'), html);
+});
+
+test('treeHolds: the name rule and the tree membership for tasks and plans', () => {
+  // The tree holds the bad names too, so only the name rule can refuse them.
+  const badNames = ['../x.md', '.x.md', 'a/b.md', 'x.txt'];
+  const tree = buildTree([
+    mk('task', '001-a.md', ['status: inbox']), mk('plan', '001-a.md', ['status: draft', 'task: 001-a.md']),
+    mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md']),
+    ...badNames.map((name) => mk('task', name, ['status: inbox'])),
+  ], null);
+  for (const bad of badNames) assert.ok(tree.tasks.some((t) => t.file === bad), `${bad} is in the tree`);
+  for (const bad of [...badNames, '', null]) assert.equal(treeHolds(tree, 'task', bad), false, String(bad));
+  assert.equal(treeHolds(tree, 'task', '001-a.md'), true);
+  assert.equal(treeHolds(tree, 'plan', '001-a.md'), true, 'a plan on task.plan');
+  assert.equal(treeHolds(tree, 'plan', '050-x.md'), true, 'an orphan plan');
+  assert.equal(treeHolds(tree, 'task', '050-x.md'), false);
+  assert.equal(treeHolds(tree, 'epic', '001-a.md'), false);
+  assert.equal(treeHolds(null, 'task', '001-a.md'), false);
+});
+
+test('parseRoute: #/plan/<file> opens the plan dialog and every other hash is the overview', () => {
+  assert.deepEqual(parseRoute('#/plan/023-x.md'), { view: 'plan', file: '023-x.md' });
+  for (const hash of ['#/plan/../x.md', '#/item/task/x.md', '#/', '', '#/plan/', '#/plan/x.txt', null]) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, String(hash));
+  }
 });

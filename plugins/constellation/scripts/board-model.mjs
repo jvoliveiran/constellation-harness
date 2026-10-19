@@ -196,6 +196,13 @@ export function parseFrontMatter(text, kind, truncated = false) {
   return { fields, warnings, malformed };
 }
 
+/** The first `# ` line after the front matter, trimmed, or null. The same line that renderMarkdown drops. */
+export function extractTitle(text) {
+  const body = String(text ?? '').replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+  const match = /^# (.*)$/m.exec(body);
+  return match ? match[1].trim() : null;
+}
+
 /** Build the wire node for one work-item file. Carries no raw front-matter map. */
 export function toNode(kind, file, text, mtime, truncated = false) {
   const { fields, warnings, malformed } = parseFrontMatter(text, kind, truncated);
@@ -216,6 +223,7 @@ export function toNode(kind, file, text, mtime, truncated = false) {
     type: fields.type ?? null,
     order: Number.isFinite(order) ? order : null,
     links,
+    title: extractTitle(text),
     mtime,
     flags: malformed ? ['malformed'] : warnings.length ? ['lenient'] : [],
     warnings,
@@ -257,7 +265,7 @@ function attachPlans(plans, taskByFile) {
     // The same-name task is the fallback only when the link is empty or names no task.
     const target = (linked ? taskByFile.get(linked) : undefined) ?? taskByFile.get(plan.file);
     if (linked && linked !== plan.file) addWarning(plan, 'task link mismatch');
-    if (target && !target.plan) target.plan = { file: plan.file, status: plan.status };
+    if (target && !target.plan) target.plan = { file: plan.file, status: plan.status, title: plan.title };
     else {
       addWarning(plan, target ? `duplicate plan for task: ${target.file}` : 'plan without task');
       orphans.push(plan);
@@ -280,7 +288,7 @@ function toTaskNode(node, state) {
 // Unknown fields alone are lenient noise: the row keeps its badge, Needs attention stays for real problems.
 const needsAttention = (n) => n.flags.includes('malformed') || n.warnings.some((w) => !w.startsWith('unknown field: '));
 const summaryOf = ({ kind, file, flags, warnings }) => ({ kind, file, flags, warnings });
-const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
+const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, title: node.title, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
 
 /** Assemble the epics → features → tasks tree plus counts and the attention list. */
 export function buildTree(nodes, state) {

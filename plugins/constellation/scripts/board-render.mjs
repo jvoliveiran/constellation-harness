@@ -110,3 +110,60 @@ export function renderAgents(view, esc) {
   if (finished.length > shown.length) html += '<button type="button" class="btn secondary" data-action="show-all">Show all (' + finished.length + ')</button>';
   return html;
 }
+
+/**
+ * Render a work-item body as HTML: strip the front matter, drop the first H1 (the header shows
+ * it), then render with markdown-it under the spec §7 options and renderer rules. markdownit is
+ * the library factory (window.markdownit); null renders the text in a <pre>. The page receives
+ * this function through toString(), so the body uses no module-scope symbol and no import.
+ */
+export function renderMarkdown(text, markdownit, esc) {
+  var body = String(text == null ? '' : text).replace(/^﻿/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
+  if (!markdownit) return '<pre class="md-raw">' + esc(body) + '</pre>';
+  var md = markdownit({ html: false, linkify: false, typographer: false, breaks: false });
+  var isRemote = function (href) { return /^https?:\/\//i.test(href || ''); };
+  md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+    var token = tokens[idx];
+    var href = token.attrGet('href');
+    if (isRemote(href)) { token.attrSet('rel', 'noopener noreferrer'); token.attrSet('target', '_blank'); }
+    else if (token.attrIndex('href') >= 0) token.attrs.splice(token.attrIndex('href'), 1);
+    return self.renderToken(tokens, idx, options);
+  };
+  md.renderer.rules.image = function (tokens, idx, options, env, self) {
+    var token = tokens[idx];
+    var src = token.attrGet('src') || '';
+    var label = self.renderInlineAsText(token.children, options, env) || src;
+    return isRemote(src)
+      ? '<a href="' + esc(src) + '" rel="noopener noreferrer" target="_blank">' + esc(label) + '</a>'
+      : '<a>' + esc(label) + '</a>';
+  };
+  return md.render(body);
+}
+
+/**
+ * The body of one /api/item response: the rendered markdown, then the muted truncation line when
+ * the read hit the cap. The page defines renderMarkdown at top level, next to this function.
+ */
+export function renderItemBody(item, markdownit, esc) {
+  return renderMarkdown(item.text, markdownit, esc) + (item.truncated ? '<p class="muted">truncated at 512 KB</p>' : '');
+}
+
+/**
+ * True when file matches the name rule of spec §4.4 and the snapshot tree holds it as the given
+ * kind. Task 023 knows task and plan; 024 adds epic and feature. A null tree holds nothing.
+ */
+export function treeHolds(tree, kind, file) {
+  if (!tree || typeof file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(file)) return false;
+  if (kind === 'task') return tree.tasks.some(function (t) { return t.file === file; });
+  if (kind === 'plan') return tree.tasks.some(function (t) { return !!t.plan && t.plan.file === file; }) || tree.orphanPlans.some(function (p) { return p.file === file; });
+  return false;
+}
+
+/**
+ * Parse a location hash into a route. `#/plan/<file>` with a valid file name gives the plan view;
+ * every other hash gives the overview. Task 024 extends the table.
+ */
+export function parseRoute(hash) {
+  var match = /^#\/plan\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(String(hash || ''));
+  return match ? { view: 'plan', file: match[1] } : { view: 'overview' };
+}
