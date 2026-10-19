@@ -299,14 +299,15 @@ is one block. Each block has the same header as the agent dialog.
   `breaks: false`. With `html: false` the library escapes raw HTML in the
   file. The default `validateLink` refuses `javascript:`, `vbscript:`, and
   `data:` targets.
-- Renderer rules: every `<a>` gets `rel="noopener noreferrer"`. Links to
-  `http(s)` get `target="_blank"`. Images render as a link with the alt
-  text, because `img-src data:` blocks every remote image and a local
-  path needs a read route that does not exist.
-- `renderMarkdown(text, tree)` in `board-render.mjs` wraps the library:
-  strip the front matter, drop the first H1, rewrite internal links
-  (§6.3), then call `md.render`. The page passes `window.markdownit`. A
-  unit test passes a stub.
+- Renderer rules: only `http(s)` links keep `href`. They get
+  `rel="noopener noreferrer"` and `target="_blank"`. Every other link
+  loses `href`. Images render as a link with the alt text, because
+  `img-src data:` blocks every remote image and a local path needs a read
+  route that does not exist.
+- `renderMarkdown(text, markdownit, esc)` in `board-render.mjs` wraps the
+  library: strip the front matter, drop the first H1, rewrite internal
+  links (§6.3), then call `md.render`. The page passes `window.markdownit`.
+  A unit test passes a stub.
 - Fallback: when the vendor file is absent at start, the board logs one
   line and the page renders bodies in `<pre>`.
 - Styles: a `.md` scope with headings, lists, tables with borders, code
