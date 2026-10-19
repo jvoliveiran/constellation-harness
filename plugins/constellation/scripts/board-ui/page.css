@@ -62,6 +62,7 @@
   /* Agents card */
   #agents-card { display: flex; flex-direction: column; max-height: calc(100vh - 96px); }
   #agents { overflow: auto; min-height: 0; }
+  #agents > .btn { margin-top: 8px; }
   #agents .running { position: sticky; top: 0; background: var(--surface); z-index: 1; }
   li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: baseline; }
   li:last-child { border-bottom: 0; }

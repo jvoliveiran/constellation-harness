@@ -13,7 +13,7 @@ import {
   parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText } from './board-render.mjs';
+import { renderBacklog, feedText, renderAgents } from './board-render.mjs';
 import {
   loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
@@ -1644,7 +1644,7 @@ const BOARD_NAMES_1_3_4 = [
   'resolveSteps', 'pairEvents', 'parseEventLines', 'tokenDelta', 'loadSnapshot', 'parseFrontMatter', 'toNode',
   'buildTree', 'diffStatuses', 'collapseBurst', 'mergeFeed', 'safeRefresh', 'renderBacklog', 'serve', 'feedText',
   'classifyProbe', 'probeText', 'ownsProject', 'isTrustedComponent', 'READ_CAP_BYTES', 'TAIL_CAP_BYTES',
-  'CAP_WARNING', 'SSE_CLIENT_CAP', 'emptySnapshot',
+  'CAP_WARNING', 'SSE_CLIENT_CAP', 'emptySnapshot', 'renderAgents',
 ];
 
 test('board.mjs: re-exports every 1.3.4 name', async () => {
@@ -1688,6 +1688,10 @@ test('board-render.mjs: every export is a function that runs with no module scop
   }
   const isolatedBacklog = new Function(`return ${render.renderBacklog.toString()}`)();
   assert.equal(isolatedBacklog(null, esc), render.renderBacklog(null, esc));
+  const isolatedAgents = new Function(`return ${render.renderAgents.toString()}`)();
+  const view = { agents: agentsFixture(1, 25), showAll: false, hhmm: stubHhmm, fmtDur: stubFmtDur };
+  assert.equal(isolatedAgents(view, esc), render.renderAgents(view, esc));
+  assert.notEqual(isolatedAgents(view, esc), '');
   const isolatedFeed = new Function(`return ${render.feedText.toString()}`)();
   const entry = { kind: 'transition', file: 'a.md', from: null, to: 'refined' };
   assert.equal(isolatedFeed(entry, esc), render.feedText(entry, esc));
@@ -1780,4 +1784,73 @@ test('page.js and the render functions hold no color literal and no style attrib
     assert.ok(!COLOR_LITERAL.test(text), `${name} holds a color literal: ${COLOR_LITERAL.exec(text)?.[0]}`);
     assert.ok(!text.includes('style='), `${name} holds a style attribute`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: renderAgents (spec §6.1)
+// ---------------------------------------------------------------------------
+
+const stubHhmm = (iso) => `T${iso}`;
+const stubFmtDur = (sec) => `${sec}s`;
+/** Agents newest first, one minute apart: the first `running` rows run, the rest finished. */
+const agentsFixture = (running, finished) => Array.from({ length: running + finished }, (_, i) => {
+  const start = new Date(Date.UTC(2026, 9, 19, 12, 0) - i * 60000).toISOString();
+  return i < running
+    ? { agent_type: 'constellation:sdet', start, running: true, durationSec: null }
+    : { agent_type: 'constellation:sdet', start, running: false, durationSec: 30 + i };
+});
+const agentsView = (agents, showAll = false) => ({ agents, showAll, hhmm: stubHhmm, fmtDur: stubFmtDur });
+const countRows = (html) => html.split('<li>').length - 1;
+const finishedList = (html) => html.slice(html.lastIndexOf('</div>') + '</div>'.length);
+
+test('renderAgents: no agents renders an empty string', () => {
+  assert.equal(renderAgents(agentsView([]), esc), '');
+});
+
+test('renderAgents: 60 agents show the running group first, then the newest 20, then Show all (58)', () => {
+  const agents = agentsFixture(2, 58);
+  const html = renderAgents(agentsView(agents), esc);
+  const runningBlock = /<div class="running">[\s\S]*?<\/ul><\/div>/.exec(html)[0];
+  assert.equal(countRows(runningBlock), 2);
+  assert.equal(html.indexOf('<div class="running">'), 0, 'the running group comes first');
+  const list = html.slice(runningBlock.length);
+  assert.equal(countRows(list), 20);
+  assert.ok(list.includes(`T${agents[2].start}`), 'the newest finished row comes first');
+  assert.ok(list.indexOf(`T${agents[2].start}`) < list.indexOf(`T${agents[3].start}`));
+  assert.ok(!list.includes(`T${agents[22].start}`), 'the 21st finished row is hidden');
+  assert.ok(html.includes('>Show all (58)</button>'));
+});
+
+test('renderAgents: showAll renders every finished row and no button', () => {
+  const html = renderAgents(agentsView(agentsFixture(2, 58), true), esc);
+  assert.equal(countRows(html), 60);
+  assert.ok(!html.includes('data-action="show-all"'));
+});
+
+test('renderAgents: exactly 20 finished rows show no button', () => {
+  const exact = renderAgents(agentsView(agentsFixture(0, 20)), esc);
+  assert.equal(countRows(exact), 20);
+  assert.ok(!exact.includes('data-action="show-all"'));
+  const over = renderAgents(agentsView(agentsFixture(0, 21)), esc);
+  assert.equal(countRows(over), 20);
+  assert.ok(over.includes('>Show all (21)</button>'));
+});
+
+test('renderAgents: agent types and formatted times are escaped', () => {
+  const agents = [{ agent_type: '<img src=x onerror=alert(1)>', start: '2026-10-19T12:00:00.000Z', running: false, durationSec: 5 }];
+  const html = renderAgents({ agents, showAll: false, hhmm: () => '<svg>', fmtDur: stubFmtDur }, esc);
+  assert.ok(html.includes('&lt;img') && html.includes('&lt;svg'), html);
+  assert.ok(!html.includes('<img') && !html.includes('<svg'), html);
+});
+
+test('renderAgents: a running row carries data-since and the run class', () => {
+  const agents = agentsFixture(1, 1);
+  const html = renderAgents(agentsView(agents), esc);
+  const finished = finishedList(html);
+  const runningRow = html.slice(0, html.length - finished.length);
+  assert.ok(runningRow.includes(`data-since="${agents[0].start}"`));
+  assert.ok(runningRow.includes('data-prefix="running "'));
+  assert.ok(runningRow.includes('class="run"'));
+  assert.ok(!finished.includes('data-since') && !finished.includes('class="run"'), finished);
+  assert.ok(finished.includes('<span class="dur">31s</span>'), finished);
 });

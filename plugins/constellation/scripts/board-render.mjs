@@ -83,3 +83,30 @@ export function feedText(e, esc) {
   if (e.kind === 'summary') return esc(e.count + ' task statuses changed at once (branch switch or pull?)');
   return e.event === 'PostToolUse' ? esc(e.tool_name || 'edit') + ' <code>' + esc(e.file || '') + '</code>' : esc(e.event || '');
 }
+
+/**
+ * Render the agent rows of the Agents card as an HTML string: the running group, the newest
+ * finished rows, and a Show all button past the cap. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import: the time formatters come
+ * in through view. view = { agents, showAll, hhmm, fmtDur }. agents is newest first, as the
+ * snapshot sorts it. No agents gives ''.
+ */
+export function renderAgents(view, esc) {
+  var AGENT_ROWS = 20;
+  var agents = view.agents || [];
+  var running = agents.filter(function (a) { return a.running; });
+  var finished = agents.filter(function (a) { return !a.running; });
+  var shown = view.showAll ? finished : finished.slice(0, AGENT_ROWS);
+  function name(a) { return esc((a.agent_type || 'agent').replace(/^constellation:/, '')); }
+  function row(a) {
+    var dur = a.running
+      ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running</span>'
+      : '<span class="dur">' + esc(view.fmtDur(a.durationSec)) + '</span>';
+    return '<li><span class="t">' + esc(view.hhmm(a.start)) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + name(a) + '</span>' + dur + '</li>';
+  }
+  var html = '';
+  if (running.length) html += '<div class="running"><div class="gh">Running</div><ul>' + running.map(row).join('') + '</ul></div>';
+  if (shown.length) html += '<ul>' + shown.map(row).join('') + '</ul>';
+  if (finished.length > shown.length) html += '<button type="button" class="btn secondary" data-action="show-all">Show all (' + finished.length + ')</button>';
+  return html;
+}

@@ -1,6 +1,7 @@
 
 (function () {
   var snap = null;
+  var showAllAgents = false;
   var connected = false, lostAt = null;
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
@@ -15,6 +16,7 @@
     renderNow();
     renderBacklogCard();
     renderAgentsCard();
+    tick();
   }
 
   function renderMeta() {
@@ -70,25 +72,21 @@
 
   function renderAgentsCard() {
     var activity = snap.feed || [];
-    var feed = '';
+    var html;
     if (!snap.agents.length && !activity.length) {
-      feed = '<div class="empty">No events yet<br><code>.constellation/metrics/events.jsonl</code></div>';
+      html = '<div class="empty">No events yet<br><code>.constellation/metrics/events.jsonl</code></div>';
     } else {
-      feed += '<ul>';
-      snap.agents.forEach(function (a) {
-        var dur = a.running ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running ' + fmtDur(since(a.start)) + '</span>' : '<span class="dur">' + fmtDur(a.durationSec) + '</span>';
-        feed += '<li><span class="t">' + hhmm(a.start) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + esc((a.agent_type || 'agent').replace(/^constellation:/, '')) + '</span>' + dur + '</li>';
-      });
-      feed += '</ul>';
-      if (activity.length) {
-        feed += '<h2 class="mt16">Activity</h2><ul>';
-        activity.forEach(function (e) {
-          feed += '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
-        });
-        feed += '</ul>';
-      }
+      html = renderAgents({ agents: snap.agents, showAll: showAllAgents, hhmm: hhmm, fmtDur: fmtDur }, esc) + renderActivity(activity);
     }
-    document.getElementById('agents').innerHTML = feed;
+    document.getElementById('agents').innerHTML = html;
+  }
+
+  function renderActivity(activity) {
+    if (!activity.length) return '';
+    var rows = activity.map(function (e) {
+      return '<li><span class="t">' + hhmm(e.ts) + '</span><span>' + feedText(e, esc) + '</span></li>';
+    }).join('');
+    return '<h2 class="mt16">Activity</h2><ul>' + rows + '</ul>';
   }
 
   function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
@@ -124,6 +122,10 @@
   } catch (e) { /* storage refused: follow the OS theme */ }
   paintThemeButton();
   document.getElementById('theme').addEventListener('click', toggleTheme);
+  document.getElementById('agents').addEventListener('click', function (ev) {
+    var target = ev.target;
+    if (target && target.getAttribute && target.getAttribute('data-action') === 'show-all') { showAllAgents = true; render(); }
+  });
 
   var es = new EventSource('/events');
   es.onopen = function () { connected = true; lostAt = null; render(); };
