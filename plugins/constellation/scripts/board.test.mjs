@@ -1706,3 +1706,78 @@ test('serve: the page holds one script, one style, and the script compiles', asy
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 022: design tokens, themes, and layout (spec §4.1 to §4.3)
+// ---------------------------------------------------------------------------
+
+/** The declaration text of a stylesheet: comments, selectors, and at-rule preludes removed. */
+const declarationsOnly = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/[^{};]+\{/g, '{');
+/** The stylesheet without its token blocks: every block whose selector starts with :root. */
+const withoutTokens = (css) => css.replace(/:root[^{]*\{[^}]*\}/g, '');
+const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
+
+const TOKENS = {
+  '--bg': ['#0b0d12', '#f6f7f9'], '--surface': ['#13161e', '#ffffff'], '--surface-2': ['#1a1e28', '#f0f2f5'],
+  '--border': ['#262b38', '#e3e6ec'], '--text': ['#e7e9ee', '#171a21'], '--muted': ['#8b91a1', '#646b7a'],
+  '--accent': ['#7c8cff', '#4f5fe6'], '--ok': ['#4ecb8d', '#1f9d61'], '--warn': ['#f3b63f', '#b7791f'],
+  '--danger': ['#ff6b6b', '#d64545'],
+};
+const CHIP_TOKENS = {
+  's-inbox': 'muted', 's-refined': 'accent', 's-in-progress': 'warn', 's-parked': 'muted', 's-done': 'ok',
+  's-dropped': 'danger', 's-other': 'muted', 'p-draft': 'muted', 'p-approved': 'ok',
+};
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Every declaration body of a rule whose selector list holds the given selector text. */
+const ruleBodies = (css, selector) => [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .filter(([, selectors]) => selectors.split(',').some((s) => s.trim() === selector))
+  .map(([, , body]) => body);
+
+test('page.css: every color outside the token blocks is a var()', () => {
+  const left = declarationsOnly(withoutTokens(uiText('page.css')));
+  const match = COLOR_LITERAL.exec(left);
+  assert.ok(!match, `color literal outside the tokens: ${match?.[0]} near "${left.slice(Math.max(0, match?.index - 40), match?.index + 20)}"`);
+});
+
+test('page.css: the token blocks hold the ten §4.1 values for dark and light', () => {
+  const css = uiText('page.css');
+  const dark = /:root \{([^}]*)\}/.exec(css)?.[1];
+  const lightOs = /:root:not\(\[data-theme="dark"\]\)\s*\{([^}]*)\}/.exec(css)?.[1];
+  const lightManual = /:root\[data-theme="light"\]\s*\{([^}]*)\}/.exec(css)?.[1];
+  assert.ok(dark && lightOs && lightManual, 'a token block is missing');
+  for (const [name, [darkValue, lightValue]] of Object.entries(TOKENS)) {
+    assert.ok(dark.includes(`${name}: ${darkValue};`), `dark ${name}`);
+    assert.ok(lightOs.includes(`${name}: ${lightValue};`), `OS light ${name}`);
+    assert.ok(lightManual.includes(`${name}: ${lightValue};`), `manual light ${name}`);
+  }
+});
+
+test('page.css: the status chips map to the §4.2 tokens', () => {
+  const css = uiText('page.css');
+  for (const [chip, token] of Object.entries(CHIP_TOKENS)) {
+    const bodies = ruleBodies(css, `.chip.${chip}`);
+    assert.ok(bodies.length > 0, `no rule for .chip.${chip}`);
+    assert.ok(bodies.some((body) => body.includes(`var(--${token})`)), `.chip.${chip} does not use --${token}`);
+  }
+});
+
+test('page.css: the Agents card is bounded, scrolls, and is sticky only from 1100 px', () => {
+  const css = uiText('page.css');
+  const [base, ...media] = css.split('@media (min-width: 1100px)');
+  assert.equal(media.length, 1, 'one min-width: 1100px block');
+  const card = ruleBodies(base, '#agents-card').join(' ');
+  assert.ok(card.includes('max-height: calc(100vh - 96px)'), 'the card has no max-height');
+  const body = ruleBodies(base, '#agents').join(' ');
+  assert.ok(body.includes('overflow: auto') && body.includes('min-height: 0'), 'the card body does not scroll');
+  assert.ok(!card.includes('position: sticky'), 'the card is sticky below 1100 px');
+  assert.ok(ruleBodies(media[0], '#agents-card').join(' ').includes('position: sticky'), 'the card is not sticky from 1100 px');
+});
+
+test('page.js and the render functions hold no color literal and no style attribute', async () => {
+  const render = await import('./board-render.mjs');
+  const sources = { 'page.js': uiText('page.js'), ...Object.fromEntries(Object.entries(render).map(([n, fn]) => [n, fn.toString()])) };
+  for (const [name, text] of Object.entries(sources)) {
+    assert.ok(!COLOR_LITERAL.test(text), `${name} holds a color literal: ${COLOR_LITERAL.exec(text)?.[0]}`);
+    assert.ok(!text.includes('style='), `${name} holds a style attribute`);
+  }
+});

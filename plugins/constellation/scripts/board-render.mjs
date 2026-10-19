@@ -45,7 +45,7 @@ export function renderBacklog(tree, esc) {
     return html;
   }
   function header(node) {
-    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <code>' + esc(node.status || '') + '</code>' + badge(node) + '</div>' + warnLines(node);
+    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip s-' + esc(node.status || 'other') + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
   }
   function featureGroup(f) {
     return '<div class="grp">' + header(f) + taskGroups(f.tasks, f.file) + '</div>';

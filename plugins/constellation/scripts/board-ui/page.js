@@ -11,21 +11,30 @@
 
   function render() {
     if (!snap) return;
+    renderMeta();
+    renderNow();
+    renderBacklogCard();
+    renderAgentsCard();
+  }
+
+  function renderMeta() {
     var meta = '<span><code>' + esc(snap.projectDir) + '</code></span>';
-    if (!snap.initialized) meta += '<span class="badge warn">not initialized — no .constellation/config.json</span>';
-    if (!snap.hasTracks) meta += '<span class="badge warn">tracks.json missing</span>';
-    if (snap.stale) meta += '<span class="badge warn">stale — state file unreadable, showing last good</span>';
-    if (!connected && lostAt) meta += '<span class="badge warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
+    if (!snap.initialized) meta += '<span class="chip warn">not initialized — no .constellation/config.json</span>';
+    if (!snap.hasTracks) meta += '<span class="chip warn">tracks.json missing</span>';
+    if (snap.stale) meta += '<span class="chip warn">stale — state file unreadable, showing last good</span>';
+    if (!connected && lostAt) meta += '<span class="chip warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
     meta += '<span>updated ' + hhmm(snap.at) + '</span>';
     document.getElementById('meta').innerHTML = meta;
+  }
 
+  function renderNow() {
     var now = '';
     var s = snap.state, p = snap.progress;
     if (!s) {
       now = '<div class="empty">No workflow in flight<br><code>watching ' + esc(snap.projectDir) + '/.constellation/</code></div>';
     } else {
       var head = '<div class="meta mb12">'
-        + '<span class="badge">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
+        + '<span class="chip">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
         + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
         + (s.task ? '<span>task <code>' + esc(s.task) + '</code></span>' : '')
         + '</div>';
@@ -36,7 +45,7 @@
       if (p.unknownCurrent) strip += '<div class="step current"><div class="e">⚙️</div><div class="l">' + esc(p.unknownCurrent) + '</div></div>';
       if (!p.steps.length && !p.unknownCurrent) strip += '<div class="empty">track <code>' + esc(p.track) + '</code> has no steps in tracks.json</div>';
       strip += '</div>';
-      var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="badge">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
+      var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="chip">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
       var facts = '<div class="facts">'
         + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, '', fmtDur(since(s.startedAt)) || '—') + '</div></div>'
         + fact('last save', hhmm(s.lastUpdatedAt))
@@ -49,13 +58,17 @@
     }
     if (snap.errors && snap.errors.length) now += '<div class="errs">' + snap.errors.map(esc).join('<br>') + '</div>';
     document.getElementById('now').innerHTML = now;
+  }
 
+  function renderBacklogCard() {
     var open = [];
     document.querySelectorAll('#backlog details[open]').forEach(function (d) { open.push(d.getAttribute('data-group')); });
     var backlog = document.getElementById('backlog');
     backlog.innerHTML = renderBacklog(snap.tree, esc);
     backlog.querySelectorAll('details').forEach(function (d) { if (open.indexOf(d.getAttribute('data-group')) >= 0) d.setAttribute('open', ''); });
+  }
 
+  function renderAgentsCard() {
     var activity = snap.feed || [];
     var feed = '';
     if (!snap.agents.length && !activity.length) {
@@ -75,8 +88,9 @@
         feed += '</ul>';
       }
     }
-    document.getElementById('feed').innerHTML = feed;
+    document.getElementById('agents').innerHTML = feed;
   }
+
   function sinceSpan(iso, prefix, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="' + esc(prefix) + '">' + esc(text) + '</span>'; }
   function tick() {
     document.querySelectorAll('[data-since]').forEach(function (el) {
@@ -85,6 +99,31 @@
     });
   }
   function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
+
+  // Theme: the OS theme applies through CSS alone. A stored choice sets data-theme, which wins.
+  function effectiveTheme() {
+    var set = document.documentElement.getAttribute('data-theme');
+    if (set === 'light' || set === 'dark') return set;
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  function paintThemeButton() {
+    var button = document.getElementById('theme');
+    var light = effectiveTheme() === 'light';
+    button.textContent = light ? '☀' : '☾';
+    button.setAttribute('aria-label', light ? 'Switch to dark theme' : 'Switch to light theme');
+  }
+  function toggleTheme() {
+    var next = effectiveTheme() === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('board-theme', next); } catch (e) { /* storage refused: the choice lasts until reload */ }
+    paintThemeButton();
+  }
+  try {
+    var storedTheme = localStorage.getItem('board-theme');
+    if (storedTheme === 'light' || storedTheme === 'dark') document.documentElement.setAttribute('data-theme', storedTheme);
+  } catch (e) { /* storage refused: follow the OS theme */ }
+  paintThemeButton();
+  document.getElementById('theme').addEventListener('click', toggleTheme);
 
   var es = new EventSource('/events');
   es.onopen = function () { connected = true; lostAt = null; render(); };
