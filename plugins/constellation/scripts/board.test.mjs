@@ -16,7 +16,7 @@ import {
 } from './board-model.mjs';
 import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute } from './board-render.mjs';
 import {
-  loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -2114,4 +2114,87 @@ test('parseRoute: #/plan/<file> opens the plan dialog and every other hash is th
   for (const hash of ['#/plan/../x.md', '#/item/task/x.md', '#/', '', '#/plan/', '#/plan/x.txt', null]) {
     assert.deepEqual(parseRoute(hash), { view: 'overview' }, String(hash));
   }
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: GET /api/item
+// ---------------------------------------------------------------------------
+
+async function withItemServer(dir, fn) {
+  const server = serve(() => loadSnapshot(dir), () => {}, (kind, file) => readItem(dir, kind, file));
+  const port = await listenOnFreePort(server);
+  try { await fn((url, method = 'GET') => httpRequest(port, { host: `127.0.0.1:${port}`, url, method })); } finally { await closeServer(server); }
+}
+const itemProject = () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: refined']);
+  writeItem(dir, 'plans', '001-a.md', ['status: draft', 'task: 001-a.md']);
+  return dir;
+};
+const itemUrl = (kind, file) => `/api/item?kind=${kind}&file=${encodeURIComponent(file)}`;
+
+test('serve: /api/item returns 404 and no body for a bad kind, a bad name, and a name outside the tree', async () => {
+  const dir = itemProject();
+  // On disk, but the scan skips a dot file: only the tree check keeps it off the wire.
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '.hidden.md'), doc(['status: inbox']));
+  await withItemServer(dir, async (get) => {
+    for (const url of [itemUrl('epic', '001-a.md'), itemUrl('task', '.hidden.md'), itemUrl('task', '../x.md'), itemUrl('task', 'zzz.md'), itemUrl('task', ''), '/api/item?kind=task', itemUrl('plan', '002-none.md')]) {
+      const r = await get(url);
+      assert.equal(r.status, 404, url);
+      assert.equal(r.body, 'not found', url);
+    }
+    assert.equal((await get(itemUrl('task', '001-a.md'), 'POST')).status, 405);
+  });
+});
+
+test('serve: /api/item serves a task body and a plan body with mtime and cache-control no-store', async () => {
+  const dir = itemProject();
+  await withItemServer(dir, async (get) => {
+    for (const [kind, sub] of [['task', 'tasks'], ['plan', 'plans']]) {
+      const r = await get(itemUrl(kind, '001-a.md'));
+      assert.equal(r.status, 200, kind);
+      assert.match(r.headers['content-type'], /^application\/json/);
+      assert.equal(r.headers['cache-control'], 'no-store');
+      const file = path.join(dir, '.constellation', sub, '001-a.md');
+      const body = JSON.parse(r.body);
+      assert.deepEqual(Object.keys(body).sort(), ['file', 'kind', 'mtime', 'text', 'truncated']);
+      assert.deepEqual([body.kind, body.file, body.truncated], [kind, '001-a.md', false]);
+      assert.equal(body.text, fs.readFileSync(file, 'utf8'));
+      assert.equal(body.mtime, fs.statSync(file).mtime.toISOString());
+    }
+  });
+});
+
+test('serve: /api/item caps the body at 512 KB and flags truncated', async () => {
+  const dir = itemProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '002-big.md'), `${doc(['status: inbox'])}\n${'x'.repeat(600 * 1024)}\n`);
+  await withItemServer(dir, async (get) => {
+    const body = JSON.parse((await get(itemUrl('task', '002-big.md'))).body);
+    assert.equal(body.text.length, BODY_CAP_BYTES);
+    assert.equal(body.truncated, true);
+    assert.equal(JSON.parse((await get(itemUrl('task', '001-a.md'))).body).truncated, false);
+  });
+});
+
+test('serve: /api/item refuses a symlink that leaves .constellation and a FIFO, and reads a symlink inside it', async () => {
+  const dir = itemProject();
+  const tasks = path.join(dir, '.constellation', 'tasks');
+  const outside = path.join(dir, 'secret.md');
+  fs.writeFileSync(outside, doc(['status: inbox', 'secret-key: 1']));
+  fs.symlinkSync(outside, path.join(tasks, '003-leak.md'));
+  fs.symlinkSync(path.join(tasks, '001-a.md'), path.join(tasks, '004-inside.md'));
+  const fifo = path.join(tasks, '005-pipe.md');
+  if (hasMkfifo) assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  try {
+    await withItemServer(dir, async (get) => {
+      assert.deepEqual(taskNode(loadSnapshot(dir).tree, '003-leak.md').warnings, ['unreadable: outside .constellation']);
+      const leak = await get(itemUrl('task', '003-leak.md'));
+      assert.equal(leak.status, 404);
+      assert.ok(!leak.body.includes('secret-key'));
+      const inside = await get(itemUrl('task', '004-inside.md'));
+      assert.equal(inside.status, 200);
+      assert.equal(JSON.parse(inside.body).text, fs.readFileSync(path.join(tasks, '001-a.md'), 'utf8'));
+      if (hasMkfifo) assert.equal((await get(itemUrl('task', '005-pipe.md'))).status, 404);
+    });
+  } finally { fs.rmSync(fifo, { force: true }); }
 });
