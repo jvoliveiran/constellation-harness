@@ -5,7 +5,7 @@ source: user
 feature: F001-board-ui-overhaul.md
 order: 4
 date-created: 14-10-2026
-last-edit: 14-10-2026
+last-edit: 19-10-2026
 ---
 # Board UI: session reader for tokens spent and agent outputs
 
@@ -63,3 +63,8 @@ Depends on task 023.
 10. Given the change, then `sumUsage`, `extractReport`, and
     `attributeAgents` have tests, `/api/agent` has HTTP tests, and
     `scripts/selftest.sh` prints `selftest: ALL GREEN`.
+
+## Scope notes from the task 023 scope pass (19-10-2026)
+
+- Stepper restyle (connector line, current ring, spec §4.2) moves here, because this task makes done steps buttons.
+- F001 carry-over 2: the running-row duration pulse in `--warn` (spec §6.1) moves here, because this task changes the agent rows.

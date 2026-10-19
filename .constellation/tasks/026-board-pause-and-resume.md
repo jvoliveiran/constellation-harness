@@ -5,7 +5,7 @@ source: user
 feature: F001-board-ui-overhaul.md
 order: 5
 date-created: 14-10-2026
-last-edit: 14-10-2026
+last-edit: 19-10-2026
 ---
 # Board UI: pause and resume a workflow from the page
 
@@ -58,3 +58,7 @@ Depends on task 022.
 10. Given the change, then `pause-guard.test.sh` covers criteria 2 to 4
     with a 2 s hold, `/api/control` has HTTP tests, and
     `scripts/selftest.sh` prints `selftest: ALL GREEN`.
+
+## Scope notes from the task 023 scope pass (19-10-2026)
+
+- F001 carry-over 1: the `● live` item in the top bar (spec §4.3) moves here. Pause and Resume need a live connection, so the live state belongs with them. The page already shows the `disconnected since` chip.
