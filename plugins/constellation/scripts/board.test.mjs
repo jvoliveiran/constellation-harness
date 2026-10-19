@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta,
@@ -1864,4 +1865,67 @@ test('renderAgents: a running row carries data-since and the run class', () => {
   assert.ok(runningRow.includes('class="run"'));
   assert.ok(!finished.includes('data-since') && !finished.includes('class="run"'), finished);
   assert.ok(finished.includes('<span class="dur">31s</span>'), finished);
+});
+
+// Task 022, criterion 5: run the shipped page.js against stub browser objects.
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) => {
+  const attrs = {};
+  const button = { textContent: '', attrs: {}, handlers: {},
+    setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
+  const els = {};
+  const stub = (id) => els[id] ??= { innerHTML: '', addEventListener() {}, getAttribute: () => null };
+  const writes = [];
+  const localStorage = {
+    getItem() { if (storageThrows) throw new Error('denied'); return stored; },
+    setItem(k, v) { if (storageThrows) throw new Error('denied'); writes.push([k, v]); },
+  };
+  const document = {
+    documentElement: { setAttribute: (k, v) => { attrs[k] = v; }, getAttribute: (k) => attrs[k] ?? null },
+    getElementById: (id) => (id === 'theme' ? button : stub(id)),
+    querySelectorAll: () => [],
+  };
+  const sandbox = {
+    document, localStorage, console,
+    window: { matchMedia: () => ({ matches: os === 'light' }) },
+    EventSource: function () {}, setInterval: () => 0, Date,
+  };
+  vm.runInNewContext(uiText('page.js'), sandbox);
+  return { attrs, button, writes, click: () => button.handlers.click() };
+};
+
+test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
+  const light = bootPage({ os: 'light' });
+  assert.equal(light.attrs['data-theme'], undefined);
+  assert.equal(light.button.attrs['aria-label'], 'Switch to dark theme');
+  const dark = bootPage({ os: 'dark' });
+  assert.equal(dark.button.attrs['aria-label'], 'Switch to light theme');
+});
+
+test('page.js: a stored choice wins over the OS theme', () => {
+  const page = bootPage({ os: 'light', stored: 'dark' });
+  assert.equal(page.attrs['data-theme'], 'dark');
+  assert.equal(page.button.attrs['aria-label'], 'Switch to light theme');
+});
+
+test('page.js: a stored value other than light or dark is ignored', () => {
+  const page = bootPage({ os: 'light', stored: 'purple' });
+  assert.equal(page.attrs['data-theme'], undefined);
+  assert.equal(page.button.attrs['aria-label'], 'Switch to dark theme');
+});
+
+test('page.js: the toggle switches the theme and stores the new choice', () => {
+  const page = bootPage({ os: 'light' });
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'dark');
+  assert.deepEqual(page.writes, [['board-theme', 'dark']]);
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'light');
+  assert.deepEqual(page.writes.at(-1), ['board-theme', 'light']);
+});
+
+test('page.js: refused storage does not stop the page or the toggle', () => {
+  const page = bootPage({ os: 'light', storageThrows: true });
+  assert.equal(page.attrs['data-theme'], undefined);
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'dark');
 });
