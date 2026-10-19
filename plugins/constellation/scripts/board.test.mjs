@@ -2380,3 +2380,14 @@ test('renderAgents: a non-string agent_type renders its row and the others', () 
   assert.ok(html.includes('<span>42</span>'), html);
   assert.ok(html.includes('<span>sdet</span>') && html.includes('<span>plain</span>'), html);
 });
+
+// The page script runs while the parser reaches it: an element after the first script does not exist yet.
+test('serve: every id that page.js looks up appears in the served markup before the first script', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const before = r.body.slice(0, r.body.indexOf('<script'));
+    const ids = [...new Set([...uiText('page.js').matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1]))];
+    assert.ok(ids.length >= 9, `ids found: ${ids.join()}`);
+    for (const id of ids) assert.ok(before.includes(`id="${id}"`), `#${id} is not in the markup before the first <script>`);
+  });
+});
