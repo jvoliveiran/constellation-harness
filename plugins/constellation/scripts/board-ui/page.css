@@ -37,6 +37,7 @@
   /* Top bar */
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 0 12px; border-bottom: 1px solid var(--border); }
   .meta { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; min-width: 0; }
+  .meta > * { min-width: 0; overflow-wrap: anywhere; }
   #theme { margin-left: auto; width: 32px; padding: 0; }
 
   /* Main grid and cards */
@@ -45,8 +46,9 @@
   .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
 
   /* Now card */
-  .strip { display: flex; flex-wrap: wrap; gap: 8px; }
-  .step { flex: 1 1 90px; min-width: 90px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; opacity: .55; }
+  .strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+  .step { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; opacity: .55; }
+  .strip > .empty { grid-column: 1 / -1; }
   .step .e { font-size: 20px; }
   .step .l { font-size: 12px; color: var(--muted); }
   .step.done { opacity: .9; border-color: var(--ok); }
@@ -54,7 +56,8 @@
   .step.current { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
   .step.current .l { color: var(--accent); font-weight: 600; }
   .mods { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .facts { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .facts { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 10px; }
+  .fact { min-width: 0; overflow-wrap: anywhere; }
   .fact .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
   .fact .v { font-size: 16px; font-variant-numeric: tabular-nums; }
   .errs { color: var(--danger); font-size: 12px; margin-top: 10px; }

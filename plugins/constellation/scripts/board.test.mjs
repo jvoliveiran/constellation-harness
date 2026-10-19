@@ -1777,6 +1777,17 @@ test('page.css: the Agents card is bounded, scrolls, and is sticky only from 110
   assert.ok(ruleBodies(media[0], '#agents-card').join(' ').includes('position: sticky'), 'the card is not sticky from 1100 px');
 });
 
+test('page.css: the Now card cannot overflow a 390 px viewport', () => {
+  const css = uiText('page.css');
+  const strip = ruleBodies(css, '.strip').join(' ');
+  assert.ok(strip.includes('display: grid') && strip.includes('repeat(auto-fill, minmax(88px, 1fr))'), 'the stepper does not wrap by auto-fill');
+  for (const selector of ['.step', '.fact', '.meta > *', '.card']) {
+    assert.ok(ruleBodies(css, selector).join(' ').includes('min-width: 0'), `${selector} lacks min-width: 0`);
+  }
+  assert.ok(ruleBodies(css, '.meta > *').join(' ').includes('overflow-wrap: anywhere'), 'long branch and task text does not wrap');
+  assert.ok(ruleBodies(css, 'main').join(' ').includes('minmax(0, 1fr)'), 'the single column can grow past the viewport');
+});
+
 test('page.js and the render functions hold no color literal and no style attribute', async () => {
   const render = await import('./board-render.mjs');
   const sources = { 'page.js': uiText('page.js'), ...Object.fromEntries(Object.entries(render).map(([n, fn]) => [n, fn.toString()])) };
