@@ -2348,3 +2348,35 @@ test('page.css: the description scrolls inside 50vh, prose is 72ch, and the dial
   const dialog = ruleBodies(css, 'dialog').join(' ');
   assert.ok(dialog.includes('width: min(960px, 92vw)') && dialog.includes('height: 85vh'), dialog);
 });
+
+// ---------------------------------------------------------------------------
+// Task 029 items, folded into task 023
+// ---------------------------------------------------------------------------
+
+test('page.js: a click on a child of Show all shows every row', async () => {
+  const page = bootPage();
+  page.feed({ ...pageSnapshot({ state: null }), agents: agentsFixture(0, 25) });
+  assert.equal(countRows(page.els.agents.innerHTML), 20);
+  assert.ok(page.els.agents.innerHTML.includes('data-action="show-all"'));
+  // The target is a child of the button: it has closest() and no data-action of its own.
+  const child = { closest: (selector) => (selector === '[data-action="show-all"]' ? {} : null) };
+  page.els.agents.handlers.click({ target: child });
+  assert.equal(countRows(page.els.agents.innerHTML), 25);
+  assert.ok(!page.els.agents.innerHTML.includes('data-action="show-all"'));
+});
+
+test('renderBacklog: a status outside the allow-list gets the class s-other only', () => {
+  const html = (status) => renderBacklog(buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), esc);
+  const odd = html('done in-progress');
+  assert.ok(odd.includes('<span class="chip s-other">done in-progress</span>'), odd);
+  assert.ok(html('done').includes('<span class="chip s-done">done</span>'));
+});
+
+test('renderAgents: a non-string agent_type renders its row and the others', () => {
+  const start = '2026-10-19T12:00:00.000Z';
+  const agent = (agent_type) => ({ agent_type, start, running: false, durationSec: 5 });
+  const html = renderAgents(agentsView([agent(42), agent({}), agent(['a']), agent('constellation:sdet'), agent('plain')]), esc);
+  assert.equal(countRows(html), 5);
+  assert.ok(html.includes('<span>42</span>'), html);
+  assert.ok(html.includes('<span>sdet</span>') && html.includes('<span>plain</span>'), html);
+});

@@ -173,8 +173,8 @@
   paintThemeButton();
   document.getElementById('theme').addEventListener('click', toggleTheme);
   document.getElementById('agents').addEventListener('click', function (ev) {
-    var target = ev.target;
-    if (target && target.getAttribute && target.getAttribute('data-action') === 'show-all') { showAllAgents = true; render(); }
+    // closest: a click on a child of the button still counts.
+    if (ev.target && ev.target.closest && ev.target.closest('[data-action="show-all"]')) { showAllAgents = true; render(); }
   });
   document.getElementById('now-actions').addEventListener('click', function (ev) {
     var button = ev.target && ev.target.closest && ev.target.closest('[data-action="view-plan"]');

@@ -44,8 +44,10 @@ export function renderBacklog(tree, esc) {
     });
     return html;
   }
+  var STATUS_CLASSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
   function header(node) {
-    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip s-' + esc(node.status || 'other') + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
+    var statusClass = STATUS_CLASSES.indexOf(node.status) >= 0 ? node.status : 'other';
+    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip s-' + statusClass + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
   }
   function featureGroup(f) {
     return '<div class="grp">' + header(f) + taskGroups(f.tasks, f.file) + '</div>';
@@ -97,7 +99,7 @@ export function renderAgents(view, esc) {
   var running = agents.filter(function (a) { return a.running; });
   var finished = agents.filter(function (a) { return !a.running; });
   var shown = view.showAll ? finished : finished.slice(0, AGENT_ROWS);
-  function name(a) { return esc((a.agent_type || 'agent').replace(/^constellation:/, '')); }
+  function name(a) { return esc(String(a.agent_type || 'agent').replace(/^constellation:/, '')); }
   function row(a) {
     var dur = a.running
       ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running</span>'
