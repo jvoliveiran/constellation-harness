@@ -9,9 +9,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText, ownsProject, isTrustedComponent,
-  READ_CAP_BYTES, TAIL_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
+  resolveSteps, pairEvents, parseEventLines, tokenDelta,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  READ_CAP_BYTES, CAP_WARNING,
+} from './board-model.mjs';
+import { renderBacklog, feedText } from './board-render.mjs';
+import {
+  loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1629,4 +1634,27 @@ test('board.md: the command runs the probe and never curl', () => {
   const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
   assert.match(text, /^`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/board\.mjs" --probe`$/m, 'board.md does not run board.mjs --probe');
   assert.ok(!text.includes('curl'), "board.md calls curl; the reply reaches Claude's context");
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: the module split
+// ---------------------------------------------------------------------------
+
+const BOARD_NAMES_1_3_4 = [
+  'resolveSteps', 'pairEvents', 'parseEventLines', 'tokenDelta', 'loadSnapshot', 'parseFrontMatter', 'toNode',
+  'buildTree', 'diffStatuses', 'collapseBurst', 'mergeFeed', 'safeRefresh', 'renderBacklog', 'serve', 'feedText',
+  'classifyProbe', 'probeText', 'ownsProject', 'isTrustedComponent', 'READ_CAP_BYTES', 'TAIL_CAP_BYTES',
+  'CAP_WARNING', 'SSE_CLIENT_CAP', 'emptySnapshot',
+];
+
+test('board.mjs: re-exports every 1.3.4 name', async () => {
+  const board = await import('./board.mjs');
+  const missing = BOARD_NAMES_1_3_4.filter((name) => !Object.keys(board).includes(name));
+  assert.deepEqual(missing, [], `board.mjs no longer exports: ${missing.join(', ')}`);
+});
+
+test('board-model.mjs: imports nothing from node', () => {
+  const text = fs.readFileSync(path.join(here, 'board-model.mjs'), 'utf8');
+  assert.ok(!text.includes("from 'node:"), 'board-model.mjs imports a node: module');
+  assert.ok(!text.includes('import.meta'), 'board-model.mjs reads import.meta');
 });
