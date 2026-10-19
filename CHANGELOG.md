@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **The board has a design system with dark and light themes** (#022). It
+  has ten color tokens, the system font stack, cards, chips, and buttons.
+  Dark is the default. The page follows the OS theme. A toggle in the top
+  bar keeps a manual choice in `localStorage`.
+
+### Changed
+- **The Agents card fits the viewport** (#022). It is at most
+  `calc(100vh - 96px)` tall and scrolls inside. Running agents stay pinned
+  at the top. The finished list shows the newest 20 rows and a
+  `Show all (n)` button. The Activity list sits in the same scroll region.
+- **Two-column layout from 1100 px** (#022). Now and Agents sit side by
+  side with a sticky Agents card. Below that width, the cards stack. The
+  page has no horizontal scroll at phone width, and the Now card wraps
+  inside a 390 px viewport.
+- **The board source is split** (#022). `board.mjs` stays the entry and
+  re-exports `board-model.mjs` (snapshot functions) and `board-render.mjs`
+  (render functions). The page HTML, CSS, and JS live in
+  `scripts/board-ui/`. The CSP hashes still cover the served text.
+- The board test count grows from 138 to 160 (#022).
+
 ## [1.3.4] - 2026-10-15
 
 ### Security

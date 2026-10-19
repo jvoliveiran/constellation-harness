@@ -7,11 +7,17 @@ import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  resolveSteps, pairEvents, parseEventLines, tokenDelta, loadSnapshot,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, renderBacklog, serve, feedText, classifyProbe, probeText, ownsProject, isTrustedComponent,
-  READ_CAP_BYTES, TAIL_CAP_BYTES, CAP_WARNING, SSE_CLIENT_CAP,
+  resolveSteps, pairEvents, parseEventLines, tokenDelta,
+  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  READ_CAP_BYTES, CAP_WARNING,
+} from './board-model.mjs';
+import { renderBacklog, feedText, renderAgents } from './board-render.mjs';
+import {
+  loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1629,4 +1635,297 @@ test('board.md: the command runs the probe and never curl', () => {
   const text = fs.readFileSync(path.join(here, '..', 'commands', 'board.md'), 'utf8');
   assert.match(text, /^`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/board\.mjs" --probe`$/m, 'board.md does not run board.mjs --probe');
   assert.ok(!text.includes('curl'), "board.md calls curl; the reply reaches Claude's context");
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: the module split
+// ---------------------------------------------------------------------------
+
+const BOARD_NAMES_1_3_4 = [
+  'resolveSteps', 'pairEvents', 'parseEventLines', 'tokenDelta', 'loadSnapshot', 'parseFrontMatter', 'toNode',
+  'buildTree', 'diffStatuses', 'collapseBurst', 'mergeFeed', 'safeRefresh', 'renderBacklog', 'serve', 'feedText',
+  'classifyProbe', 'probeText', 'ownsProject', 'isTrustedComponent', 'READ_CAP_BYTES', 'TAIL_CAP_BYTES',
+  'CAP_WARNING', 'SSE_CLIENT_CAP', 'emptySnapshot', 'renderAgents',
+];
+
+test('board.mjs: re-exports every 1.3.4 name', async () => {
+  const board = await import('./board.mjs');
+  const missing = BOARD_NAMES_1_3_4.filter((name) => !Object.keys(board).includes(name));
+  assert.deepEqual(missing, [], `board.mjs no longer exports: ${missing.join(', ')}`);
+});
+
+test('board-model.mjs: imports nothing from node', () => {
+  const text = fs.readFileSync(path.join(here, 'board-model.mjs'), 'utf8');
+  assert.ok(!text.includes("from 'node:"), 'board-model.mjs imports a node: module');
+  assert.ok(!text.includes('import.meta'), 'board-model.mjs reads import.meta');
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: the page comes from board-ui/ files
+// ---------------------------------------------------------------------------
+
+const uiText = (name) => fs.readFileSync(path.join(here, 'board-ui', name), 'utf8');
+const inlineBlock = (html, tag) => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(html)?.[1];
+
+test('serve: the page serves page.css and page.js byte for byte', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const style = inlineBlock(r.body, 'style');
+    const script = inlineBlock(r.body, 'script');
+    assert.equal(style, uiText('page.css'));
+    assert.ok(script.endsWith(uiText('page.js')), 'the script does not end with page.js');
+    const prelude = script.slice(0, script.length - uiText('page.js').length);
+    assert.ok(prelude.includes(`var renderBacklog = ${renderBacklog.toString()};`), 'the prelude lacks renderBacklog');
+    assert.ok(prelude.includes(`var feedText = ${feedText.toString()};`), 'the prelude lacks feedText');
+  });
+});
+
+test('board-render.mjs: every export is a function that runs with no module scope', async () => {
+  const render = await import('./board-render.mjs');
+  for (const [name, fn] of Object.entries(render)) {
+    assert.equal(typeof fn, 'function', `${name} is not a function`);
+    const isolated = new Function(`return ${fn.toString()}`)();
+    assert.equal(typeof isolated, 'function', `${name} does not compile alone`);
+  }
+  const isolatedBacklog = new Function(`return ${render.renderBacklog.toString()}`)();
+  assert.equal(isolatedBacklog(null, esc), render.renderBacklog(null, esc));
+  const isolatedAgents = new Function(`return ${render.renderAgents.toString()}`)();
+  const view = { agents: agentsFixture(1, 25), showAll: false, hhmm: stubHhmm, fmtDur: stubFmtDur };
+  assert.equal(isolatedAgents(view, esc), render.renderAgents(view, esc));
+  assert.notEqual(isolatedAgents(view, esc), '');
+  const isolatedFeed = new Function(`return ${render.feedText.toString()}`)();
+  const entry = { kind: 'transition', file: 'a.md', from: null, to: 'refined' };
+  assert.equal(isolatedFeed(entry, esc), render.feedText(entry, esc));
+});
+
+test('serve: the page holds one script, one style, and the script compiles', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    assert.equal(r.body.split('<script>').length - 1, 1, 'script blocks');
+    assert.equal(r.body.split('<style>').length - 1, 1, 'style blocks');
+    assert.doesNotThrow(() => new Function(inlineBlock(r.body, 'script')), 'inline script has a syntax error');
+    const directives = r.headers['content-security-policy'].split('; ');
+    for (const name of ['script-src', 'style-src']) {
+      const directive = directives.find((d) => d.startsWith(`${name} `));
+      assert.equal(directive.split('sha256-').length - 1, 1, `${name} holds one hash: ${directive}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: design tokens, themes, and layout (spec §4.1 to §4.3)
+// ---------------------------------------------------------------------------
+
+/** The declaration text of a stylesheet: comments, selectors, and at-rule preludes removed. */
+const declarationsOnly = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/[^{};]+\{/g, '{');
+/** The stylesheet without its token blocks: every block whose selector starts with :root. */
+const withoutTokens = (css) => css.replace(/:root[^{]*\{[^}]*\}/g, '');
+const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
+
+const TOKENS = {
+  '--bg': ['#0b0d12', '#f6f7f9'], '--surface': ['#13161e', '#ffffff'], '--surface-2': ['#1a1e28', '#f0f2f5'],
+  '--border': ['#262b38', '#e3e6ec'], '--text': ['#e7e9ee', '#171a21'], '--muted': ['#8b91a1', '#646b7a'],
+  '--accent': ['#7c8cff', '#4f5fe6'], '--ok': ['#4ecb8d', '#1f9d61'], '--warn': ['#f3b63f', '#b7791f'],
+  '--danger': ['#ff6b6b', '#d64545'],
+};
+const CHIP_TOKENS = {
+  's-inbox': 'muted', 's-refined': 'accent', 's-in-progress': 'warn', 's-parked': 'muted', 's-done': 'ok',
+  's-dropped': 'danger', 's-other': 'muted', 'p-draft': 'muted', 'p-approved': 'ok',
+};
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Every declaration body of a rule whose selector list holds the given selector text. */
+const ruleBodies = (css, selector) => [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .filter(([, selectors]) => selectors.split(',').some((s) => s.trim() === selector))
+  .map(([, , body]) => body);
+
+test('page.css: every color outside the token blocks is a var()', () => {
+  const left = declarationsOnly(withoutTokens(uiText('page.css')));
+  const match = COLOR_LITERAL.exec(left);
+  assert.ok(!match, `color literal outside the tokens: ${match?.[0]} near "${left.slice(Math.max(0, match?.index - 40), match?.index + 20)}"`);
+});
+
+test('page.css: the token blocks hold the ten §4.1 values for dark and light', () => {
+  const css = uiText('page.css');
+  const dark = /:root \{([^}]*)\}/.exec(css)?.[1];
+  const lightOs = /:root:not\(\[data-theme="dark"\]\)\s*\{([^}]*)\}/.exec(css)?.[1];
+  const lightManual = /:root\[data-theme="light"\]\s*\{([^}]*)\}/.exec(css)?.[1];
+  assert.ok(dark && lightOs && lightManual, 'a token block is missing');
+  for (const [name, [darkValue, lightValue]] of Object.entries(TOKENS)) {
+    assert.ok(dark.includes(`${name}: ${darkValue};`), `dark ${name}`);
+    assert.ok(lightOs.includes(`${name}: ${lightValue};`), `OS light ${name}`);
+    assert.ok(lightManual.includes(`${name}: ${lightValue};`), `manual light ${name}`);
+  }
+});
+
+test('page.css: the status chips map to the §4.2 tokens', () => {
+  const css = uiText('page.css');
+  for (const [chip, token] of Object.entries(CHIP_TOKENS)) {
+    const bodies = ruleBodies(css, `.chip.${chip}`);
+    assert.ok(bodies.length > 0, `no rule for .chip.${chip}`);
+    assert.ok(bodies.some((body) => body.includes(`var(--${token})`)), `.chip.${chip} does not use --${token}`);
+  }
+});
+
+test('page.css: the Agents card is bounded, scrolls, and is sticky only from 1100 px', () => {
+  const css = uiText('page.css');
+  const [base, ...media] = css.split('@media (min-width: 1100px)');
+  assert.equal(media.length, 1, 'one min-width: 1100px block');
+  const card = ruleBodies(base, '#agents-card').join(' ');
+  assert.ok(card.includes('max-height: calc(100vh - 96px)'), 'the card has no max-height');
+  const body = ruleBodies(base, '#agents').join(' ');
+  assert.ok(body.includes('overflow: auto') && body.includes('min-height: 0'), 'the card body does not scroll');
+  assert.ok(!card.includes('position: sticky'), 'the card is sticky below 1100 px');
+  assert.ok(ruleBodies(media[0], '#agents-card').join(' ').includes('position: sticky'), 'the card is not sticky from 1100 px');
+});
+
+test('page.css: the Now card cannot overflow a 390 px viewport', () => {
+  const css = uiText('page.css');
+  const strip = ruleBodies(css, '.strip').join(' ');
+  assert.ok(strip.includes('display: grid') && strip.includes('repeat(auto-fill, minmax(88px, 1fr))'), 'the stepper does not wrap by auto-fill');
+  for (const selector of ['.step', '.fact', '.meta > *', '.card']) {
+    assert.ok(ruleBodies(css, selector).join(' ').includes('min-width: 0'), `${selector} lacks min-width: 0`);
+  }
+  assert.ok(ruleBodies(css, '.meta > *').join(' ').includes('overflow-wrap: anywhere'), 'long branch and task text does not wrap');
+  assert.ok(ruleBodies(css, 'main').join(' ').includes('minmax(0, 1fr)'), 'the single column can grow past the viewport');
+});
+
+test('page.js and the render functions hold no color literal and no style attribute', async () => {
+  const render = await import('./board-render.mjs');
+  const sources = { 'page.js': uiText('page.js'), ...Object.fromEntries(Object.entries(render).map(([n, fn]) => [n, fn.toString()])) };
+  for (const [name, text] of Object.entries(sources)) {
+    assert.ok(!COLOR_LITERAL.test(text), `${name} holds a color literal: ${COLOR_LITERAL.exec(text)?.[0]}`);
+    assert.ok(!text.includes('style='), `${name} holds a style attribute`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Task 022: renderAgents (spec §6.1)
+// ---------------------------------------------------------------------------
+
+const stubHhmm = (iso) => `T${iso}`;
+const stubFmtDur = (sec) => `${sec}s`;
+/** Agents newest first, one minute apart: the first `running` rows run, the rest finished. */
+const agentsFixture = (running, finished) => Array.from({ length: running + finished }, (_, i) => {
+  const start = new Date(Date.UTC(2026, 9, 19, 12, 0) - i * 60000).toISOString();
+  return i < running
+    ? { agent_type: 'constellation:sdet', start, running: true, durationSec: null }
+    : { agent_type: 'constellation:sdet', start, running: false, durationSec: 30 + i };
+});
+const agentsView = (agents, showAll = false) => ({ agents, showAll, hhmm: stubHhmm, fmtDur: stubFmtDur });
+const countRows = (html) => html.split('<li>').length - 1;
+const finishedList = (html) => html.slice(html.lastIndexOf('</div>') + '</div>'.length);
+
+test('renderAgents: no agents renders an empty string', () => {
+  assert.equal(renderAgents(agentsView([]), esc), '');
+});
+
+test('renderAgents: 60 agents show the running group first, then the newest 20, then Show all (58)', () => {
+  const agents = agentsFixture(2, 58);
+  const html = renderAgents(agentsView(agents), esc);
+  const runningBlock = /<div class="running">[\s\S]*?<\/ul><\/div>/.exec(html)[0];
+  assert.equal(countRows(runningBlock), 2);
+  assert.equal(html.indexOf('<div class="running">'), 0, 'the running group comes first');
+  const list = html.slice(runningBlock.length);
+  assert.equal(countRows(list), 20);
+  assert.ok(list.includes(`T${agents[2].start}`), 'the newest finished row comes first');
+  assert.ok(list.indexOf(`T${agents[2].start}`) < list.indexOf(`T${agents[3].start}`));
+  assert.ok(!list.includes(`T${agents[22].start}`), 'the 21st finished row is hidden');
+  assert.ok(html.includes('>Show all (58)</button>'));
+});
+
+test('renderAgents: showAll renders every finished row and no button', () => {
+  const html = renderAgents(agentsView(agentsFixture(2, 58), true), esc);
+  assert.equal(countRows(html), 60);
+  assert.ok(!html.includes('data-action="show-all"'));
+});
+
+test('renderAgents: exactly 20 finished rows show no button', () => {
+  const exact = renderAgents(agentsView(agentsFixture(0, 20)), esc);
+  assert.equal(countRows(exact), 20);
+  assert.ok(!exact.includes('data-action="show-all"'));
+  const over = renderAgents(agentsView(agentsFixture(0, 21)), esc);
+  assert.equal(countRows(over), 20);
+  assert.ok(over.includes('>Show all (21)</button>'));
+});
+
+test('renderAgents: agent types and formatted times are escaped', () => {
+  const agents = [{ agent_type: '<img src=x onerror=alert(1)>', start: '2026-10-19T12:00:00.000Z', running: false, durationSec: 5 }];
+  const html = renderAgents({ agents, showAll: false, hhmm: () => '<svg>', fmtDur: stubFmtDur }, esc);
+  assert.ok(html.includes('&lt;img') && html.includes('&lt;svg'), html);
+  assert.ok(!html.includes('<img') && !html.includes('<svg'), html);
+});
+
+test('renderAgents: a running row carries data-since and the run class', () => {
+  const agents = agentsFixture(1, 1);
+  const html = renderAgents(agentsView(agents), esc);
+  const finished = finishedList(html);
+  const runningRow = html.slice(0, html.length - finished.length);
+  assert.ok(runningRow.includes(`data-since="${agents[0].start}"`));
+  assert.ok(runningRow.includes('data-prefix="running "'));
+  assert.ok(runningRow.includes('class="run"'));
+  assert.ok(!finished.includes('data-since') && !finished.includes('class="run"'), finished);
+  assert.ok(finished.includes('<span class="dur">31s</span>'), finished);
+});
+
+// Task 022, criterion 5: run the shipped page.js against stub browser objects.
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) => {
+  const attrs = {};
+  const button = { textContent: '', attrs: {}, handlers: {},
+    setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
+  const els = {};
+  const stub = (id) => els[id] ??= { innerHTML: '', addEventListener() {}, getAttribute: () => null };
+  const writes = [];
+  const localStorage = {
+    getItem() { if (storageThrows) throw new Error('denied'); return stored; },
+    setItem(k, v) { if (storageThrows) throw new Error('denied'); writes.push([k, v]); },
+  };
+  const document = {
+    documentElement: { setAttribute: (k, v) => { attrs[k] = v; }, getAttribute: (k) => attrs[k] ?? null },
+    getElementById: (id) => (id === 'theme' ? button : stub(id)),
+    querySelectorAll: () => [],
+  };
+  const sandbox = {
+    document, localStorage, console,
+    window: { matchMedia: () => ({ matches: os === 'light' }) },
+    EventSource: function () {}, setInterval: () => 0, Date,
+  };
+  vm.runInNewContext(uiText('page.js'), sandbox);
+  return { attrs, button, writes, click: () => button.handlers.click() };
+};
+
+test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
+  const light = bootPage({ os: 'light' });
+  assert.equal(light.attrs['data-theme'], undefined);
+  assert.equal(light.button.attrs['aria-label'], 'Switch to dark theme');
+  const dark = bootPage({ os: 'dark' });
+  assert.equal(dark.button.attrs['aria-label'], 'Switch to light theme');
+});
+
+test('page.js: a stored choice wins over the OS theme', () => {
+  const page = bootPage({ os: 'light', stored: 'dark' });
+  assert.equal(page.attrs['data-theme'], 'dark');
+  assert.equal(page.button.attrs['aria-label'], 'Switch to light theme');
+});
+
+test('page.js: a stored value other than light or dark is ignored', () => {
+  const page = bootPage({ os: 'light', stored: 'purple' });
+  assert.equal(page.attrs['data-theme'], undefined);
+  assert.equal(page.button.attrs['aria-label'], 'Switch to dark theme');
+});
+
+test('page.js: the toggle switches the theme and stores the new choice', () => {
+  const page = bootPage({ os: 'light' });
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'dark');
+  assert.deepEqual(page.writes, [['board-theme', 'dark']]);
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'light');
+  assert.deepEqual(page.writes.at(-1), ['board-theme', 'light']);
+});
+
+test('page.js: refused storage does not stop the page or the toggle', () => {
+  const page = bootPage({ os: 'light', storageThrows: true });
+  assert.equal(page.attrs['data-theme'], undefined);
+  page.click();
+  assert.equal(page.attrs['data-theme'], 'dark');
 });
