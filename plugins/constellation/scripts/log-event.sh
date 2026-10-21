@@ -7,6 +7,11 @@
 # Registered in hooks/hooks.json on SubagentStart, SubagentStop, Stop, and PostToolUse
 # (Write|Edit). PostToolUse lines are kept only for paths under .constellation/.
 #
+# Optional string fields, kept only when the hook input carries them within their cap:
+# transcript_path (all events), agent_transcript_path (SubagentStart, SubagentStop),
+# description (SubagentStart). The board reads the transcripts they name, under a gate.
+# A SubagentStop without agent_type (an internal helper agent) logs no line.
+#
 # Silent no-op outside initialized projects or without jq. Exit 0 always — this hook
 # never blocks and never prints to stdout.
 
@@ -20,6 +25,11 @@ INPUT=$(cat 2>/dev/null) || exit 0
 
 EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
 [ -n "$EVENT" ] || exit 0
+
+if [ "$EVENT" = "SubagentStop" ]; then
+  AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)
+  [ -n "$AGENT_TYPE" ] || exit 0
+fi
 
 FILE=""
 if [ "$EVENT" = "PostToolUse" ]; then
@@ -36,14 +46,19 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 LOG_DIR="$PROJECT_DIR/.constellation/metrics"
 mkdir -p "$LOG_DIR" 2>/dev/null || exit 0
 
-printf '%s' "$INPUT" | jq -c --arg ts "$TS" --arg file "$FILE" '{
+printf '%s' "$INPUT" | jq -c --arg ts "$TS" --arg file "$FILE" '
+def str(cap): if type == "string" and length <= cap then . else null end;
+{
   ts: $ts,
   event: .hook_event_name,
   session_id: (.session_id // null),
   agent_id: (.agent_id // null),
   agent_type: (.agent_type // null),
   tool_name: (.tool_name // null),
-  file: (if $file == "" then null else $file end)
+  file: (if $file == "" then null else $file end),
+  description: (if .hook_event_name == "SubagentStart" then (.description | str(500)) else null end),
+  agent_transcript_path: (if (.hook_event_name | test("^Subagent(Start|Stop)$")) then (.agent_transcript_path | str(1024)) else null end),
+  transcript_path: (.transcript_path | str(1024))
 } | with_entries(select(.value != null))' >> "$LOG_DIR/events.jsonl" 2>/dev/null
 
 exit 0
