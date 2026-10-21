@@ -111,7 +111,7 @@
   .arow:hover { background: var(--surface-2); }
   .arow:focus-visible, button.step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .arow .desc { grid-column: 2 / 4; font-size: 12px; overflow-wrap: anywhere; }
-  button.step { font: inherit; color: inherit; background: none; cursor: pointer; width: 100%; }
+  button.step { font: inherit; color: inherit; background: none; cursor: pointer; width: 100%; margin: 0; padding: 8px; border: 1px solid var(--border); }
   button.step:hover { opacity: 1; background: var(--surface-2); }
   .ahead { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 12px; }
   .ahead .ah-type, .ablock .ah-type { font-weight: 600; }

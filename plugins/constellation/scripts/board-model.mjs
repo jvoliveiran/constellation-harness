@@ -178,9 +178,9 @@ const CANDIDATE_STEPS = new Map([
 ]);
 const ATTRIBUTION_ID = /^[a-f0-9]{8,32}$/;
 
-function attributableRuns(agents, stepIds) {
+function attributableRuns(agents, stepIds, startedMs) {
   const runs = agents
-    .filter((a) => typeof a.agent_id === 'string' && ATTRIBUTION_ID.test(a.agent_id) && Number.isFinite(Date.parse(a.start)))
+    .filter((a) => typeof a.agent_id === 'string' && ATTRIBUTION_ID.test(a.agent_id) && Date.parse(a.start) >= startedMs)
     .map((a) => ({ id: a.agent_id, startMs: Date.parse(a.start), type: String(a.agent_type ?? '').replace(/^constellation:/, '') }));
   return runs
     .map((run) => ({ ...run, present: (CANDIDATE_STEPS.get(run.type) ?? []).filter((id) => stepIds.includes(id)).sort((x, y) => stepIds.indexOf(x) - stepIds.indexOf(y)) }))
@@ -191,12 +191,13 @@ function attributableRuns(agents, stepIds) {
 /**
  * Attach each agent run to the step it ran in. A run with one candidate step attaches to it. A run
  * with several attaches to a later step only when a run of a step that lies strictly between the two
- * started before it. This keeps pairing rounds on the first step. Returns { stepId: [agent_id, ...] },
- * start ascending. No time window.
+ * started before it. This keeps pairing rounds on the first step. Only runs that start at or after
+ * startedAt count: a run of an earlier workflow attaches to no step. An unparseable startedAt attaches
+ * nothing. Returns { stepId: [agent_id, ...] }, start ascending.
  */
-export function attributeAgents(agents, progress) {
+export function attributeAgents(agents, progress, startedAt) {
   const stepIds = (progress?.steps ?? []).map((s) => s.id);
-  const runs = attributableRuns(Array.isArray(agents) ? agents : [], stepIds);
+  const runs = attributableRuns(Array.isArray(agents) ? agents : [], stepIds, Date.parse(startedAt));
   const stepOf = new Map();
   const single = runs.filter((run) => run.present.length === 1);
   for (const run of single) stepOf.set(run.id, run.present[0]);

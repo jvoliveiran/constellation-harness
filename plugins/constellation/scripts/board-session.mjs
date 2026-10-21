@@ -114,6 +114,15 @@ export function extractReport(group, capBytes = REPORT_CAP_BYTES) {
   return { ...capUtf8(text, capBytes), error: null };
 }
 
+/**
+ * The folder name that Claude Code gives a project under ~/.claude/projects: every character of the
+ * real project path that is not a letter or a digit becomes a hyphen. The path is the realpath of
+ * the project directory.
+ */
+export function projectSlugOf(realProjectDir) {
+  return String(realProjectDir).replace(/[^a-zA-Z0-9]/g, '-');
+}
+
 const insideRoot = (p, root) => typeof root === 'string' && p.startsWith(root + path.sep);
 
 /** The only agent (or meta) path that a session allows: next to the session folder of the main file. */
@@ -131,8 +140,9 @@ function checkAgentPath(kind, p, ctx) {
 
 /**
  * The lexical rules of the transcript gate, in order. kind is main, agent, or meta. ctx holds
- * sessionId, agentId, mainPath, lexicalRoot, and realRoot. Returns null when the path passes, or
- * a reason from a fixed list. No input text reaches a reason.
+ * sessionId, agentId, mainPath, lexicalRoot, realRoot, and projectSlug. Returns null when the path
+ * passes, or a reason from a fixed list. No input text reaches a reason. A main transcript must sit
+ * directly in the folder of this project, so a session of another project is refused.
  */
 export function checkTranscriptPath(kind, p, ctx) {
   const plain = typeof p === 'string' && path.isAbsolute(p) && p.length <= MAX_PATH_LENGTH
@@ -143,7 +153,14 @@ export function checkTranscriptPath(kind, p, ctx) {
   const mismatch = kind === 'main' ? (match[1] === ctx.sessionId ? null : 'foreign session') : checkAgentPath(kind, p, ctx);
   if (mismatch) return mismatch;
   if (typeof ctx.realRoot !== 'string') return 'no session root';
-  return insideRoot(p, ctx.lexicalRoot) || insideRoot(p, ctx.realRoot) ? null : 'outside root';
+  if (!insideRoot(p, ctx.lexicalRoot) && !insideRoot(p, ctx.realRoot)) return 'outside root';
+  return kind === 'main' && !inProjectFolder(p, ctx) ? 'other project' : null;
+}
+
+function inProjectFolder(p, ctx) {
+  const folder = path.dirname(p);
+  const parent = path.dirname(folder);
+  return path.basename(folder) === ctx.projectSlug && (parent === ctx.lexicalRoot || parent === ctx.realRoot);
 }
 
 /**
@@ -207,7 +224,7 @@ const safeCode = (e) => (/^[A-Z0-9_]{1,24}$/.test(e?.code ?? '') ? e.code : 'err
 const failure = (e) => (e.code === 'ENOENT' ? { missing: true } : { code: safeCode(e) });
 const NO_SYNC = () => ({ tokens: null, agents: new Map(), errors: [] });
 const O_FLAGS = () => fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0);
-const newFile = () => ({ ino: null, size: 0, offset: 0, rest: Buffer.alloc(0), cutPending: false, usage: new Map(), group: null, model: null });
+const newFile = () => ({ ino: null, size: 0, offset: 0, partial: [], partialLength: 0, cutPending: false, usage: new Map(), group: null, model: null });
 
 let chunkBuffer = null;
 const getChunk = () => (chunkBuffer ??= Buffer.alloc(CHUNK_BYTES));
@@ -229,9 +246,10 @@ function readMetaFile(fd, st) {
 
 /**
  * The reader of the workflow transcripts. root is ~/.claude/projects (a temp directory in tests).
+ * projectSlug is the folder of this project under root (projectSlugOf of the real project path).
  * log is called with one text per distinct refusal or read failure, or never when it is null.
  */
-export function createSessionReader({ root, capBytes = SESSION_CAP_BYTES, log = null }) {
+export function createSessionReader({ root, projectSlug, capBytes = SESSION_CAP_BYTES, log = null }) {
   const files = new Map();
   const metas = new Map();
   const logged = new Set();
@@ -243,9 +261,9 @@ export function createSessionReader({ root, capBytes = SESSION_CAP_BYTES, log = 
 
   function resolveRoots() {
     try {
-      return { lexicalRoot: root, realRoot: fs.realpathSync(root) };
+      return { lexicalRoot: root, realRoot: fs.realpathSync(root), projectSlug };
     } catch {
-      return { lexicalRoot: root, realRoot: null };
+      return { lexicalRoot: root, realRoot: null, projectSlug };
     }
   }
 
@@ -272,20 +290,31 @@ export function createSessionReader({ root, capBytes = SESSION_CAP_BYTES, log = 
     }
   }
 
+  // Keep the bytes after the last newline as chunks: a line that spans many reads joins once, when it ends.
+  function holdPartial(file, tail) {
+    if (tail.length === 0) return;
+    file.partial.push(Buffer.from(tail));
+    file.partialLength += tail.length;
+    if (file.partialLength > capBytes) { file.partial = []; file.partialLength = 0; file.cutPending = true; }
+  }
+
   function consume(file, bytes, kind) {
-    let data = Buffer.concat([file.rest, bytes]);
+    let chunk = bytes;
     if (file.cutPending) {
-      const cut = data.indexOf(NEWLINE);
-      if (cut < 0) { file.rest = Buffer.alloc(0); return; }
-      data = data.subarray(cut + 1);
+      const cut = chunk.indexOf(NEWLINE);
+      if (cut < 0) return;
+      chunk = chunk.subarray(cut + 1);
       file.cutPending = false;
     }
-    const end = data.lastIndexOf(NEWLINE);
-    file.rest = Buffer.from(data.subarray(end + 1));
-    if (file.rest.length > capBytes) { file.rest = Buffer.alloc(0); file.cutPending = true; }
-    for (let from = 0; end >= 0 && from < end; ) {
-      const next = data.indexOf(NEWLINE, from);
-      handleLine(file, data.subarray(from, next), kind);
+    const end = chunk.lastIndexOf(NEWLINE);
+    if (end < 0) { holdPartial(file, chunk); return; }
+    const complete = Buffer.concat([...file.partial, chunk.subarray(0, end + 1)]);
+    file.partial = [];
+    file.partialLength = 0;
+    holdPartial(file, chunk.subarray(end + 1));
+    for (let from = 0; from < complete.length; ) {
+      const next = complete.indexOf(NEWLINE, from);
+      handleLine(file, complete.subarray(from, next), kind);
       from = next + 1;
     }
   }
@@ -302,13 +331,19 @@ export function createSessionReader({ root, capBytes = SESSION_CAP_BYTES, log = 
     file.model = stringUpTo(obj.message.model, MODEL_CAP) ?? file.model;
   }
 
+  // The byte before the offset is a newline: the window starts on a whole line, so nothing is cut.
+  function startsOnLine(fd, offset) {
+    const one = Buffer.alloc(1);
+    return fs.readSync(fd, one, 0, 1, offset - 1) === 1 && one[0] === NEWLINE;
+  }
+
   function readAppended(p, fd, st, kind) {
     let file = files.get(p);
     if (file && (file.ino !== st.ino || st.size < file.offset)) file = null;
     if (!file) {
       file = { ...newFile(), ino: st.ino };
       file.offset = Math.max(0, st.size - capBytes);
-      file.cutPending = file.offset > 0;
+      file.cutPending = file.offset > 0 && !startsOnLine(fd, file.offset);
     }
     files.set(p, file);
     const chunk = getChunk();

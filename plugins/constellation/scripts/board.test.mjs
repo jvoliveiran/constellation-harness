@@ -3410,8 +3410,8 @@ const runId = (n) => `a${n.toString(16).padStart(16, '0')}`;
 const runsOf = (types) => types.map((type, i) => ({
   agent_id: runId(i + 1), agent_type: type, start: `2026-10-21T09:${String(i).padStart(2, '0')}:00Z`, end: null, running: false,
 })).reverse();
-const idsOf = (n) => runId(n);
 const progressOf = (track, config = planReviewOff) => resolveSteps({ track, currentStep: '', completedSteps: [] }, tracks, config);
+const ATTR_SINCE = '2026-10-21T09:00:00Z';
 const GATE_TRIO = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:dx-analyst'];
 
 test('attributeAgents: planned track, two architect runs, Plan then Verify', () => {
@@ -3419,14 +3419,14 @@ test('attributeAgents: planned track, two architect runs, Plan then Verify', () 
     'constellation:software-architect', 'constellation:devops-engineer', 'constellation:software-engineer', ...GATE_TRIO,
     'constellation:sdet', 'constellation:technical-writer', 'constellation:software-architect', 'constellation:devops-engineer',
   ];
-  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned')), {
-    architect: [idsOf(1)],
-    'devops-branch': [idsOf(2)],
-    engineer: [idsOf(3)],
-    'parallel-gate-1': [idsOf(4), idsOf(5), idsOf(6)],
-    'parallel-gate-2': [idsOf(7), idsOf(8)],
-    'architect-verify': [idsOf(9)],
-    'devops-pr': [idsOf(10)],
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned'), ATTR_SINCE), {
+    architect: [runId(1)],
+    'devops-branch': [runId(2)],
+    engineer: [runId(3)],
+    'parallel-gate-1': [runId(4), runId(5), runId(6)],
+    'parallel-gate-2': [runId(7), runId(8)],
+    'architect-verify': [runId(9)],
+    'devops-pr': [runId(10)],
   });
 });
 
@@ -3436,39 +3436,39 @@ test('attributeAgents: planned track with pairing rounds and a fix loop', () => 
     'constellation:devops-engineer', 'constellation:software-engineer', 'constellation:code-reviewer',
     'constellation:software-engineer', 'constellation:code-reviewer', 'constellation:software-architect',
   ];
-  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned')), {
-    architect: [idsOf(1), idsOf(2), idsOf(3)],
-    'devops-branch': [idsOf(4)],
-    engineer: [idsOf(5), idsOf(7)],
-    'parallel-gate-1': [idsOf(6), idsOf(8)],
-    'architect-verify': [idsOf(9)],
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned'), ATTR_SINCE), {
+    architect: [runId(1), runId(2), runId(3)],
+    'devops-branch': [runId(4)],
+    engineer: [runId(5), runId(7)],
+    'parallel-gate-1': [runId(6), runId(8)],
+    'architect-verify': [runId(9)],
   });
 });
 
 test('attributeAgents: the plan-review step takes the cross-model review that runs before the engineer', () => {
   const types = ['constellation:software-architect', 'constellation:cross-model-reviewer', 'constellation:software-engineer', 'constellation:cross-model-reviewer'];
-  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned', planReviewOn)), {
-    architect: [idsOf(1)], 'plan-review': [idsOf(2)], engineer: [idsOf(3)], 'parallel-gate-1': [idsOf(4)],
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned', planReviewOn), ATTR_SINCE), {
+    architect: [runId(1)], 'plan-review': [runId(2)], engineer: [runId(3)], 'parallel-gate-1': [runId(4)],
   });
 });
 
 test('attributeAgents: tweak track', () => {
   const types = [...GATE_TRIO, 'constellation:sdet', 'constellation:technical-writer'];
-  assert.deepEqual(attributeAgents(runsOf(types), progressOf('tweak')), {
-    'parallel-gate-1': [idsOf(1), idsOf(2), idsOf(3)], sdet: [idsOf(4), idsOf(5)],
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('tweak'), ATTR_SINCE), {
+    'parallel-gate-1': [runId(1), runId(2), runId(3)], sdet: [runId(4), runId(5)],
   });
 });
 
 test('attributeAgents: hotfix track', () => {
   const types = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:sdet'];
-  assert.deepEqual(attributeAgents(runsOf(types), progressOf('hotfix')), {
-    'review-gate': [idsOf(1), idsOf(2)], sdet: [idsOf(3)],
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('hotfix'), ATTR_SINCE), {
+    'review-gate': [runId(1), runId(2)], sdet: [runId(3)],
   });
 });
 
 test('attributeAgents: discovery track', () => {
-  assert.deepEqual(attributeAgents(runsOf(['constellation:product-manager', 'constellation:software-architect']), progressOf('discovery')), {
-    'product-manager': [idsOf(1)], 'architect-feasibility': [idsOf(2)],
+  assert.deepEqual(attributeAgents(runsOf(['constellation:product-manager', 'constellation:software-architect']), progressOf('discovery'), ATTR_SINCE), {
+    'product-manager': [runId(1)], 'architect-feasibility': [runId(2)],
   });
 });
 
@@ -3479,8 +3479,8 @@ test('attributeAgents: spike track and unknown types', () => {
     { agent_id: null, agent_type: 'constellation:software-engineer', start: '2026-10-21T09:31:00Z' },
     { agent_id: runId(99), agent_type: 'constellation:software-engineer', start: null },
   ];
-  assert.deepEqual(attributeAgents(agents, progressOf('spike')), { architect: [idsOf(1)], engineer: [idsOf(2)] });
-  assert.deepEqual(attributeAgents(agents, null), {});
+  assert.deepEqual(attributeAgents(agents, progressOf('spike'), ATTR_SINCE), { architect: [runId(1)], engineer: [runId(2)] });
+  assert.deepEqual(attributeAgents(agents, null, ATTR_SINCE), {});
 });
 
 test('tokensFact: transcripts first, then the state delta, then none', () => {
@@ -3553,7 +3553,7 @@ function agentWorld() {
   const project = tmpProject();
   fs.writeFileSync(path.join(project, '.constellation', 'state', 'current-workflow.json'), JSON.stringify(AG_STATE));
   fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
-  const reader = createSessionReader({ root });
+  const reader = createSessionReader({ projectSlug: '-p', root });
   const snap = loadSnapshot(project, null, reader);
   return { tmp, reader, snap };
 }
@@ -3728,7 +3728,7 @@ test('renderNow: the tokens fact shows the source tooltip', () => {
 test('renderMarkdown: keepHead keeps the front matter and the first H1', () => {
   const record = {};
   const text = '---\nstatus: x\n---\n# T\nbody\n';
-  renderMarkdown(text, stubFactory(record) && ((o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } })), esc, null, true);
+  renderMarkdown(text, (o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } }), esc, null, true);
   assert.equal(record.input, text);
   renderMarkdown(text, (o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } }), esc);
   assert.equal(record.input, 'body\n');
@@ -3873,4 +3873,16 @@ test('page: a late step reply after a later agent dialog opened is dropped', asy
   page.resolve(`/api/agent?id=${PA.b}`, apiReplyFor(`/api/agent?id=${PA.b}`));
   await flush();
   assert.ok(page.els.dialog.innerHTML.includes('AGENT-A') && !page.els.dialog.innerHTML.includes('STEP-B'), page.els.dialog.innerHTML);
+});
+
+test('attributeAgents: runs of an earlier workflow attach to no step and do not move the new Plan run', () => {
+  const at = (hhmm) => `2026-10-21T${hhmm}:00Z`;
+  const run = (n, type, hhmm) => ({ agent_id: runId(n), agent_type: `constellation:${type}`, start: at(hhmm), end: null, running: false });
+  const agents = [
+    run(1, 'software-engineer', '07:00'), run(2, 'software-architect', '07:30'), run(3, 'code-reviewer', '07:40'),
+    run(4, 'sdet', '07:50'), run(5, 'devops-engineer', '08:00'), run(6, 'software-architect', '09:10'),
+  ].reverse();
+  assert.deepEqual(attributeAgents(agents, progressOf('planned'), ATTR_SINCE), { architect: [runId(6)] });
+  assert.deepEqual(attributeAgents(agents, progressOf('planned'), 'not a date'), {});
+  assert.deepEqual(attributeAgents(agents, progressOf('planned')), {});
 });

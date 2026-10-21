@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { loadSnapshot } from './board.mjs';
 import {
   SESSION_CAP_BYTES, createSessionReader,
-  usageOf, sumUsage, extractReport, appendToGroup, checkTranscriptPath, derivedPath, sessionsOf,
+  projectSlugOf, usageOf, sumUsage, extractReport, appendToGroup, checkTranscriptPath, derivedPath, sessionsOf,
   workflowSessions, workflowAgents,
 } from './board-session.mjs';
 
@@ -18,7 +18,7 @@ const OTHER_SID = '22222222-3333-4444-8555-666666666666';
 const AID = 'a0e575badeb8675d0';
 const OTHER_AID = 'b1f686cbefc9786e1';
 const ROOT = '/fake/home/.claude/projects';
-const ROOTS = { lexicalRoot: ROOT, realRoot: ROOT };
+const ROOTS = { lexicalRoot: ROOT, realRoot: ROOT, projectSlug: '-proj' };
 const MAIN = `${ROOT}/-proj/${SID}.jsonl`;
 
 const entry = (id, output, extra = {}) => ({ id, ts: Date.parse('2026-10-21T10:00:00.000Z'), input: 10, cacheCreate: 20, cacheRead: 30, output, ...extra });
@@ -112,8 +112,8 @@ test('checkTranscriptPath: names, absolute paths, normalization, and the root pr
   assert.equal(checkTranscriptPath('main', `${ROOT}/${'d'.repeat(1025)}/${SID}.jsonl`, mainCtx), 'bad path');
   assert.equal(checkTranscriptPath('main', 42, mainCtx), 'bad path');
   assert.equal(checkTranscriptPath('main', `/elsewhere/-proj/${SID}.jsonl`, mainCtx), 'outside root');
-  assert.equal(checkTranscriptPath('main', MAIN, { sessionId: SID, lexicalRoot: ROOT, realRoot: null }), 'no session root');
-  assert.equal(checkTranscriptPath('main', `/real/projects/-p/${SID}.jsonl`, { sessionId: SID, lexicalRoot: ROOT, realRoot: '/real/projects' }), null);
+  assert.equal(checkTranscriptPath('main', MAIN, { sessionId: SID, lexicalRoot: ROOT, realRoot: null, projectSlug: '-proj' }), 'no session root');
+  assert.equal(checkTranscriptPath('main', `/real/projects/-p/${SID}.jsonl`, { sessionId: SID, lexicalRoot: ROOT, realRoot: '/real/projects', projectSlug: '-p' }), null);
 });
 
 test('checkTranscriptPath: an agent path must be the derived path of its line', () => {
@@ -178,7 +178,6 @@ const asst = (id, ts, use, content = [{ type: 'text', text: 'reply' }], extra = 
   { type: 'assistant', timestamp: ts, message: { id, model: 'model-x', usage: use, content, ...extra } }
 );
 const jsonl = (objs) => objs.map((o) => JSON.stringify(o)).join('\n') + '\n';
-const quiet = () => ({ ...console });
 
 function world() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'board-session-')));
@@ -232,7 +231,7 @@ test('reader: a file over the cap reads its last cap once, drops the cut line, t
   const sizes = [210, 270, 270, 270, 260];
   fs.writeFileSync(w.main, sizes.map((size, i) => line(i + 1, size)).join(''));
   assert.equal(fs.statSync(w.main).size, 1280);
-  const reader = createSessionReader({ root: w.root, capBytes: 1024 });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root, capBytes: 1024 });
   const first = reader.sync({ events: [w.stateEv()], state: STATE });
   assert.equal(reader.bytesRead, 1024);
   assert.equal(first.tokens.output, 3 + 4 + 5);
@@ -253,7 +252,7 @@ test('reader: a path outside the root and a bad name read nothing and add one re
   const badName = path.join(w.slug, 'x.jsonl');
   fs.writeFileSync(badName, jsonl([asst('m2', '2026-10-21T10:00:00Z', usage(1, 1, 1, 1))]));
   const events = [w.stateEv(outsidePath, OTHER_SID), w.stateEv(badName, '33333333-4444-4555-8666-777777777777')];
-  const reader = createSessionReader({ root: w.root });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
   const result = reader.sync({ events, state: STATE });
   assert.equal(reader.bytesRead, 0);
   assert.deepEqual(result.errors.sort(), ['transcript: refused: name', 'transcript: refused: outside root']);
@@ -269,7 +268,7 @@ test('reader: a symlink at the file or at a folder below the root is refused', (
   const linkedSid = '55555555-6666-4777-8888-999999999999';
   const linkedMain = path.join(w.slug, `${linkedSid}.jsonl`);
   fs.symlinkSync(path.join(real, 'target.jsonl'), linkedMain);
-  const fileLink = createSessionReader({ root: w.root });
+  const fileLink = createSessionReader({ projectSlug: '-p', root: w.root });
   const a = fileLink.sync({ events: [w.stateEv(linkedMain, linkedSid)], state: STATE });
   assert.deepEqual(a.errors, ['transcript: refused: symlink']);
   assert.equal(fileLink.bytesRead, 0);
@@ -279,7 +278,7 @@ test('reader: a symlink at the file or at a folder below the root is refused', (
   fs.mkdirSync(path.join(w.tmp, 'elsewhere'));
   fs.symlinkSync(path.join(w.tmp, 'elsewhere'), path.join(w.slug, SID, 'subagents'));
   fs.writeFileSync(path.join(w.tmp, 'elsewhere', `agent-${AID}.jsonl`), jsonl([asst('m5', '2026-10-21T10:00:00Z', usage(100, 0, 0, 100))]));
-  const folderLink = createSessionReader({ root: w.root });
+  const folderLink = createSessionReader({ projectSlug: '-p', root: w.root });
   const b = folderLink.sync({ events: [w.stateEv(), w.startEv(AID)], state: STATE });
   assert.deepEqual(b.errors, ['transcript: refused: symlink']);
   assert.equal(b.agents.get(AID).transcript, false);
@@ -292,7 +291,7 @@ test('reader: a linked root still reads', () => {
   const link = path.join(w.tmp, 'link');
   fs.symlinkSync(w.root, link);
   const viaLink = path.join(link, '-p', `${SID}.jsonl`);
-  const result = createSessionReader({ root: link }).sync({ events: [w.stateEv(viaLink)], state: STATE });
+  const result = createSessionReader({ projectSlug: '-p', root: link }).sync({ events: [w.stateEv(viaLink)], state: STATE });
   assert.deepEqual(result.errors, []);
   assert.equal(result.tokens.spent, 2);
 });
@@ -308,7 +307,7 @@ test('reader: an agent path in another session folder or with another agent id r
   fs.writeFileSync(foreign, loot);
   fs.writeFileSync(otherId, loot);
   const events = [w.stateEv(), w.startEv(AID), w.stopEv(AID, '09:06', foreign), w.startEv('c2a797dcf0da897f2'), w.stopEv('c2a797dcf0da897f2', '09:07', otherId)];
-  const reader = createSessionReader({ root: w.root });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
   const result = reader.sync({ events, state: STATE });
   assert.deepEqual(result.errors.sort(), ['transcript: refused: agent id mismatch', 'transcript: refused: foreign session']);
   assert.equal(result.agents.get(AID).transcript, false);
@@ -335,7 +334,7 @@ test('reader: the session sum covers the main transcript and three agent transcr
   fs.writeFileSync(foreignMain, jsonl([asst('f1', T, usage(9999, 9999, 9999, 9999))]));
   const events = [w.stateEv(), ...ids.flatMap((id) => [w.startEv(id), w.stopEv(id)]),
     { ts: at('09:20'), event: 'Stop', session_id: foreignSid, transcript_path: foreignMain }];
-  const reader = createSessionReader({ root: w.root });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
   const result = reader.sync({ events, state: STATE });
   const main = { input: 1 + 5, cache: 5, output: 40 + 5 };
   const agents = { input: 30, cache: 150, output: 40 + 41 + 42 };
@@ -356,7 +355,7 @@ test('reader: no main transcript text and no path reaches the snapshot', () => {
     asst('m1', '2026-10-21T10:00:01Z', usage(1, 1, 1, 1), [{ type: 'text', text: 'TEXT-SECRET' }, { type: 'tool_use', name: 'Bash', input: { command: 'TOOL-SECRET' } }]),
   ]));
   fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), jsonl([w.stateEv()]));
-  const snap = loadSnapshot(project, null, createSessionReader({ root: w.root }));
+  const snap = loadSnapshot(project, null, createSessionReader({ projectSlug: '-p', root: w.root }));
   assert.equal(snap.tokens.source, 'transcripts');
   assert.equal(snap.tokens.spent, 4);
   const text = JSON.stringify(snap);
@@ -368,7 +367,7 @@ test('reader: a grown transcript gives the new sum at the next sync; a partial l
   const first = JSON.stringify(asst('m1', '2026-10-21T10:00:00Z', usage(1, 0, 0, 1)));
   const second = JSON.stringify(asst('m2', '2026-10-21T10:00:01Z', usage(0, 0, 0, 10)));
   fs.writeFileSync(w.main, `${first}\n`);
-  const reader = createSessionReader({ root: w.root });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
   const sync = () => reader.sync({ events: [w.stateEv()], state: STATE });
   assert.equal(sync().tokens.spent, 2);
   assert.equal(reader.changed(), false);
@@ -387,7 +386,7 @@ test('reader: no workflow in flight reads nothing and polls nothing', () => {
   fs.writeFileSync(w.main, jsonl([asst('m1', '2026-10-21T10:00:00Z', usage(1, 0, 0, 1))]));
   const project = projectDirOf(null);
   fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), jsonl([w.stateEv()]));
-  const reader = createSessionReader({ root: w.root });
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
   const snap = loadSnapshot(project, null, reader);
   assert.equal(reader.bytesRead, 0);
   assert.deepEqual(snap.tokens, { source: 'none', spent: null });
@@ -407,11 +406,11 @@ test('reader: no workflow in flight reads nothing and polls nothing', () => {
 test('reader: quiet prints nothing; the logger gets one line per reason and no path', () => {
   const w = world();
   const events = [w.stateEv(path.join(w.tmp, `${OTHER_SID}.jsonl`), OTHER_SID), w.stateEv(path.join(w.slug, 'x.jsonl'), '33333333-4444-4555-8666-777777777777')];
-  const silent = createSessionReader({ root: w.root, log: null });
+  const silent = createSessionReader({ projectSlug: '-p', root: w.root, log: null });
   const noise = spies(() => { silent.sync({ events, state: STATE }); silent.sync({ events, state: STATE }); });
   assert.deepEqual(noise, []);
   const lines = [];
-  const loud = createSessionReader({ root: w.root, log: (text) => lines.push(text) });
+  const loud = createSessionReader({ projectSlug: '-p', root: w.root, log: (text) => lines.push(text) });
   loud.sync({ events, state: STATE });
   loud.sync({ events, state: STATE });
   assert.deepEqual(lines.sort(), ['transcript: refused: name', 'transcript: refused: outside root']);
@@ -428,7 +427,7 @@ test('loadSnapshot: a reader adds tokens, attribution, and per-agent facts, and 
   fs.writeFileSync(w.agentFile(ids[0]), jsonl([asst('x', '2026-10-21T10:00:00Z', usage(0, 0, 0, 5))]));
   const events = [w.stateEv(), ...ids.flatMap((id) => [w.startEv(id, '09:05'), w.stopEv(id, '09:06')])];
   fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), jsonl(events));
-  const snap = loadSnapshot(project, null, createSessionReader({ root: w.root }));
+  const snap = loadSnapshot(project, null, createSessionReader({ projectSlug: '-p', root: w.root }));
   assert.equal(snap.agents.length, 110);
   const first = snap.agents.find((a) => a.agent_id === ids[0]);
   assert.equal(first.transcript, true);
@@ -436,4 +435,46 @@ test('loadSnapshot: a reader adds tokens, attribution, and per-agent facts, and 
   assert.equal(snap.tokens.spent, 2 + 5);
   assert.equal(JSON.stringify(snap).includes(w.root), false);
   assert.equal(Object.hasOwn(first, 'path'), false);
+});
+
+test('projectSlugOf: every character that is not a letter or a digit becomes a hyphen', () => {
+  assert.equal(projectSlugOf('/Users/joaooliveira/study/constellation-harness'), '-Users-joaooliveira-study-constellation-harness');
+  assert.equal(projectSlugOf('/a/b.c_d e/f@g'), '-a-b-c-d-e-f-g');
+});
+
+test('checkTranscriptPath and reader: a session folder of another project is refused', () => {
+  const mainCtx = { sessionId: SID, ...ROOTS };
+  assert.equal(checkTranscriptPath('main', `${ROOT}/-other/${SID}.jsonl`, mainCtx), 'other project');
+  assert.equal(checkTranscriptPath('main', `${ROOT}/-proj/deeper/${SID}.jsonl`, mainCtx), 'other project');
+  assert.equal(checkTranscriptPath('main', `${ROOT}/-proj/${SID}.jsonl`, mainCtx), null);
+  const w = world();
+  const other = path.join(w.root, '-other');
+  fs.mkdirSync(other);
+  const foreignMain = path.join(other, `${SID}.jsonl`);
+  fs.writeFileSync(foreignMain, jsonl([asst('m1', '2026-10-21T10:00:00Z', usage(9, 9, 9, 9), [{ type: 'text', text: 'OTHER-PROJECT-SECRET' }])]));
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root });
+  const result = reader.sync({ events: [w.stateEv(foreignMain)], state: STATE });
+  assert.deepEqual(result.errors, ['transcript: refused: other project']);
+  assert.equal(reader.bytesRead, 0);
+  assert.equal(result.tokens, null);
+  assert.equal(JSON.stringify(result).includes('OTHER-PROJECT'), false);
+  assert.equal(result.errors.some((e) => e.includes(w.tmp)), false);
+});
+
+test('reader: a window that starts on a line start keeps that line', () => {
+  const w = world();
+  const line = (i) => sized({ type: 'assistant', timestamp: '2026-10-21T10:00:00.000Z', message: { id: `m${i}`, usage: usage(0, 0, 0, i) } }, 256);
+  fs.writeFileSync(w.main, [1, 2, 3, 4, 5].map(line).join(''));
+  const reader = createSessionReader({ projectSlug: '-p', root: w.root, capBytes: 1024 });
+  const result = reader.sync({ events: [w.stateEv()], state: STATE });
+  assert.equal(reader.bytesRead, 1024);
+  assert.equal(result.tokens.output, 2 + 3 + 4 + 5);
+});
+
+test('reader: a line longer than one read chunk joins and counts once', () => {
+  const w = world();
+  const long = asst('m1', '2026-10-21T10:00:00Z', usage(1, 0, 0, 1), [{ type: 'text', text: 'x'.repeat(2.5 * 1024 * 1024) }]);
+  fs.writeFileSync(w.main, jsonl([long, asst('m2', '2026-10-21T10:00:01Z', usage(0, 0, 0, 10))]));
+  const result = createSessionReader({ projectSlug: '-p', root: w.root }).sync({ events: [w.stateEv()], state: STATE });
+  assert.equal(result.tokens.spent, 2 + 10);
 });

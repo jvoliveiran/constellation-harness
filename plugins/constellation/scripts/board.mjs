@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
-import { createSessionReader } from './board-session.mjs';
+import { createSessionReader, projectSlugOf } from './board-session.mjs';
 import * as render from './board-render.mjs';
 
 export * from './board-model.mjs';
@@ -345,7 +345,7 @@ export function loadSnapshot(projectDir, prev = null, session = null) {
     progress,
     tokenDelta: state ? tokenDelta(state.tokens) : null,
     tokens: tokensFact(read?.tokens ?? null, state ? tokenDelta(state.tokens) : null, state?.startedAt ?? null),
-    attribution: read ? attributeAgents(agents, progress) : {},
+    attribution: read ? attributeAgents(agents, progress, state.startedAt) : {},
     agents,
     activity,
     helperStops,
@@ -744,8 +744,11 @@ function runServer({ projectDir, port, quiet }) {
   let stopWatch = null;
   const listeners = new Set();
   // Without --quiet, one line per distinct reason. The text holds a reason, never a path.
+  let realProject = projectDir;
+  try { realProject = fs.realpathSync(projectDir); } catch { /* keep the resolved path */ }
   const reader = createSessionReader({
     root: path.join(os.homedir(), '.claude', 'projects'),
+    projectSlug: projectSlugOf(realProject),
     log: quiet ? null : (text) => console.error(`board: ${text}`),
   });
   const getSnapshot = () => snapshot ?? (snapshot = safeRefresh(() => loadSnapshot(projectDir, null, reader), null, projectDir));

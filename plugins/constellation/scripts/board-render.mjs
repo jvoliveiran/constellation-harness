@@ -490,7 +490,8 @@ export function renderSteps(progress, esc, attribution) {
 /**
  * Render the Now card (header, step strip, modifiers, facts) as an HTML string, or the empty
  * state when no workflow runs. view = { state, progress, task, tokens, attribution, projectDir,
- * hhmm, fmtDur, fmtTok, since }. tokens is the snapshot tokens fact: its source sets the tooltip. task is the tree node of state.task, or null. The snapshot errors
+ * hhmm, fmtDur, fmtTok, since }. tokens is the snapshot tokens fact: its source sets the
+ * tooltip. task is the tree node of state.task, or null. The snapshot errors
  * are not part of this markup: the page writes them to their own region. The page receives this
  * function through toString(); renderSteps is its top-level neighbor on the page.
  */
