@@ -1805,7 +1805,7 @@ test('page sources cannot end their element: no script or comment opener in our 
 test('cli: a missing vendor file logs one line and serves the page with one script hash', async () => {
   // The real path: board.mjs runs main() only when argv[1] equals its resolved module path.
   const copy = fs.realpathSync(mkTmp('board-novendor-'));
-  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
+  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs', 'board-session.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
   fs.cpSync(path.join(here, 'board-ui'), path.join(copy, 'board-ui'), { recursive: true });
   const probe = http.createServer();
   const port = await listenOnFreePort(probe);

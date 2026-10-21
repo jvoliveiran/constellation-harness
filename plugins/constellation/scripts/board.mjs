@@ -13,12 +13,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
+import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
+import { createSessionReader } from './board-session.mjs';
 import * as render from './board-render.mjs';
 
 export * from './board-model.mjs';
+export * from './board-session.mjs';
 export * from './board-render.mjs';
 
 const DEFAULT_PORT = 4411;
@@ -29,6 +32,7 @@ const DEBOUNCE_MS = 150;
 const POLL_MS = 1500;
 const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
+const SESSION_POLL_MS = 5000;
 const JSON_CAP_BYTES = 1024 * 1024;
 export const TAIL_CAP_BYTES = 256 * 1024;
 const ROOT_OUTSIDE = '.constellation resolves outside the project';
@@ -269,11 +273,31 @@ function readTail(root, file, maxLines) {
   }
 }
 
+/** The last EVENT_TAIL lines, plus every line since startedAt, so each agent of the workflow stays in view. */
+function windowOf(events, startedAt) {
+  const sinceMs = Date.parse(startedAt);
+  const tailFrom = Math.max(0, events.length - EVENT_TAIL);
+  return events.filter((e, i) => i >= tailFrom || Date.parse(e?.ts) >= sinceMs);
+}
+
+/** Add transcript, description, and model per agent. Never a path. */
+function mergeSessionAgents(agents, info) {
+  return agents.map((a) => {
+    const found = info.get(a.agent_id);
+    return {
+      ...a,
+      transcript: found?.transcript === true,
+      description: a.description ?? found?.description ?? null,
+      model: found?.model ?? null,
+    };
+  });
+}
+
 /**
  * Build the snapshot the page renders. A parse error on the state file keeps the
  * previous snapshot's state and sets stale: true. A missing state file is normal.
  */
-export function loadSnapshot(projectDir, prev = null) {
+export function loadSnapshot(projectDir, prev = null, session = null) {
   const p = paths(projectDir);
   const errors = [];
   const { root, error: rootError } = resolveRoot(projectDir);
@@ -297,9 +321,13 @@ export function loadSnapshot(projectDir, prev = null) {
 
   const tracks = tracksR.value ?? { tracks: {}, extraSteps: {} };
   const progress = state ? resolveSteps(state, tracks, configR.value) : null;
-  const eventsR = readTail(root, p.events, EVENT_TAIL);
+  const eventsR = readTail(root, p.events, Infinity);
   if (eventsR.error) errors.push(`events.jsonl: ${eventsR.error}`);
-  const { agents, activity, helperStops } = pairEvents(parseEventLines(eventsR.text));
+  const events = parseEventLines(eventsR.text);
+  const { agents: pairedAgents, activity, helperStops } = pairEvents(windowOf(events, state?.startedAt));
+  const read = state && session ? session.sync({ events, state }) : null;
+  errors.push(...(read?.errors ?? []));
+  const agents = read ? mergeSessionAgents(pairedAgents, read.agents) : pairedAgents;
   const scan = scanWorkItems(p, root);
   errors.push(...scan.errors);
   const tree = buildTree(scan.nodes, state);
@@ -316,6 +344,8 @@ export function loadSnapshot(projectDir, prev = null) {
     state,
     progress,
     tokenDelta: state ? tokenDelta(state.tokens) : null,
+    tokens: tokensFact(read?.tokens ?? null, state ? tokenDelta(state.tokens) : null, state?.startedAt ?? null),
+    attribution: read ? attributeAgents(agents, progress) : {},
     agents,
     activity,
     helperStops,
@@ -677,11 +707,21 @@ function runServer({ projectDir, port, quiet }) {
   let snapshot = null;
   let stopWatch = null;
   const listeners = new Set();
-  const getSnapshot = () => snapshot ?? (snapshot = safeRefresh(() => loadSnapshot(projectDir), null, projectDir));
+  // Without --quiet, one line per distinct reason. The text holds a reason, never a path.
+  const reader = createSessionReader({
+    root: path.join(os.homedir(), '.claude', 'projects'),
+    log: quiet ? null : (text) => console.error(`board: ${text}`),
+  });
+  const getSnapshot = () => snapshot ?? (snapshot = safeRefresh(() => loadSnapshot(projectDir, null, reader), null, projectDir));
   const refresh = () => {
-    snapshot = safeRefresh(() => loadSnapshot(projectDir, snapshot), snapshot, projectDir);
+    snapshot = safeRefresh(() => loadSnapshot(projectDir, snapshot, reader), snapshot, projectDir);
     for (const l of listeners) l(snapshot);
   };
+  // A growing transcript does not touch .constellation/, so the 5 s tick checks the known files.
+  const sessionPoll = setInterval(() => {
+    if (!snapshot?.state) reader.reset();
+    else if (reader.changed()) refresh();
+  }, SESSION_POLL_MS);
 
   const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file));
   server.on('listening', () => {
@@ -702,7 +742,7 @@ function runServer({ projectDir, port, quiet }) {
   });
   server.listen(port, '127.0.0.1');
 
-  const shutdown = () => { if (stopWatch) stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
+  const shutdown = () => { clearInterval(sessionPoll); if (stopWatch) stopWatch(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }
