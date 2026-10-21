@@ -16,6 +16,7 @@ import {
 } from './board-model.mjs';
 import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
+  renderSteps, renderAgentHead, renderAgentReport, renderAgentDialog, renderStepDialog,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
   renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
 } from './board-render.mjs';
@@ -2297,7 +2298,7 @@ const nowState = {
   reviewLoopCount: 1, prNumber: 7, modelProfile: 'balanced',
 };
 const nowView = (extra = {}) => ({
-  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokenDelta: 1500, projectDir: '/p',
+  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokens: { source: 'state', spent: 1500 }, attribution: {}, projectDir: '/p',
   hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => `${n}t`, since: () => 65, ...extra,
 });
 const taskCard = '<span>task <code>';
@@ -2467,18 +2468,30 @@ test('chipClass: the allow-list picks the class, anything else is other', () => 
   }
 });
 
+// Task 025 render fixtures.
+const AGENT_ID_A = 'a0e575badeb8675d0';
+const AGENT_REPLY = {
+  id: AGENT_ID_A, agent_type: 'constellation:software-architect', description: 'Plan <x>', model: 'opus',
+  start: '2026-10-21T09:05:00Z', end: '2026-10-21T09:06:01Z', durationSec: 61,
+  usage: { spent: 1234, input: 1, cache: 2, output: 3 }, report: '# Heading\n\nbody', truncated: false, error: null,
+};
+const agentDialogView = (extra = {}) => ({
+  reply: AGENT_REPLY, markdownit: stubFactory(), tree: null, hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => (n == null ? '—' : `${n}t`), ...extra,
+});
+const agentsWithIds = () => agentsFixture(1, 3).map((a, i) => ({ ...a, agent_id: runId(i + 1), description: i === 1 ? 'Muted <b>' : undefined }));
+
 /** One thunk per export: the arguments that the isolation test passes to it. */
 const ISOLATION_ARGS = {
   chipClass: () => ['s-', ['inbox', 'done'], 'done'],
   renderBacklog: () => [{ tree: rendererTree(), route: listRoute() }, esc],
   feedText: () => [{ kind: 'transition', file: 'a.md', from: null, to: 'inbox' }, esc],
-  renderAgents: () => [agentsView(agentsFixture(1, 25)), esc],
-  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc],
+  renderAgents: () => [agentsView(agentsWithIds()), esc],
+  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc, null, true],
   renderItemBody: () => [{ text: 'x', truncated: true }, null, esc],
   treeHolds: () => [rendererTree(), 'task', '001-open.md'],
-  parseRoute: () => ['#/plan/023-x.md'],
-  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc],
-  renderNow: () => [nowView(), esc],
+  parseRoute: () => ['#/agent/a0e575badeb8675d0'],
+  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc, { architect: ['a0e575badeb8675d0'] }],
+  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] } }), esc],
   renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
   renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
   parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
@@ -2493,6 +2506,10 @@ const ISOLATION_ARGS = {
   internalHref: () => ['../tasks/001-one.md', detailTree()],
   findItem: () => [detailTree(), 'task', '001-one.md'],
   renderItemView: () => [{ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>b</p>', backHash: '#/' }, esc],
+  renderAgentHead: () => [AGENT_REPLY, agentDialogView(), esc],
+  renderAgentReport: () => [AGENT_REPLY, agentDialogView(), esc],
+  renderAgentDialog: () => [agentDialogView(), esc],
+  renderStepDialog: () => [{ ...agentDialogView(), step: { id: 'architect', emoji: '📐', label: 'Plan' }, replies: [AGENT_REPLY, { ...AGENT_REPLY, start: '2026-10-21T09:00:00Z' }] }, esc],
 };
 
 test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
@@ -3624,4 +3641,104 @@ test('serve: /api/agent without a reader answers with the missing reason and an 
     const body = JSON.parse(r.body);
     assert.deepEqual([r.status, body.report, body.error, body.id], [200, null, 'missing', AG.done]);
   } finally { await closeServer(server); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: render (routes, agent rows, step buttons, dialogs, tokens tooltip)
+// ---------------------------------------------------------------------------
+
+test('parseRoute: agent and step routes', () => {
+  assert.deepEqual(parseRoute('#/agent/a0e575badeb8675d0'), { view: 'agent', id: 'a0e575badeb8675d0' });
+  assert.deepEqual(parseRoute('#/step/architect-verify'), { view: 'step', id: 'architect-verify' });
+  for (const hash of ['#/agent/XYZ', '#/agent/../x', '#/agent/abc', '#/agent/a0e575badeb8675d0/x', '#/agent/a0e575badeb8675d0\n', '#/step/A b', '#/step/', '#/step/-x', '#/step/a/b']) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, hash);
+  }
+});
+
+test('renderAgentDialog: header, report, truncation line, and the unavailable state', () => {
+  const record = {};
+  const view = (reply) => agentDialogView({ reply, markdownit: (o) => ({ render: (t) => { record.input = t; return `R(${t})`; }, renderer: { rules: {} } }) });
+  const html = renderAgentDialog(view({ ...AGENT_REPLY, truncated: true }), esc);
+  for (const fact of ['software-architect', 'Plan &lt;x&gt;', 'opus', 'T2026-10-21T09:05:00Z', '61s', '1234t tok']) assert.ok(html.includes(fact), fact);
+  assert.ok(!html.includes('constellation:'), html);
+  assert.equal(record.input, '# Heading\n\nbody', 'the first heading stays');
+  assert.ok(html.includes('<p class="muted">truncated at 256 KB</p>'));
+  assert.ok(html.includes('id="dialog-title"') && html.includes('data-action="close-dialog"'));
+  assert.ok(!renderAgentDialog(view(AGENT_REPLY), esc).includes('truncated at'));
+  const gone = (reply) => renderAgentDialog(view(reply), esc);
+  assert.ok(gone({ ...AGENT_REPLY, report: null, error: 'missing' }).includes('Transcript not available (missing)'));
+  assert.ok(gone({ error: 'network' }).includes('Transcript not available (network)'));
+  assert.ok(gone({ error: 404 }).includes('Transcript not available (404)'));
+  assert.ok(gone({ ...AGENT_REPLY, report: null, error: '<b>' }).includes('(&lt;b&gt;)'));
+});
+
+test('renderStepDialog: one block per agent, newest last, open when alone', () => {
+  const first = { ...AGENT_REPLY, id: 'a1', start: '2026-10-21T09:05:00Z', description: 'FIRST' };
+  const second = { ...AGENT_REPLY, id: 'a2', start: '2026-10-21T09:10:00Z', description: 'SECOND' };
+  const step = { id: 'architect', emoji: '📐', label: 'Plan' };
+  const two = renderStepDialog(agentDialogView({ step, replies: [second, first] }), esc);
+  assert.ok(two.indexOf('FIRST') < two.indexOf('SECOND'));
+  assert.equal(two.split('<details class="ablock">').length - 1, 2);
+  assert.ok(!two.includes(' open'));
+  assert.ok(two.includes('📐 Plan') && two.includes('data-action="close-dialog"'));
+  const alone = renderStepDialog(agentDialogView({ step, replies: [first] }), esc);
+  assert.equal(alone.split('<details class="ablock" open>').length - 1, 1);
+  assert.ok(alone.includes('R(# Heading'));
+});
+
+test('renderAgents: a finished row with a valid id is a button; a running row is not; the description is muted', () => {
+  const agents = agentsWithIds();
+  const html = renderAgents(agentsView(agents), esc);
+  assert.equal(countRows(html), 4);
+  assert.equal(html.split('data-action="open-agent"').length - 1, 3);
+  assert.ok(html.includes(`data-value="${runId(2)}"`) && !html.includes(`data-value="${runId(1)}"`), 'the running row has no button');
+  assert.ok(html.includes('<span class="muted desc">Muted &lt;b&gt;</span>') && !html.includes('<b>'), html);
+  const plain = renderAgents(agentsView([
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1, agent_id: 'ZZ' },
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1 },
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1, agent_id: '<a0e575badeb8675d0' },
+  ]), esc);
+  assert.ok(!plain.includes('<button'), plain);
+});
+
+test('renderSteps: only a done step with attributed agents is a button', () => {
+  const progress = resolveSteps({ track: 'planned', currentStep: 'engineer', completedSteps: ['architect', 'devops-branch'] }, tracks, planReviewOff);
+  const html = renderSteps(progress, esc, { architect: [runId(1)], engineer: [runId(2)], 'lint-gate': [runId(3)], 'devops-branch': [] });
+  assert.equal(html.split('data-action="open-step"').length - 1, 1);
+  assert.ok(html.includes('<button type="button" class="step done" data-action="open-step" data-value="architect">'));
+  assert.ok(html.includes('<div class="step done"><div class="e">'), 'a done step without agents stays a div');
+  assert.ok(html.includes('<div class="step current">') && html.includes('<div class="step pending">'));
+  assert.equal(renderSteps(progress, esc).includes('<button'), false);
+  assert.equal(renderSteps(progress, esc, { constructor: [1] }).includes('<button'), false);
+});
+
+test('renderNow: the tokens fact shows the source tooltip', () => {
+  const fmtTok = (n) => (n == null ? '—' : `${n}t`);
+  const fact = (tokens) => {
+    const html = renderNow(nowView({ tokens, fmtTok }), esc);
+    return /<div class="k">tokens spent<\/div><div class="v"([^>]*)>([^<]*)<\/div>/.exec(html).slice(1);
+  };
+  assert.deepEqual(fact({ source: 'transcripts', spent: 6902, input: 1234, cache: 5678, output: 90, since: '2026-10-21T09:00:00Z' }),
+    [' title="from session transcripts since 2026-10-21T09:00:00Z: 1,234 / 5,678 / 90"', '6902t']);
+  assert.deepEqual(fact({ source: 'state', spent: 1500 }), [' title="from the state file, as the model reported it"', '1500t']);
+  assert.deepEqual(fact({ source: 'none', spent: null }), ['', '—']);
+  assert.deepEqual(fact(undefined), ['', '—']);
+});
+
+test('renderMarkdown: keepHead keeps the front matter and the first H1', () => {
+  const record = {};
+  const text = '---\nstatus: x\n---\n# T\nbody\n';
+  renderMarkdown(text, stubFactory(record) && ((o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } })), esc, null, true);
+  assert.equal(record.input, text);
+  renderMarkdown(text, (o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } }), esc);
+  assert.equal(record.input, 'body\n');
+});
+
+test('page.css: agent rows and done steps have button rules with a visible focus ring', () => {
+  const css = uiText('page.css');
+  assert.ok(ruleBodies(css, '.arow').some((b) => b.includes('all: unset') && b.includes('grid-template-columns')));
+  assert.ok(ruleBodies(css, '.arow:focus-visible').some((b) => b.includes('outline: 2px solid var(--accent)')));
+  assert.ok(ruleBodies(css, 'button.step:focus-visible').length > 0);
+  assert.ok(ruleBodies(css, 'button.step').some((b) => b.includes('cursor: pointer')));
+  assert.ok(ruleBodies(css, '.ablock').length > 0 && ruleBodies(css, '.dlg-body').some((b) => b.includes('overflow: auto')));
 });

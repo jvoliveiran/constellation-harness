@@ -147,7 +147,8 @@ export function feedText(e, esc) {
  * finished rows, and a Show all button past the cap. The page receives this function through
  * toString(), so the body uses no module-scope symbol and no import: the time formatters come
  * in through view. view = { agents, showAll, hhmm, fmtDur }. agents is newest first, as the
- * snapshot sorts it. No agents gives ''.
+ * snapshot sorts it. A finished row with a valid agent_id is a button that opens its report; a
+ * running row is not. A description shows in muted text. No agents gives ''.
  */
 export function renderAgents(view, esc) {
   var AGENT_ROWS = 20;
@@ -160,7 +161,12 @@ export function renderAgents(view, esc) {
     var dur = a.running
       ? '<span class="dur run" data-since="' + esc(a.start) + '" data-prefix="running ">running</span>'
       : '<span class="dur">' + esc(view.fmtDur(a.durationSec)) + '</span>';
-    return '<li><span class="t">' + esc(view.hhmm(a.start)) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + name(a) + '</span>' + dur + '</li>';
+    var cells = '<span class="t">' + esc(view.hhmm(a.start)) + '</span><span' + (a.running ? ' class="run"' : '') + '>' + name(a) + '</span>' + dur
+      + (typeof a.description === 'string' && a.description ? '<span class="muted desc">' + esc(a.description) + '</span>' : '');
+    var opens = !a.running && typeof a.agent_id === 'string' && /^[a-f0-9]{8,32}$/.test(a.agent_id);
+    return opens
+      ? '<li><button type="button" class="arow" data-action="open-agent" data-value="' + esc(a.agent_id) + '">' + cells + '</button></li>'
+      : '<li>' + cells + '</li>';
   }
   var html = '';
   if (running.length) html += '<div class="running"><div class="gh">Running</div><ul>' + running.map(row).join('') + '</ul></div>';
@@ -175,10 +181,12 @@ export function renderAgents(view, esc) {
  * the library factory (window.markdownit); null renders the text in a <pre>. tree is the snapshot
  * tree: a link to a work item that it holds opens inside the board (internalHref). The page
  * receives this function through toString(), so the body uses no module-scope symbol and no
- * import; internalHref is its top-level neighbor on the page.
+ * import; internalHref is its top-level neighbor on the page. keepHead true keeps the front
+ * matter and the first H1: an agent report is not a work item.
  */
-export function renderMarkdown(text, markdownit, esc, tree) {
-  var body = String(text == null ? '' : text).replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
+export function renderMarkdown(text, markdownit, esc, tree, keepHead) {
+  var whole = String(text == null ? '' : text).replace(/^\uFEFF/, '');
+  var body = keepHead ? whole : whole.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
   if (!markdownit) return '<pre class="md-raw">' + esc(body) + '</pre>';
   var md = markdownit({ html: false, linkify: false, typographer: false, breaks: false });
   var isRemote = function (href) { return /^https?:\/\//i.test(href || ''); };
@@ -281,6 +289,10 @@ export function parseRoute(hash) {
   var text = String(hash || '');
   var plan = /^#\/plan\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(text);
   if (plan) return { view: 'plan', file: plan[1] };
+  var agent = /^#\/agent\/([a-f0-9]{8,32})$/.exec(text);
+  if (agent) return { view: 'agent', id: agent[1] };
+  var step = /^#\/step\/([a-z0-9][a-z0-9-]{0,39})$/.exec(text);
+  if (step) return { view: 'step', id: step[1] };
   var item = /^#\/item\/(epic|feature|task)\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(text);
   return item ? { view: 'item', kind: item[1], file: item[2] } : { view: 'overview' };
 }
@@ -456,13 +468,19 @@ export function sortRows(rows) {
 
 /**
  * Render the step strip of the Now card as an HTML string. progress is the resolveSteps result.
+ * attribution maps a step id to the agent ids that ran in it. Only a done step with agents is a
+ * button, so the current step and a pending step stay plain.
  * The page receives this function through toString(), so the body uses no module-scope symbol
  * and no import.
  */
-export function renderSteps(progress, esc) {
+export function renderSteps(progress, esc, attribution) {
   var html = '<div class="strip">';
   progress.steps.forEach(function (st) {
-    html += '<div class="step ' + st.state + '"><div class="e">' + esc(st.emoji || '⚙️') + '</div><div class="l">' + esc(st.label || st.id) + '</div></div>';
+    var inner = '<div class="e">' + esc(st.emoji || '⚙️') + '</div><div class="l">' + esc(st.label || st.id) + '</div>';
+    var ids = attribution && Object.prototype.hasOwnProperty.call(attribution, st.id) ? attribution[st.id] : null;
+    html += st.state === 'done' && Array.isArray(ids) && ids.length
+      ? '<button type="button" class="step done" data-action="open-step" data-value="' + esc(st.id) + '">' + inner + '</button>'
+      : '<div class="step ' + st.state + '">' + inner + '</div>';
   });
   if (progress.unknownCurrent) html += '<div class="step current"><div class="e">⚙️</div><div class="l">' + esc(progress.unknownCurrent) + '</div></div>';
   if (!progress.steps.length && !progress.unknownCurrent) html += '<div class="empty">track <code>' + esc(progress.track) + '</code> has no steps in tracks.json</div>';
@@ -471,15 +489,20 @@ export function renderSteps(progress, esc) {
 
 /**
  * Render the Now card (header, step strip, modifiers, facts) as an HTML string, or the empty
- * state when no workflow runs. view = { state, progress, task, tokenDelta, projectDir, hhmm,
- * fmtDur, fmtTok, since }. task is the tree node of state.task, or null. The snapshot errors
+ * state when no workflow runs. view = { state, progress, task, tokens, attribution, projectDir,
+ * hhmm, fmtDur, fmtTok, since }. tokens is the snapshot tokens fact: its source sets the tooltip. task is the tree node of state.task, or null. The snapshot errors
  * are not part of this markup: the page writes them to their own region. The page receives this
  * function through toString(); renderSteps is its top-level neighbor on the page.
  */
 export function renderNow(view, esc) {
   var s = view.state, p = view.progress, task = view.task;
   if (!s) return '<div class="empty">No workflow in flight<br><code>watching ' + esc(view.projectDir) + '/.constellation/</code></div>';
-  function fact(k, v) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
+  function fact(k, v, title) { return '<div class="fact"><div class="k">' + esc(k) + '</div><div class="v"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(v) + '</div></div>'; }
+  var tk = view.tokens || { source: 'none', spent: null };
+  function num(n) { return Number(n).toLocaleString('en-US'); }
+  var tokenTitle = tk.source === 'transcripts'
+    ? 'from session transcripts since ' + tk.since + ': ' + num(tk.input) + ' / ' + num(tk.cache) + ' / ' + num(tk.output)
+    : tk.source === 'state' ? 'from the state file, as the model reported it' : '';
   function sinceSpan(iso, text) { return '<span data-since="' + esc(iso || '') + '" data-prefix="">' + esc(text) + '</span>'; }
   var taskLabel = task && task.title ? '<code>' + esc(task.id || s.task) + '</code> ' + esc(task.title) : '<code>' + esc(s.task) + '</code>';
   var head = '<div class="meta mb12">'
@@ -491,12 +514,12 @@ export function renderNow(view, esc) {
   var facts = '<div class="facts">'
     + '<div class="fact"><div class="k">elapsed</div><div class="v">' + sinceSpan(s.startedAt, view.fmtDur(view.since(s.startedAt)) || '—') + '</div></div>'
     + fact('last save', view.hhmm(s.lastUpdatedAt))
-    + fact('tokens spent', view.fmtTok(view.tokenDelta))
+    + fact('tokens spent', view.fmtTok(tk.spent), tokenTitle)
     + fact('review loops', s.reviewLoopCount != null ? s.reviewLoopCount : '—')
     + fact('PR', s.prNumber != null ? '#' + s.prNumber : '—')
     + fact('model profile', s.modelProfile || '—')
     + '</div>';
-  return head + renderSteps(p, esc) + mods + facts;
+  return head + renderSteps(p, esc, view.attribution) + mods + facts;
 }
 
 /**
@@ -602,4 +625,64 @@ export function renderPlanDialog(view, esc) {
     ? '<p class="muted">plan unavailable (' + esc(item && item.error ? item.error : 'no reply') + ')</p>'
     : renderItemBody(item, view.markdownit, esc, view.tree);
   return head + '<div class="dlg-body md">' + body + '</div>';
+}
+
+/**
+ * The header facts of one agent run: type, description, model, start, duration, tokens. reply is a
+ * /api/agent reply or an error stub that keeps the snapshot fields. view = { hhmm, fmtDur, fmtTok }.
+ * Every text goes through esc. The page receives this function through toString(), so the body uses
+ * no module-scope symbol and no import.
+ */
+export function renderAgentHead(reply, view, esc) {
+  var usage = reply.usage || null;
+  return '<span class="ah-type">' + esc(String(reply.agent_type || 'agent').replace(/^constellation:/, '')) + '</span>'
+    + (reply.description ? '<span class="muted">' + esc(reply.description) + '</span>' : '')
+    + (reply.model ? '<span class="chip">' + esc(reply.model) + '</span>' : '')
+    + '<span class="t">' + esc(view.hhmm(reply.start)) + '</span>'
+    + '<span class="dur">' + esc(view.fmtDur(reply.durationSec)) + '</span>'
+    + '<span class="tok">' + esc(view.fmtTok(usage ? usage.spent : null)) + ' tok</span>';
+}
+
+/**
+ * The report of one agent run as HTML: the markdown with its first heading kept, then the muted
+ * truncation line. A reply without a report gives `Transcript not available (<reason>)`, where the
+ * reason is the reply error, a status code, or network. view = { markdownit, tree }. renderMarkdown
+ * is its top-level neighbor on the page.
+ */
+export function renderAgentReport(reply, view, esc) {
+  if (typeof reply.report !== 'string') {
+    return '<p class="muted">Transcript not available (' + esc(reply.error == null ? 'no reply' : reply.error) + ')</p>';
+  }
+  return renderMarkdown(reply.report, view.markdownit, esc, view.tree, true)
+    + (reply.truncated ? '<p class="muted">truncated at 256 KB</p>' : '');
+}
+
+/**
+ * The inner HTML of the agent dialog: the header with the close button, the facts of the run, and
+ * its report. view = { reply, markdownit, tree, hhmm, fmtDur, fmtTok }. renderAgentHead and
+ * renderAgentReport are its top-level neighbors on the page.
+ */
+export function renderAgentDialog(view, esc) {
+  var head = '<div class="dlg-head"><span id="dialog-title">Agent report</span>'
+    + '<button type="button" class="btn secondary" data-action="close-dialog" aria-label="Close">✕</button></div>';
+  return head + '<div class="dlg-body md"><div class="ahead">' + renderAgentHead(view.reply, view, esc) + '</div>'
+    + renderAgentReport(view.reply, view, esc) + '</div>';
+}
+
+/**
+ * The inner HTML of the step dialog: the step header with the close button, then one details block
+ * per agent run, start ascending (newest last). One block alone is open. view = { step: { id,
+ * emoji, label }, replies, markdownit, tree, hhmm, fmtDur, fmtTok }. renderAgentHead and
+ * renderAgentReport are its top-level neighbors on the page.
+ */
+export function renderStepDialog(view, esc) {
+  var head = '<div class="dlg-head"><span id="dialog-title">' + esc(view.step.emoji || '⚙️') + ' ' + esc(view.step.label || view.step.id) + '</span>'
+    + '<button type="button" class="btn secondary" data-action="close-dialog" aria-label="Close">✕</button></div>';
+  var ordered = view.replies.slice().sort(function (a, b) { return String(a.start || '').localeCompare(String(b.start || '')); });
+  var open = ordered.length === 1 ? ' open' : '';
+  var blocks = ordered.map(function (reply) {
+    return '<details class="ablock"' + open + '><summary>' + renderAgentHead(reply, view, esc) + '</summary>'
+      + '<div class="md">' + renderAgentReport(reply, view, esc) + '</div></details>';
+  }).join('');
+  return head + '<div class="dlg-body">' + blocks + '</div>';
 }
