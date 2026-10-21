@@ -165,7 +165,7 @@ export const BODY_CAP_BYTES = 512 * 1024;
 let bodyBuffer = null;
 // Allocated on the first /api/item request, then reused: the server is single-threaded and the read is synchronous.
 const getBodyBuffer = () => (bodyBuffer ??= Buffer.alloc(BODY_CAP_BYTES));
-const ITEM_DIRS = { task: 'tasksDir', plan: 'plansDir' };
+const ITEM_DIRS = { epic: 'epicsDir', feature: 'featuresDir', task: 'tasksDir', plan: 'plansDir' };
 
 /**
  * Read one work-item body for /api/item: at most BODY_CAP_BYTES through openContained. The caller
@@ -408,6 +408,8 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
+    // Defense in depth: a link in a rendered body never sends the board URL as a referrer.
+    res.setHeader('referrer-policy', 'no-referrer');
     // A foreign Host header means a DNS-rebinding page is talking to this server.
     const port = server.address().port;
     if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {

@@ -14,7 +14,11 @@ import {
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog } from './board-render.mjs';
+import {
+  renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
+  parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
+  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
+} from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
@@ -540,46 +544,55 @@ const rendererTree = () => buildTree([
   mk('plan', '001-open.md', ['status: draft', 'task: 001-open.md']),
 ], { task: '001-open.md', currentStep: 'engineer' });
 
+const ALL_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+/** A list route with every status chip on; `extra` overrides. */
+const listRoute = (extra = {}) => ({ kind: 'task', status: ALL_STATUSES, type: null, q: '', attention: false, ...extra });
+/** The `<tr>` of one row, from its data-href. */
+const rowHtml = (html, file, kind = 'task') => {
+  const at = html.indexOf(`data-href="#/item/${kind}/${file}"`);
+  assert.ok(at >= 0, `no row for ${file}`);
+  return html.slice(html.lastIndexOf('<tr', at), html.indexOf('</tr>', at));
+};
+
 test('renderBacklog: every task file appears, including malformed and other', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  for (const f of ['001-open.md', '002-done.md', '003-done.md', '004-odd.md', '005-broken.md']) assert.ok(html.includes(`data-file="${f}"`), f);
+  const html = renderBacklog({ tree: rendererTree(), route: listRoute() }, esc);
+  for (const f of ['001-open.md', '002-done.md', '003-done.md', '004-odd.md', '005-broken.md']) assert.ok(html.includes(`data-href="#/item/task/${f}"`), f);
   assert.ok(html.includes('▶ engineer'));
-  assert.ok(html.includes('📝'));
-  assert.equal(renderBacklog(null, esc), '<div class="empty">No work items</div>');
+  assert.ok(rowHtml(html, '001-open.md').includes('class="chip p-draft"'), 'the plan chip');
+  assert.equal(renderBacklog({ tree: null, route: listRoute() }, esc), '<div class="empty">No work items</div>');
 });
 
 test('renderBacklog: file names are escaped', () => {
   const tree = buildTree([mk('task', '<img src=x onerror=alert(1)>.md', ['status: inbox'])], null);
-  const html = renderBacklog(tree, esc);
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
   assert.ok(html.includes('&lt;img'));
   assert.ok(!html.includes('<img'));
 });
 
-test('renderBacklog: Needs attention lists malformed and lenient items with warnings', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(attn.includes('Needs attention'));
-  assert.ok(attn.includes('005-broken.md') && attn.includes('status missing'));
-  assert.ok(attn.includes('004-odd.md') && attn.includes('unknown status: in-progres'));
-  assert.ok(!html.includes('<details><summary>Needs'));
+test('renderAttention and the table: attention items are counted and their rows carry the warnings in title', () => {
+  const tree = rendererTree();
+  assert.ok(renderAttention(tree, esc).includes('2 items need attention'), renderAttention(tree, esc));
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
+  const broken = rowHtml(html, '005-broken.md');
+  assert.ok(broken.includes('title="status missing"') && broken.includes('class="dot"'), broken);
+  const odd = rowHtml(html, '004-odd.md');
+  assert.ok(odd.includes('title="unknown status: in-progres"') && odd.includes('class="dot"'), odd);
+  assert.ok(!rowHtml(html, '001-open.md').includes('title='), 'a clean row has no title');
 });
 
-test('renderBacklog: an unknown-field-only row keeps its badge and one warning line per field outside Needs attention', () => {
+test('renderBacklog: an unknown-field-only row keeps its dot and one title with both warnings outside the banner count', () => {
   const tree = buildTree([mk('task', '001-odd.md', ['status: inbox', 'category: x', 'effort: s']), mk('task', '002-broken.md', ['type: fix'])], null);
-  const html = renderBacklog(tree, esc);
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(attn.includes('002-broken.md') && !attn.includes('001-odd.md'));
-  // The row ends where the next task row starts. Its warning lines sit inside that slice.
-  const row = html.slice(html.indexOf('data-file="001-odd.md"')).split('<div class="task"')[0];
-  assert.ok(row.includes('<span class="badge warn">lenient</span>'));
-  assert.equal(row.split('class="warn-line"').length - 1, 2);
-  assert.ok(row.includes('<div class="warn-line">unknown field: category</div>'));
-  assert.ok(row.includes('<div class="warn-line">unknown field: effort</div>'));
+  assert.deepEqual(tree.attention.map((a) => a.file), ['002-broken.md']);
+  assert.ok(renderAttention(tree, esc).includes('1 item needs attention'));
+  const row = rowHtml(renderBacklog({ tree, route: listRoute() }, esc), '001-odd.md');
+  assert.ok(row.includes('<span class="dot" aria-label="needs attention"></span>'), row);
+  assert.ok(row.includes('title="unknown field: category; unknown field: effort"'), row);
+  assert.ok(!row.includes('badge') && !row.includes('warn-line'), 'the tree markup is gone');
 });
 
 test('renderBacklog: warning text built from front-matter keys and links is escaped', () => {
   const tree = buildTree([mk('task', '001-x.md', ['status: inbox', '<img src=x onerror=alert(1)>: y', 'feature: F9"><svg onload=alert(2)>.md'])], null);
-  const html = renderBacklog(tree, esc);
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
   assert.ok(html.includes('unknown field: &lt;img src=x onerror=alert(1)&gt;'));
   assert.ok(html.includes('missing link: F9&quot;&gt;&lt;svg onload=alert(2)&gt;.md'));
   assert.ok(!html.includes('<img'));
@@ -587,31 +600,29 @@ test('renderBacklog: warning text built from front-matter keys and links is esca
   assert.ok(html.includes('title="unknown field: &lt;img'), 'the title attribute holds the escaped text');
 });
 
-test('renderBacklog: a task row shows its own warnings right under it', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  // The same warning text also sits in Needs attention, so look only at the task row and what follows it.
-  const afterRow = html.slice(html.indexOf('data-file="004-odd.md"'));
-  const rowAndWarnings = afterRow.slice(0, afterRow.indexOf('<div class="task"', 1) < 0 ? undefined : afterRow.indexOf('<div class="task"', 1));
-  assert.ok(rowAndWarnings.includes('<div class="warn-line">unknown status: in-progres</div>'));
-  assert.ok(rowAndWarnings.includes('<span class="badge warn">lenient</span>'));
+test('renderBacklog: a task row shows its own warnings in its title', () => {
+  const row = rowHtml(renderBacklog({ tree: rendererTree(), route: listRoute() }, esc), '004-odd.md');
+  assert.ok(row.includes('title="unknown status: in-progres"'), row);
+  assert.ok(row.includes('<span class="dot"'), row);
 });
 
-test('renderBacklog: done and dropped collapse in details with counts', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  assert.ok(html.includes('<details data-group="F001-a.md:done"><summary>2 done</summary>'));
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(!attn.includes('<details'));
-  assert.ok(!html.slice(0, html.indexOf('<details')).includes('002-done.md'));
+test('renderBacklog: done and dropped rows hide by default and show with their chip', () => {
+  const tree = rendererTree();
+  const hidden = renderBacklog({ tree, route: parseBacklogRoute('#/') }, esc);
+  assert.ok(!hidden.includes('002-done.md') && !hidden.includes('003-done.md'));
+  assert.ok(hidden.includes('001-open.md'));
+  const shown = renderBacklog({ tree, route: listRoute() }, esc);
+  assert.ok(shown.includes('002-done.md') && shown.includes('003-done.md'));
+  assert.ok(!shown.includes('<details'), 'no collapsed group');
 });
 
-test('renderBacklog: parked and dropped tasks stay visible, dropped inside a collapsed group', () => {
+test('renderBacklog: parked shows by default, dropped shows with its chip', () => {
   const tree = buildTree(['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'].map((status, i) => mk('task', `00${i}-${status}.md`, [`status: ${status}`])), null);
-  const html = renderBacklog(tree, esc);
-  for (const status of ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped']) assert.ok(html.includes(`-${status}.md"`), status);
-  const collapsed = html.slice(html.indexOf('<details data-group="standalone:dropped">'));
-  assert.ok(collapsed.includes('<summary>1 dropped</summary>'));
-  assert.ok(collapsed.includes('data-file="005-dropped.md"'));
-  assert.ok(!html.slice(0, html.indexOf('<details')).includes('005-dropped.md'));
+  const hidden = renderBacklog({ tree, route: parseBacklogRoute('#/') }, esc);
+  for (const status of ['inbox', 'refined', 'in-progress', 'parked']) assert.ok(hidden.includes(`-${status}.md"`), status);
+  for (const status of ['done', 'dropped']) assert.ok(!hidden.includes(`-${status}.md"`), status);
+  const shown = renderBacklog({ tree, route: listRoute() }, esc);
+  for (const status of ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped']) assert.ok(shown.includes(`-${status}.md"`), status);
 });
 
 test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
@@ -621,27 +632,33 @@ test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
     mk('feature', `F001-${evil}.md`, ['status: active', `epic: E01-${evil}.md`]),
     mk('plan', `050-${evil}.md`, ['status: draft', `task: 050-${evil}.md`]),
   ], null);
-  const html = renderBacklog(tree, esc);
-  assert.ok(html.includes('&lt;script&gt;'));
-  assert.ok(!html.includes('<script'));
+  for (const kind of ['epic', 'feature', 'task']) {
+    const html = renderBacklog({ tree, route: listRoute({ kind }) }, esc);
+    assert.ok(html.includes('&lt;script&gt;'), kind);
+    assert.ok(!html.includes('<script'), kind);
+  }
+  const orphans = renderBacklog({ tree, route: listRoute({ kind: 'epic' }) }, esc);
+  assert.ok(orphans.includes('1 plan without task') && orphans.includes('<code>050-&lt;script&gt;'), orphans);
 });
 
-test('renderBacklog: a plan status that names an Object prototype key renders the default glyph', () => {
+test('renderBacklog: a plan status that names an Object prototype key renders the p-other chip', () => {
   const tree = buildTree([
     mk('task', '001-open.md', ['status: refined']),
     mk('plan', '001-open.md', ['status: constructor', 'task: 001-open.md']),
     mk('plan', '050-x.md', ['status: __proto__', 'task: 050-x.md']),
   ], null);
-  const html = renderBacklog(tree, esc);
-  assert.equal(html.split('📝').length - 1, 2, 'both plan rows show the default glyph');
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
+  assert.ok(rowHtml(html, '001-open.md').includes('class="chip p-other"'), 'the task plan shows the default chip');
   assert.ok(!html.includes('function'), 'function source text reached the HTML');
   assert.ok(!html.includes('[object Object]'), 'a prototype object reached the HTML');
+  assert.ok(!html.includes('p-constructor') && !html.includes('p-__proto__'));
 });
 
 test('renderBacklog: source runs with no module scope', () => {
-  const isolated = new Function('return ' + renderBacklog.toString())();
-  const tree = rendererTree();
-  assert.equal(isolated(tree, esc), renderBacklog(tree, esc));
+  // An export may call another export, so the context holds the whole prelude and nothing else.
+  const isolated = vm.runInNewContext(`${renderPrelude}\n;renderBacklog`, {});
+  const view = { tree: rendererTree(), route: listRoute() };
+  assert.equal(isolated(view, esc), renderBacklog(view, esc));
 });
 
 test('feedText: tool_name with HTML is escaped', () => {
@@ -1066,6 +1083,27 @@ test('serve: every response carries nosniff', async () => {
       try {
         assert.equal(r.status, status, name);
         assert.equal(r.headers['x-content-type-options'], 'nosniff', name);
+      } finally { r.req?.destroy(); }
+    }
+  });
+});
+
+test('serve: every response carries referrer-policy no-referrer', async () => {
+  await withBoardServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    const cases = [
+      ['/ 200', () => httpRequest(port, { host, url: '/' }), 200],
+      ['/api/snapshot 200', () => httpRequest(port, { host }), 200],
+      ['/events 200', () => openEvents(port), 200],
+      ['/nope 404', () => httpRequest(port, { host, url: '/nope' }), 404],
+      ['POST / 405', () => httpRequest(port, { host, method: 'POST', url: '/' }), 405],
+      ['foreign Host 403', () => httpRequest(port, { host: 'attacker.example:' + port }), 403],
+    ];
+    for (const [name, request, status] of cases) {
+      const r = await request();
+      try {
+        assert.equal(r.status, status, name);
+        assert.equal(r.headers['referrer-policy'], 'no-referrer', name);
       } finally { r.req?.destroy(); }
     }
   });
@@ -1690,7 +1728,7 @@ test('board-render.mjs: every export is a function that runs with no module scop
     assert.equal(typeof isolated, 'function', `${name} does not compile alone`);
   }
   const isolatedBacklog = new Function(`return ${render.renderBacklog.toString()}`)();
-  assert.equal(isolatedBacklog(null, esc), render.renderBacklog(null, esc));
+  assert.equal(isolatedBacklog({ tree: null }, esc), render.renderBacklog({ tree: null }, esc));
   const isolatedAgents = new Function(`return ${render.renderAgents.toString()}`)();
   const view = { agents: agentsFixture(1, 25), showAll: false, hhmm: stubHhmm, fmtDur: stubFmtDur };
   assert.equal(isolatedAgents(view, esc), render.renderAgents(view, esc));
@@ -1949,14 +1987,16 @@ test('renderAgents: a running row carries data-since and the run class', () => {
 const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${name} = ${fn.toString()};`).join('\n');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null } = {}) => {
+// deferred: fetch returns a promise that the test settles with page.resolve(url, item, nth). Timers wait for page.runTimers().
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
   const els = {};
   const stub = (id) => els[id] ??= {
-    id, innerHTML: '', hidden: false, handlers: {}, open: false, showModals: 0,
+    id, innerHTML: '', value: '', hidden: false, handlers: {}, open: false, showModals: 0, scrolls: [],
     addEventListener(t, fn) { this.handlers[t] = fn; }, getAttribute: () => null, querySelectorAll: () => [],
+    scrollIntoView(options) { this.scrolls.push(options); },
     showModal() { this.open = true; this.showModals += 1; },
     close() { if (!this.open) return; this.open = false; this.handlers.close?.(); },
   };
@@ -1966,33 +2006,52 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
     setItem(k, v) { if (storageThrows) throw new Error('denied'); writes.push([k, v]); },
   };
   const document = {
+    activeElement: null,
     documentElement: { setAttribute: (k, v) => { attrs[k] = v; }, getAttribute: (k) => attrs[k] ?? null },
     getElementById: (id) => (id === 'theme' ? button : stub(id)),
     querySelectorAll: () => [],
   };
   const windowHandlers = {};
+  let hashchanges = 0;
   const location = {
     current: hash,
     get hash() { return this.current; },
-    set hash(value) { if (value !== this.current) { this.current = value; windowHandlers.hashchange?.(); } },
+    set hash(value) { if (value !== this.current) { this.current = value; hashchanges += 1; windowHandlers.hashchange?.(); } },
   };
   const replaced = [];
   const history = { replaceState: (state, title, url) => { location.current = url; replaced.push(url); } };
   const fetches = [];
+  const pending = {};
+  const respond = (item) => (item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
   const fetchStub = (url) => {
     fetches.push(url);
-    const item = reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` };
-    return Promise.resolve(item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
+    if (deferred) return new Promise((resolve) => { (pending[url] ??= []).push((item) => resolve(respond(item))); });
+    return Promise.resolve(respond(reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` }));
   };
+  const timers = [];
+  let timerId = 0;
+  const setTimeoutStub = (fn) => { timers.push({ id: (timerId += 1), fn }); return timerId; };
+  const clearTimeoutStub = (id) => { const at = timers.findIndex((t) => t.id === id); if (at >= 0) timers.splice(at, 1); };
   const sources = [];
   const sandbox = {
     document, localStorage, console, location, history, fetch: fetchStub,
     window: { matchMedia: () => ({ matches: os === 'light' }), addEventListener: (t, fn) => { windowHandlers[t] = fn; }, markdownit: stubFactory() },
-    EventSource: function () { sources.push(this); }, setInterval: () => 0, Date,
+    EventSource: function () { sources.push(this); }, setInterval: () => 0, setTimeout: setTimeoutStub, clearTimeout: clearTimeoutStub, Date,
   };
   vm.runInNewContext(`${renderPrelude}\n${uiText('page.js')}`, sandbox);
   const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
-  return { attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click() };
+  // A click whose target answers closest() for one data-action selector, or for tr[data-href].
+  const clickOn = (id, { action, value, file, href } = {}) => {
+    const element = { getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href })[name] ?? null };
+    const closest = (selector) => ((action && selector === `[data-action="${action}"]`) || (href && selector === 'tr[data-href]') ? element : null);
+    els[id].handlers.click({ target: { closest } });
+  };
+  return {
+    document, attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
+    runTimers: () => { while (timers.length) timers.shift().fn(); },
+    resolve: (url, item, nth = 0) => pending[url][nth](item),
+    get hashchanges() { return hashchanges; },
+  };
 };
 
 test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
@@ -2042,7 +2101,7 @@ test('extractTitle: the first H1 after the front matter, else null', () => {
   assert.equal(extractTitle('---\nstatus: x\n---\n#Title\n'), null);
   assert.equal(extractTitle('---\nstatus: x\n---\nno heading\n## sub\n'), null);
   assert.equal(extractTitle('---\r\nstatus: x\r\n---\r\n# Title  \r\nbody'), 'Title');
-  assert.equal(extractTitle('﻿---\nstatus: x\n---\n# Title\n'), 'Title');
+  assert.equal(extractTitle('\uFEFF---\nstatus: x\n---\n# Title\n'), 'Title');
   assert.equal(extractTitle(null), null);
 });
 
@@ -2090,21 +2149,23 @@ test('renderItemBody: a truncated item ends with the muted line', () => {
   assert.ok(!renderItemBody({ text: 'x', truncated: false }, null, esc).includes('truncated'));
 });
 
-test('renderMarkdown with the vendored library: raw HTML is text, unsafe and relative links lose href, http links open in a new tab', () => {
+test('renderMarkdown with the vendored library: raw HTML is text, relative links outside the tree lose href, http links open in a new tab', () => {
   const md = loadVendor();
+  // The tree holds 014-x.md, so [b](014-x.md) opens the task view; anything else relative loses its href.
+  const tree = buildTree([mk('task', '014-x.md', ['status: inbox'])], null);
   const html = renderMarkdown([
     '<img src=x onerror=alert(1)>', '', '[a](javascript:alert(1))', '', '[b](014-x.md)', '',
     '[c](https://example.com)', '', '[d](#top)',
-  ].join('\n'), md, esc);
+  ].join('\n'), md, esc, tree);
   assert.ok(html.includes('&lt;img'), html);
   assert.ok(!html.includes('<img'), html);
   // markdown-it 14 refuses the javascript: target outright: the source stays as plain text, with no anchor.
   assert.ok(html.includes('<p>[a](javascript:alert(1))</p>'), html);
   assert.ok(!/<a[^>]*>a<\/a>/.test(html), html);
-  assert.ok(html.includes('<a>b</a>'), html);
+  assert.ok(html.includes('<a href="#/item/task/014-x.md">b</a>'), html);
   assert.ok(html.includes('<a href="https://example.com" rel="noopener noreferrer" target="_blank">c</a>'), html);
   assert.ok(html.includes('<a>d</a>'), html);
-  assert.ok(!/href="(javascript|014|#)/.test(html), html);
+  assert.ok(!/href="(javascript|014|#top)/.test(html), html);
 });
 
 test('renderMarkdown with the vendored library: images render as links with their alt text', () => {
@@ -2137,7 +2198,7 @@ test('treeHolds: the name rule and the tree membership for tasks and plans', () 
 
 test('parseRoute: #/plan/<file> opens the plan dialog and every other hash is the overview', () => {
   assert.deepEqual(parseRoute('#/plan/023-x.md'), { view: 'plan', file: '023-x.md' });
-  for (const hash of ['#/plan/../x.md', '#/item/task/x.md', '#/', '', '#/plan/', '#/plan/x.txt', null]) {
+  for (const hash of ['#/plan/../x.md', '#/', '', '#/plan/', '#/plan/x.txt', '#/item/task/x.md/extra', null]) {
     assert.deepEqual(parseRoute(hash), { view: 'overview' }, String(hash));
   }
 });
@@ -2366,7 +2427,7 @@ test('page.js: a click on a child of Show all shows every row', async () => {
 });
 
 test('renderBacklog: a status outside the allow-list gets the class s-other only', () => {
-  const html = (status) => renderBacklog(buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), esc);
+  const html = (status) => renderBacklog({ tree: buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), route: listRoute({ kind: 'feature' }) }, esc);
   const odd = html('done in-progress');
   assert.ok(odd.includes('<span class="chip s-other">done in-progress</span>'), odd);
   assert.ok(html('done').includes('<span class="chip s-done">done</span>'));
@@ -2390,4 +2451,934 @@ test('serve: every id that page.js looks up appears in the served markup before 
     assert.ok(ids.length >= 9, `ids found: ${ids.join()}`);
     for (const id of ids) assert.ok(before.includes(`id="${id}"`), `#${id} is not in the markup before the first <script>`);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 024 (folded from tasks 030 and 031): chipClass, isolation, title parity, BOM escape, dialog close
+// ---------------------------------------------------------------------------
+
+test('chipClass: the allow-list picks the class, anything else is other', () => {
+  const groups = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
+  assert.equal(chipClass('s-', groups, 'done'), 's-done');
+  assert.equal(chipClass('p-', ['draft', 'approved'], 'approved'), 'p-approved');
+  for (const value of ['weird', 'constructor', '__proto__', 'toString', null, undefined, '']) {
+    assert.equal(chipClass('s-', groups, value), 's-other', String(value));
+  }
+});
+
+/** One thunk per export: the arguments that the isolation test passes to it. */
+const ISOLATION_ARGS = {
+  chipClass: () => ['s-', ['inbox', 'done'], 'done'],
+  renderBacklog: () => [{ tree: rendererTree(), route: listRoute() }, esc],
+  feedText: () => [{ kind: 'transition', file: 'a.md', from: null, to: 'inbox' }, esc],
+  renderAgents: () => [agentsView(agentsFixture(1, 25)), esc],
+  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc],
+  renderItemBody: () => [{ text: 'x', truncated: true }, null, esc],
+  treeHolds: () => [rendererTree(), 'task', '001-open.md'],
+  parseRoute: () => ['#/plan/023-x.md'],
+  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc],
+  renderNow: () => [nowView(), esc],
+  renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
+  renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
+  parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
+  formatBacklogRoute: () => [parseBacklogRoute('#/backlog?type=fix&q=a')],
+  toggleBacklogRoute: () => [parseBacklogRoute(''), 'status', 'done'],
+  backlogRows: () => [rowsTree(), 'task'],
+  filterRows: () => [backlogRows(rowsTree(), 'task'), parseBacklogRoute(''), rowsTree().attention],
+  sortRows: () => [backlogRows(rowsTree(), 'task')],
+  renderTable: () => [backlogRows(rowsTree(), 'task'), 'task', esc],
+  renderToolbar: () => [{ route: parseBacklogRoute(''), tree: rowsTree() }, esc],
+  renderAttention: () => [rowsTree(), esc],
+  internalHref: () => ['../tasks/001-one.md', detailTree()],
+  findItem: () => [detailTree(), 'task', '001-one.md'],
+  renderItemView: () => [{ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>b</p>', backHash: '#/' }, esc],
+};
+
+test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
+  const names = Object.keys(renderModule);
+  assert.deepEqual(names.filter((n) => !Object.hasOwn(ISOLATION_ARGS, n)), [], 'an export has no ISOLATION_ARGS entry');
+  assert.deepEqual(Object.keys(ISOLATION_ARGS).filter((n) => !names.includes(n)), [], 'ISOLATION_ARGS names a missing export');
+  // The bare context holds the ECMAScript built-ins and the prelude, as the page does before page.js runs.
+  const isolated = vm.runInNewContext(`${renderPrelude}\n;({ ${names.join(', ')} })`, {});
+  for (const name of names) {
+    const args = ISOLATION_ARGS[name]();
+    const inContext = JSON.stringify(isolated[name](...args));
+    assert.notEqual(inContext, undefined, `${name} returned undefined in the context`);
+    assert.equal(inContext, JSON.stringify(renderModule[name](...args)), name);
+  }
+});
+
+test('extractTitle and renderMarkdown drop the same line for BOM, CRLF, no front matter, and a fenced H1', () => {
+  const fixtures = {
+    bom: '\uFEFF---\nstatus: x\n---\n# x\nbody\n',
+    crlf: '---\r\nstatus: x\r\n---\r\n# x\r\nbody\r\n',
+    'no front matter': '# x\nbody\n',
+    // Task 023 D3 accepts this: both rules take the fenced line.
+    'fence first': '---\nstatus: x\n---\n```\n# x\n```\nbody\n',
+  };
+  for (const [name, text] of Object.entries(fixtures)) {
+    const record = {};
+    const stub = () => ({ render: (input) => { record.input = input; return ''; }, renderer: { rules: {} } });
+    assert.equal(extractTitle(text), 'x', `${name}: title`);
+    renderMarkdown(text, stub, esc);
+    assert.ok(!/^# x/m.test(record.input), `${name}: the title line reached the renderer`);
+    assert.ok(!record.input.includes('status: x'), `${name}: the front matter reached the renderer`);
+    assert.ok(record.input.includes('body'), `${name}: the body is gone`);
+  }
+});
+
+test('board-render.mjs and page.js hold no literal U+FEFF', () => {
+  for (const [name, text] of [['board-render.mjs', fs.readFileSync(path.join(here, 'board-render.mjs'), 'utf8')], ['page.js', uiText('page.js')]]) {
+    assert.ok(!text.includes('\uFEFF'), `${name} holds a literal U+FEFF`);
+  }
+});
+
+test('page.js: the close button closes the dialog and restores the route', async () => {
+  const page = bootPage({ hash: '#/other' });
+  page.feed(pageSnapshot());
+  await flush();
+  const view = { getAttribute: (name) => (name === 'data-file' ? '023-x.md' : null) };
+  page.els['now-actions'].handlers.click({ target: { closest: (selector) => (selector === '[data-action="view-plan"]' ? view : null) } });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  const close = { closest: (selector) => (selector === '[data-action="close-dialog"]' ? {} : null) };
+  page.els.dialog.handlers.click({ target: close });
+  assert.equal(page.els.dialog.open, false);
+  assert.equal(page.location.hash, '#/other');
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: the model carries dates and related links; /api/item serves epics and features
+// ---------------------------------------------------------------------------
+
+test('toNode: a node carries created, edited, and related; group nodes carry mtime and the dates', () => {
+  const dated = ['date-created: 14-10-2026', 'last-edit: 21-10-2026'];
+  const node = mk('task', '001-a.md', ['status: inbox', 'related: a.md, b.md ,, c.md', ...dated]);
+  assert.deepEqual([node.created, node.edited], ['14-10-2026', '21-10-2026']);
+  assert.deepEqual(node.related, ['a.md', 'b.md', 'c.md']);
+  const bare = mk('task', '002-b.md', ['status: inbox']);
+  assert.deepEqual([bare.created, bare.edited, bare.related], [null, null, []]);
+  const tree = buildTree([
+    mk('epic', 'E01-a.md', ['status: active', ...dated], '2026-10-01T00:00:00.000Z'),
+    mk('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md', ...dated], '2026-10-02T00:00:00.000Z'),
+    mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md', ...dated], '2026-10-03T00:00:00.000Z'),
+  ], null);
+  const expected = (mtime) => ({ mtime, created: '14-10-2026', edited: '21-10-2026' });
+  const pick = ({ mtime, created, edited }) => ({ mtime, created, edited });
+  assert.deepEqual(pick(tree.epics[0]), expected('2026-10-01T00:00:00.000Z'));
+  assert.deepEqual(pick(tree.epics[0].features[0]), expected('2026-10-02T00:00:00.000Z'));
+  assert.deepEqual(pick(tree.orphanPlans[0]), expected('2026-10-03T00:00:00.000Z'));
+});
+
+test('treeHolds: epics and features by kind, with the name rule', () => {
+  // The tree holds the bad name, so only the name rule can refuse it.
+  const tree = buildTree([
+    mk('epic', 'E01-a.md', ['status: active']),
+    mk('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md']),
+    mk('feature', 'F002-loose.md', ['status: active']),
+    mk('feature', '../F001.md', ['status: active', 'epic: E01-a.md']),
+  ], null);
+  assert.equal(tree.epics[0].features.some((f) => f.file === '../F001.md'), true, 'the bad name is in the tree');
+  assert.equal(treeHolds(tree, 'epic', 'E01-a.md'), true);
+  assert.equal(treeHolds(tree, 'feature', 'E01-a.md'), false, 'an epic is not a feature');
+  assert.equal(treeHolds(tree, 'feature', 'F001-a.md'), true, 'a feature under an epic');
+  assert.equal(treeHolds(tree, 'feature', 'F002-loose.md'), true, 'an orphan feature');
+  assert.equal(treeHolds(tree, 'epic', 'F001-a.md'), false, 'a feature is not an epic');
+  assert.equal(treeHolds(tree, 'feature', '../F001.md'), false);
+  assert.equal(treeHolds(tree, 'feature', 'F999-x.md'), false);
+});
+
+test('serve: /api/item serves epic and feature bodies and refuses names outside the tree', async () => {
+  const dir = tmpProject();
+  writeItem(dir, 'epics', 'E01-a.md', ['status: active']);
+  writeItem(dir, 'features', 'F001-a.md', ['status: active', 'epic: E01-a.md']);
+  await withItemServer(dir, async (get) => {
+    for (const [kind, sub, file] of [['epic', 'epics', 'E01-a.md'], ['feature', 'features', 'F001-a.md']]) {
+      const r = await get(itemUrl(kind, file));
+      assert.equal(r.status, 200, kind);
+      const body = JSON.parse(r.body);
+      assert.deepEqual([body.kind, body.file], [kind, file]);
+      assert.equal(body.text, fs.readFileSync(path.join(dir, '.constellation', sub, file), 'utf8'));
+    }
+    assert.equal((await get(itemUrl('feature', 'F999-x.md'))).status, 404);
+    assert.equal((await get(itemUrl('epic', 'F001-a.md'))).status, 404, 'a feature file is not an epic');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: routes and rows
+// ---------------------------------------------------------------------------
+
+const DEFAULT_LIST_ROUTE = { kind: 'task', status: ['inbox', 'refined', 'in-progress', 'parked', 'other'], type: null, q: '', attention: false };
+const mkTitled = (kind, file, lines, title, mtime = MTIME) => toNode(kind, file, ['---', ...lines, '---', '', ...(title ? [`# ${title}`] : [])].join('\n'), mtime);
+/** Two features (one under an epic), five tasks (one in flight, one with a broken link, one with no H1), one plan. */
+const rowsTree = () => buildTree([
+  mkTitled('epic', 'E01-board.md', ['status: active'], 'Board UI'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-board.md'], 'Backlog table'),
+  mkTitled('feature', 'F002-loose.md', ['status: active'], 'Loose feature'),
+  mkTitled('task', '010-one.md', ['status: inbox', 'type: fix', 'feature: F001-a.md', 'date-created: 14-10-2026', 'last-edit: 21-10-2026'], 'Fix the thing'),
+  mkTitled('task', '011-two.md', ['status: done', 'type: feature', 'feature: F001-a.md'], 'Two'),
+  mkTitled('task', '012-three.md', ['status: refined', 'feature: F002-loose.md'], 'Three'),
+  mkTitled('task', '013-no-title-here.md', ['status: inbox'], null),
+  mkTitled('task', '014-broken-link.md', ['status: inbox', 'feature: F999-gone.md'], 'Broken'),
+  mk('plan', '010-one.md', ['status: approved', 'task: 010-one.md']),
+], { task: '010-one.md', currentStep: 'engineer' });
+
+test('parseRoute: #/item/<kind>/<file> opens a detail view for epic, feature, and task only', () => {
+  for (const kind of ['epic', 'feature', 'task']) {
+    assert.deepEqual(parseRoute(`#/item/${kind}/014-x.md`), { view: 'item', kind, file: '014-x.md' }, kind);
+  }
+  for (const hash of ['#/item/plan/x.md', '#/item/bogus/x.md', '#/item/task/../x.md', '#/item/task/', '#/item/task/x.txt', '#/item/task/a/b.md']) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, hash);
+  }
+});
+
+test('parseBacklogRoute: defaults, each key, and unknown values', () => {
+  for (const hash of ['#/', '', '#/plan/x.md', '#/item/task/x.md', '#/backlog', '#/other?kind=epic', null]) {
+    assert.deepEqual(parseBacklogRoute(hash), DEFAULT_LIST_ROUTE, String(hash));
+  }
+  assert.deepEqual(parseBacklogRoute('#/backlog?kind=feature'), { ...DEFAULT_LIST_ROUTE, kind: 'feature' });
+  assert.deepEqual(parseBacklogRoute('#/backlog?kind=plan'), DEFAULT_LIST_ROUTE, 'an unknown kind keeps the default');
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done,bogus').status, ['done']);
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done,inbox,done').status, ['inbox', 'done'], 'fixed order, no duplicate');
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=').status, [], 'an empty status keeps no status');
+  assert.deepEqual(parseBacklogRoute('#/backlog?type=fix,bogus').type, ['fix']);
+  assert.deepEqual(parseBacklogRoute('#/backlog?type=').type, []);
+  assert.equal(parseBacklogRoute('#/backlog?q=a%26b%20c').q, 'a&b c');
+  assert.equal(parseBacklogRoute('#/backlog?q=%E0').q, '', 'a bad escape gives an empty search');
+  assert.equal(parseBacklogRoute('#/backlog?attn=1').attention, true);
+  assert.equal(parseBacklogRoute('#/backlog?attn=0').attention, false);
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done&kind=epic&q=x&nokey&attn=1&type=debt'),
+    { kind: 'epic', status: ['done'], type: ['debt'], q: 'x', attention: true });
+});
+
+test('formatBacklogRoute: the default is #/, every route round-trips, and a toggle gives the next route', () => {
+  assert.equal(formatBacklogRoute(DEFAULT_LIST_ROUTE), '#/');
+  const routes = [
+    { ...DEFAULT_LIST_ROUTE, kind: 'feature' },
+    { ...DEFAULT_LIST_ROUTE, status: [...DEFAULT_LIST_ROUTE.status, 'done'] },
+    { ...DEFAULT_LIST_ROUTE, status: [], type: [], q: 'x' },
+    { kind: 'epic', status: ['done', 'dropped'], type: ['fix', 'debt'], q: 'a&b c=d#e', attention: true },
+    { ...DEFAULT_LIST_ROUTE, q: 'ünï 日本' },
+  ];
+  for (const route of routes) assert.deepEqual(parseBacklogRoute(formatBacklogRoute(route)), route, formatBacklogRoute(route));
+  assert.equal(formatBacklogRoute(routes[1]), '#/backlog?status=inbox,refined,in-progress,parked,other,done');
+  assert.equal(formatBacklogRoute(routes[3]), '#/backlog?kind=epic&status=done,dropped&type=fix,debt&q=a%26b%20c%3Dd%23e&attn=1');
+  // The toggle: status flips in fixed order, type leaves null on the first click and returns to null with all six.
+  const start = DEFAULT_LIST_ROUTE;
+  assert.deepEqual(toggleBacklogRoute(start, 'status', 'done').status, [...start.status, 'done']);
+  assert.deepEqual(toggleBacklogRoute(start, 'status', 'inbox').status, ['refined', 'in-progress', 'parked', 'other']);
+  assert.deepEqual(toggleBacklogRoute(start, 'type', 'fix').type, ['feature', 'refactor', 'debt', 'spike', 'discovery']);
+  assert.equal(toggleBacklogRoute({ ...start, type: ['fix'] }, 'type', 'fix').type.length, 0);
+  assert.equal(toggleBacklogRoute({ ...start, type: ['feature', 'refactor', 'debt', 'spike', 'discovery'] }, 'type', 'fix').type, null);
+  assert.equal(toggleBacklogRoute(start, 'kind', 'epic').kind, 'epic');
+  assert.equal(toggleBacklogRoute(start, 'kind', 'plan').kind, 'task');
+  assert.equal(toggleBacklogRoute(start, 'attention').attention, true);
+  assert.equal(toggleBacklogRoute({ ...start, attention: true }, 'attention').attention, false);
+  assert.equal(toggleBacklogRoute({ ...start, attention: true }, 'show-attention').attention, true);
+  assert.deepEqual(start, DEFAULT_LIST_ROUTE, 'the argument is unchanged');
+});
+
+test('backlogRows: tasks carry feature and epic from the tree, a slug title without H1, and standalone dashes', () => {
+  const tree = rowsTree();
+  const byFile = (rows) => Object.fromEntries(rows.map((r) => [r.file, r]));
+  const tasks = byFile(backlogRows(tree, 'task'));
+  assert.equal(Object.keys(tasks).length, 5);
+  assert.deepEqual(tasks['010-one.md'].feature, { file: 'F001-a.md', id: 'F001', title: 'Backlog table' });
+  assert.deepEqual(tasks['010-one.md'].epic, { file: 'E01-board.md', id: 'E01', title: 'Board UI' });
+  assert.deepEqual(tasks['012-three.md'].epic, null, 'an orphan feature has no epic');
+  assert.equal(tasks['012-three.md'].feature.title, 'Loose feature');
+  assert.equal(taskNode(tree, '014-broken-link.md').links.feature, 'F999-gone.md', 'the raw link is broken');
+  assert.deepEqual([tasks['014-broken-link.md'].feature, tasks['014-broken-link.md'].epic], [null, null]);
+  assert.deepEqual([tasks['013-no-title-here.md'].feature, tasks['013-no-title-here.md'].epic], [null, null]);
+  assert.equal(tasks['013-no-title-here.md'].title, 'no title here', 'no H1 gives the slug with spaces');
+  assert.equal(tasks['010-one.md'].title, 'Fix the thing');
+  assert.deepEqual(tasks['010-one.md'].plan, { file: '010-one.md', status: 'approved' });
+  assert.deepEqual([tasks['010-one.md'].inFlight, tasks['010-one.md'].currentStep, tasks['010-one.md'].edited], [true, 'engineer', '21-10-2026']);
+  assert.deepEqual([tasks['011-two.md'].group, tasks['011-two.md'].type, tasks['011-two.md'].plan], ['done', 'feature', null]);
+  const features = byFile(backlogRows(tree, 'feature'));
+  assert.deepEqual(features['F001-a.md'].taskCounts, { inbox: 1, done: 1 });
+  assert.deepEqual([features['F001-a.md'].taskCount, features['F001-a.md'].epic.title], [2, 'Board UI']);
+  assert.deepEqual([features['F002-loose.md'].taskCounts, features['F002-loose.md'].epic], [{ refined: 1 }, null]);
+  assert.equal(features['F001-a.md'].group, 'other', 'a feature status outside the task groups is other');
+  const [epic] = backlogRows(tree, 'epic');
+  assert.deepEqual([epic.file, epic.featureCount, epic.taskCount, epic.taskCounts], ['E01-board.md', 1, 2, { inbox: 1, done: 1 }]);
+  assert.deepEqual(backlogRows(null, 'task'), []);
+});
+
+/** A row with every key that filterRows reads; `extra` overrides. */
+const filterRow = (extra) => ({
+  kind: 'task', file: 'f.md', id: '1', title: 'plain', type: 'chore', status: 'inbox', group: 'inbox', feature: null, epic: null, ...extra,
+});
+
+test('filterRows: the search matches the seven fields, case-insensitive', () => {
+  const rows = [
+    filterRow({ tag: 'id', id: 'xBOARDx' }),
+    filterRow({ tag: 'title', title: 'a Board here' }),
+    filterRow({ tag: 'file', file: '001-BOARD.md' }),
+    filterRow({ tag: 'type', type: 'boardtype' }),
+    filterRow({ tag: 'status', status: 'boardstatus' }),
+    filterRow({ tag: 'feature', feature: { file: 'F1.md', id: 'F1', title: 'The BoArD feature' } }),
+    filterRow({ tag: 'epic', epic: { file: 'E1.md', id: 'E1', title: 'bOARd epic' } }),
+    filterRow({ tag: 'none', title: 'unrelated' }),
+  ];
+  const tags = (q) => filterRows(rows, { ...DEFAULT_LIST_ROUTE, q }, []).map((r) => r.tag);
+  assert.deepEqual(tags('BoArD'), ['id', 'title', 'file', 'type', 'status', 'feature', 'epic']);
+  assert.deepEqual(tags('  board '), ['id', 'title', 'file', 'type', 'status', 'feature', 'epic'], 'the search is trimmed');
+  assert.equal(tags('').length, 8, 'an empty search passes every row');
+  assert.deepEqual(tags('a.b'), [], 'the search is no regex');
+});
+
+test('filterRows: status, type, and attention filters', () => {
+  const rows = [
+    filterRow({ tag: 'inbox', file: 'a.md', type: 'fix' }),
+    filterRow({ tag: 'done', file: 'd.md', type: 'fix', group: 'done', status: 'done' }),
+    filterRow({ tag: 'dropped', file: 'x.md', group: 'dropped', status: 'dropped' }),
+    filterRow({ tag: 'feature-type', file: 'b.md', type: 'feature' }),
+    filterRow({ tag: 'no-type', file: 'c.md', type: null }),
+    filterRow({ tag: 'feature-row', kind: 'feature', file: 'd.md', group: 'other', status: 'active' }),
+  ];
+  const tags = (route, attention = []) => filterRows(rows, { ...DEFAULT_LIST_ROUTE, ...route }, attention).map((r) => r.tag);
+  assert.deepEqual(tags({}), ['inbox', 'feature-type', 'no-type', 'feature-row'], 'the default hides done and dropped, and a feature row ignores the chips');
+  assert.deepEqual(tags({ status: ['done', 'dropped'] }), ['done', 'dropped', 'feature-row']);
+  assert.deepEqual(tags({ status: [] }), ['feature-row']);
+  assert.deepEqual(tags({ type: ['fix'], status: ['inbox', 'done'] }), ['inbox', 'done', 'feature-row'], 'a null type hides under a type filter');
+  assert.deepEqual(tags({ type: null }), ['inbox', 'feature-type', 'no-type', 'feature-row'], 'no type key keeps every type');
+  assert.deepEqual(tags({ attention: true }, [{ kind: 'task', file: 'd.md' }]), ['done'], 'attention shows a done row and keys on kind and file');
+});
+
+test('sortRows: status group order, then id descending, numeric aware', () => {
+  const row = (group, id) => ({ group, id, tag: `${group}:${id}` });
+  const input = [
+    row('done', '500'), row('inbox', '099'), row('parked', '001'), row('inbox', null), row('inbox', 'F009'),
+    row('refined', '002'), row('inbox', '100'), row('inbox', 'F010'), row('dropped', '900'), row('other', '003'), row('in-progress', '004'),
+  ];
+  const before = input.map((r) => r.tag);
+  const sorted = sortRows(input);
+  assert.deepEqual(sorted.map((r) => r.tag), [
+    'inbox:F010', 'inbox:F009', 'inbox:100', 'inbox:099', 'inbox:null', 'refined:002', 'in-progress:004', 'parked:001', 'other:003', 'done:500', 'dropped:900',
+  ]);
+  assert.deepEqual(input.map((r) => r.tag), before, 'the input array is unchanged');
+  assert.notEqual(sorted, input);
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: the table, the toolbar, and the banner
+// ---------------------------------------------------------------------------
+
+const SIX_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
+const TASK_TYPES = ['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'];
+const table40Id = (k) => String(101 + k);
+const table40File = (k) => `${table40Id(k)}-task-${table40Id(k)}.md`;
+const FEATURE_FILES = ['F001-alpha.md', 'F002-beta.md', 'F003-gamma.md', 'F004-delta.md', 'F005-epsilon.md'];
+/** 3 epics, 5 features (F005 has no epic), 40 tasks over all seven groups, 2 flagged, task 105 in flight, 2 orphan plans. */
+const table40 = () => {
+  const nodes = [
+    mkTitled('epic', 'E01-board.md', ['status: active'], 'Board UI'),
+    mkTitled('epic', 'E02-core.md', ['status: active'], 'Harness core'),
+    mkTitled('epic', 'E03-docs.md', ['status: active'], 'Docs'),
+  ];
+  const featureEpic = ['E01-board.md', 'E01-board.md', 'E02-core.md', 'E03-docs.md', null];
+  ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].forEach((name, i) => {
+    nodes.push(mkTitled('feature', FEATURE_FILES[i], ['status: active', ...(featureEpic[i] ? [`epic: ${featureEpic[i]}`] : [])], `${name} feature`));
+  });
+  for (let k = 0; k < 40; k += 1) {
+    // k 0 has an unknown status and k 1 has none: the two flagged tasks, both in the group other.
+    const status = k === 0 ? ['status: weird'] : k === 1 ? [] : [`status: ${SIX_GROUPS[(k - 2) % 6]}`];
+    const feature = k % 6 === 5 ? [] : [`feature: ${FEATURE_FILES[k % 6]}`];
+    nodes.push(mkTitled('task', table40File(k), [...status, `type: ${TASK_TYPES[k % 6]}`, ...feature, 'last-edit: 21-10-2026'], `Task ${table40Id(k)} about the board`));
+  }
+  nodes.push(mkTitled('plan', table40File(4), ['status: approved', `task: ${table40File(4)}`], 'Plan 105'));
+  nodes.push(mkTitled('plan', '900-gone.md', ['status: draft', 'task: 900-gone.md'], 'Orphan one'));
+  nodes.push(mkTitled('plan', '901-loose.md', ['status: approved'], 'Orphan two'));
+  return buildTree(nodes, { task: table40File(4), currentStep: 'engineer' });
+};
+const headerCells = (html) => [...html.matchAll(/<th class="col-(\w+)">([^<]*)<\/th>/g)].map((m) => [m[1], m[2]]);
+const cellOf = (row, key) => new RegExp(`<td class="col-${key}">([\\s\\S]*?)</td>`).exec(row)?.[1];
+
+test('renderTable: the task table has the eight columns, links, chips, dashes, and the in-flight row', () => {
+  const tree = table40();
+  const html = renderTable(backlogRows(tree, 'task'), 'task', esc);
+  assert.deepEqual(headerCells(html), [['id', 'ID'], ['title', 'Title'], ['type', 'Type'], ['status', 'Status'], ['feature', 'Feature'], ['epic', 'Epic'], ['plan', 'Plan'], ['updated', 'Updated']]);
+  assert.equal(html.split('data-href=').length - 1, 40);
+  const linked = rowHtml(html, table40File(6)); // k 6: feature F001 under E01
+  assert.equal(cellOf(linked, 'feature'), '<a href="#/item/feature/F001-alpha.md">F001 Alpha feature</a>');
+  assert.equal(cellOf(linked, 'epic'), '<a href="#/item/epic/E01-board.md">E01 Board UI</a>');
+  assert.equal(cellOf(linked, 'title'), `<a href="#/item/task/${table40File(6)}">Task 107 about the board</a>`);
+  const orphanFeature = rowHtml(html, table40File(4)); // k 4: feature F005, no epic
+  assert.equal(cellOf(orphanFeature, 'epic'), '—');
+  const standalone = rowHtml(html, table40File(5)); // k 5: no feature link
+  assert.deepEqual([cellOf(standalone, 'feature'), cellOf(standalone, 'epic'), cellOf(standalone, 'plan')], ['—', '—', '—']);
+  const inflight = rowHtml(html, table40File(4));
+  assert.ok(inflight.startsWith('<tr class="inflight" data-href='), inflight);
+  assert.ok(inflight.indexOf('class="chip s-') < inflight.indexOf('▶ engineer'), 'the step comes after the status chip');
+  assert.equal(cellOf(inflight, 'plan'), '<span class="chip p-approved">approved</span>');
+  assert.equal(html.split('class="inflight"').length - 1, 1);
+  const flagged = rowHtml(html, table40File(0));
+  assert.ok(flagged.includes('<span class="dot" aria-label="needs attention"></span>') && flagged.includes('title="unknown status: weird"'), flagged);
+  assert.ok(rowHtml(html, table40File(1)).includes('title="status missing"'));
+  assert.ok(!rowHtml(html, table40File(2)).includes('title='), 'a clean row has no title');
+  assert.equal(cellOf(rowHtml(html, table40File(2)), 'updated'), '21-10-2026');
+});
+
+test('renderTable: the feature and epic tables have their columns and counts', () => {
+  const tree = rowsTree();
+  const features = renderTable(backlogRows(tree, 'feature'), 'feature', esc);
+  assert.deepEqual(headerCells(features).map((c) => c[1]), ['ID', 'Title', 'Status', 'Epic', 'Tasks', 'Updated']);
+  const tasksCell = cellOf(rowHtml(features, 'F001-a.md', 'feature'), 'tasks');
+  assert.equal(tasksCell, '<span class="chip s-inbox">inbox 1</span> <span class="chip s-done">done 1</span>');
+  assert.ok(!tasksCell.includes('refined'), 'no chip for an absent group');
+  assert.equal(cellOf(rowHtml(features, 'F002-loose.md', 'feature'), 'epic'), '—');
+  assert.equal(cellOf(rowHtml(features, 'F001-a.md', 'feature'), 'epic'), '<a href="#/item/epic/E01-board.md">E01 Board UI</a>');
+  const epics = renderTable(backlogRows(tree, 'epic'), 'epic', esc);
+  assert.deepEqual(headerCells(epics).map((c) => c[1]), ['ID', 'Title', 'Status', 'Features', 'Tasks', 'Updated']);
+  const epic = rowHtml(epics, 'E01-board.md', 'epic');
+  assert.deepEqual([cellOf(epic, 'features'), cellOf(epic, 'tasks')], ['1', '2']);
+});
+
+const pressedOf = (html, action, value) => new RegExp(`data-action="${action}" data-value="${value}" aria-pressed="(true|false)"`).exec(html)?.[1];
+
+test('renderToolbar: status chips show tree.counts, pressed by route, and hide for features', () => {
+  const tree = buildTree([mk('task', '001-a.md', ['status: inbox'])], null);
+  tree.counts.done = 3; // the rows hold no done task, so only tree.counts can say 3
+  const html = renderToolbar({ route: parseBacklogRoute('#/'), tree }, esc);
+  assert.ok(html.includes('>done 3</button>') && html.includes('>inbox 1</button>'), html);
+  assert.equal(pressedOf(html, 'status', 'done'), 'false');
+  assert.equal(pressedOf(html, 'status', 'inbox'), 'true');
+  assert.equal(html.split('data-action="type"').length - 1, 6);
+  assert.deepEqual(['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'].map((t) => pressedOf(html, 'type', t)), Array(6).fill('true'));
+  assert.equal(html.split('data-action="kind"').length - 1, 3);
+  assert.equal(pressedOf(html, 'kind', 'task'), 'true');
+  assert.ok(html.includes('data-action="attention"') && html.includes('data-action="reset"'));
+  const typed = renderToolbar({ route: parseBacklogRoute('#/backlog?type=fix'), tree }, esc);
+  assert.deepEqual([pressedOf(typed, 'type', 'fix'), pressedOf(typed, 'type', 'debt')], ['true', 'false']);
+  const features = renderToolbar({ route: parseBacklogRoute('#/backlog?kind=feature'), tree }, esc);
+  assert.ok(!features.includes('data-action="status"') && !features.includes('data-action="type"'), features);
+  assert.ok(features.includes('data-action="attention"') && features.includes('data-action="reset"'));
+  assert.equal(pressedOf(features, 'kind', 'feature'), 'true');
+});
+
+test('renderBacklog: no match shows Reset, orphan plans show one line, the banner counts attention', () => {
+  const none = renderBacklog({ tree: rowsTree(), route: listRoute({ q: 'zzz' }) }, esc);
+  assert.ok(none.includes('No items match') && none.includes('data-action="reset"') && !none.includes('<table'), none);
+  const plans = (...files) => buildTree([mk('task', '001-a.md', ['status: inbox']), ...files.map((f) => mk('plan', f, ['status: draft', `task: ${f}`]))], null);
+  const two = renderBacklog({ tree: plans('050-a.md', '051-b.md'), route: listRoute() }, esc);
+  assert.ok(two.includes('2 plans without task') && two.includes('<code>050-a.md</code>') && two.includes('<code>051-b.md</code>'), two);
+  const one = renderBacklog({ tree: plans('050-a.md'), route: listRoute() }, esc);
+  assert.ok(one.includes('1 plan without task: <code>050-a.md</code>') && !one.includes('1 plans'), one);
+  assert.ok(!renderBacklog({ tree: plans(), route: listRoute() }, esc).includes('without task'));
+  const broken = (n) => buildTree(Array.from({ length: n }, (_, i) => mk('task', `00${i}-b.md`, ['type: fix'])), null);
+  const one1 = renderAttention(broken(1), esc);
+  assert.ok(one1.includes('1 item needs attention') && one1.includes('data-action="show-attention"'), one1);
+  assert.ok(renderAttention(broken(2), esc).includes('2 items need attention'));
+  assert.equal(renderAttention(plans(), esc), '');
+  assert.equal(renderAttention(null, esc), '');
+  assert.equal(renderBacklog({ tree: null, route: listRoute() }, esc), '<div class="empty">No work items</div>');
+});
+
+test('renderToolbar: the row count reads shown of total for the current kind', () => {
+  const tree = table40();
+  const count = (route) => />(\d+ of \d+)<\/span>/.exec(renderToolbar({ route, tree }, esc))?.[1];
+  const visible = 40 - tree.counts.done - tree.counts.dropped;
+  assert.ok(visible > 0 && visible < 40);
+  assert.equal(count(parseBacklogRoute('#/')), `${visible} of 40`);
+  assert.equal(count(listRoute()), '40 of 40');
+  assert.equal(count(listRoute({ q: 'zzz' })), '0 of 40');
+  assert.equal(count(listRoute({ kind: 'feature' })), '5 of 5');
+  assert.equal(count(listRoute({ kind: 'feature', q: 'epsilon' })), '1 of 5');
+  assert.equal(count(listRoute({ kind: 'epic' })), '3 of 3');
+  assert.ok(renderToolbar({ route: listRoute(), tree }, esc).includes('class="muted count" aria-live="polite"'));
+  assert.ok(!renderToolbar({ route: listRoute(), tree: null }, esc).includes('class="muted count"'), 'a null tree gives no count');
+});
+
+test('filterRows, sortRows, and renderTable handle 500 tasks in under 100 ms', () => {
+  const nodes = Array.from({ length: 500 }, (_, i) => mkTitled('task', `${String(1000 + i)}-t.md`, [`status: ${SIX_GROUPS[i % 6]}`, `type: ${TASK_TYPES[i % 6]}`], `Task ${i}`));
+  const rows = backlogRows(buildTree(nodes, null), 'task');
+  assert.equal(rows.length, 500);
+  const start = process.hrtime.bigint();
+  const html = renderTable(sortRows(filterRows(rows, listRoute(), [])), 'task', esc);
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ms < 100, `${ms} ms`);
+  assert.equal(html.split('data-href=').length - 1, 500);
+});
+
+/** The block of the first @media rule that starts with the prelude, braces matched. */
+const mediaBlock = (css, prelude) => {
+  const start = css.indexOf(prelude);
+  assert.ok(start >= 0, `no ${prelude} block`);
+  let depth = 0;
+  for (let i = css.indexOf('{', start); i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1;
+    if (css[i] === '}' && (depth -= 1) === 0) return css.slice(start, i + 1);
+  }
+  throw new Error(`${prelude} block does not end`);
+};
+
+test('page.css: the phone width hides the Epic, Plan, and Updated columns and the table stays inside its card', () => {
+  const css = uiText('page.css');
+  const phone = mediaBlock(css, '@media (max-width: 640px)');
+  // Type hides too: with Type, Status, and ID at their desktop widths the Title keeps about 30 px at 390 px.
+  for (const column of ['.col-epic', '.col-plan', '.col-updated', '.col-type']) {
+    assert.ok(ruleBodies(phone, column).some((body) => body.includes('display: none')), `${column} stays at 640 px`);
+  }
+  assert.ok(ruleBodies(phone, '.col-status').join(' ').includes('width: 96px'), 'Status narrows on a phone');
+  const table = ruleBodies(css, '.tbl').join(' ');
+  assert.ok(table.includes('table-layout: fixed') && table.includes('width: 100%'), table);
+  assert.ok(ruleBodies(css, '.tbl td').join(' ').includes('overflow-wrap: anywhere'), 'a long cell does not wrap');
+});
+
+test('page.css: the in-flight row has an accent border and the tree styles are gone', () => {
+  const css = uiText('page.css');
+  assert.ok(ruleBodies(css, '.tbl tr.inflight td:first-child').join(' ').includes('var(--accent)'));
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const gone of [/\.badge\b/, /\.warn-line\b/, /\.grp\b/, /details summary/]) assert.ok(!gone.test(plain), `${gone} is still in page.css`);
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: detail views, internal links, and the Open task button
+// ---------------------------------------------------------------------------
+
+/** One epic, two features, five tasks (001 has a plan and related links, 005 has no feature), one orphan plan. */
+const detailTree = () => buildTree([
+  mkTitled('epic', 'E01-a.md', ['status: active', 'date-created: 01-10-2026', 'last-edit: 02-10-2026'], 'Epic A'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md', 'date-created: 14-10-2026', 'last-edit: 21-10-2026'], 'Feature A'),
+  mkTitled('feature', 'F002-b.md', ['status: active', 'epic: E01-a.md'], 'Feature B'),
+  mkTitled('task', '001-one.md', ['status: inbox', 'type: fix', 'feature: F001-a.md', 'related: 002-two.md, zzz.md'], 'One'),
+  mkTitled('task', '002-two.md', ['status: done', 'feature: F001-a.md'], 'Two'),
+  mkTitled('task', '003-three.md', ['status: inbox', 'feature: F002-b.md'], 'Three'),
+  mkTitled('task', '004-four.md', ['status: refined', 'feature: F002-b.md'], 'Four'),
+  mkTitled('task', '005-solo.md', ['status: inbox'], 'Solo'),
+  mk('plan', '001-one.md', ['status: approved', 'task: 001-one.md']),
+  mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md']),
+], null);
+const itemView = (extra) => ({ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>the body</p>', backHash: '#/', ...extra });
+const tableRowCount = (html) => html.split('data-href=').length - 1;
+
+test('renderItemView: a feature shows breadcrumb, header, body, and its Tasks table', () => {
+  const html = renderItemView(itemView({ backHash: '#/backlog?status=done' }), esc);
+  const crumbs = /<nav class="crumbs">([\s\S]*?)<\/nav>/.exec(html)[1];
+  assert.equal(crumbs, '<a href="#/backlog?status=done">Backlog</a> › <a href="#/item/epic/E01-a.md">E01 Epic A</a> › <span>F001 Feature A</span>');
+  assert.ok(html.includes('<span class="item-title">F001 Feature A</span>') && html.includes('<span class="chip s-other">active</span>'), html);
+  assert.ok(html.includes('created 14-10-2026') && html.includes('edited 21-10-2026'), html);
+  assert.ok(html.includes('<div id="item-body" class="md"><p>the body</p></div>'), html);
+  assert.equal(html.split('<table').length - 1, 1);
+  assert.ok(html.includes('<h3>Tasks</h3>'));
+  const table = html.slice(html.indexOf('<table'));
+  assert.ok(table.includes('data-href="#/item/task/001-one.md"') && table.includes('data-href="#/item/task/002-two.md"'), 'the done task shows');
+  assert.equal(tableRowCount(table), 2, 'the tasks of this feature only');
+});
+
+test('renderItemView: an epic shows a Features table and a Tasks table of every task under them', () => {
+  const html = renderItemView(itemView({ kind: 'epic', file: 'E01-a.md' }), esc);
+  assert.equal(html.split('<table').length - 1, 2);
+  const [, features, tasks] = html.split(/<h3>(?:Features|Tasks)<\/h3>/);
+  assert.equal(tableRowCount(features), 2);
+  assert.ok(features.includes('data-href="#/item/feature/F001-a.md"') && features.includes('data-href="#/item/feature/F002-b.md"'));
+  assert.equal(tableRowCount(tasks), 4);
+  for (const file of ['001-one.md', '002-two.md', '003-three.md', '004-four.md']) assert.ok(tasks.includes(`data-href="#/item/task/${file}"`), file);
+  assert.ok(!tasks.includes('005-solo.md'), 'a standalone task is not under the epic');
+  assert.ok(html.includes('<nav class="crumbs"><a href="#/">Backlog</a> › <span>E01 Epic A</span></nav>'), 'an epic has no parent level');
+});
+
+test('renderItemView: a task shows type and plan chips, View plan, and related chips', () => {
+  const html = renderItemView(itemView({ kind: 'task', file: '001-one.md' }), esc);
+  assert.ok(html.includes('<span class="chip">fix</span>'), 'the type chip');
+  assert.ok(html.includes('<span class="chip p-approved">plan approved</span>'), 'the plan chip');
+  assert.ok(html.includes('<button type="button" class="btn primary" data-action="view-plan" data-file="001-one.md">View plan</button>'), html);
+  assert.ok(html.includes('<a class="chip" href="#/item/task/002-two.md">002-two.md</a>'), 'a related task in the tree links');
+  assert.ok(html.includes('<span class="chip" title="not in .constellation/tasks/">zzz.md</span>'), 'a related name outside the tree is inert');
+  assert.ok(!html.includes('href="#/item/task/zzz.md"'));
+  assert.ok(html.includes('<a href="#/item/epic/E01-a.md">E01 Epic A</a> › <a href="#/item/feature/F001-a.md">F001 Feature A</a> › <span>001 One</span>'), 'the task breadcrumb');
+  assert.ok(!html.includes('<table'), 'a task has no child table');
+  const bare = renderItemView(itemView({ kind: 'task', file: '002-two.md' }), esc);
+  assert.ok(bare.includes('disabled title="no plan for this task">View plan</button>') && !bare.includes('data-action="view-plan"'), bare);
+  assert.ok(!bare.includes('class="related"'), 'no related chips for an empty list');
+  const solo = renderItemView(itemView({ kind: 'task', file: '005-solo.md' }), esc);
+  assert.ok(solo.includes('<nav class="crumbs"><a href="#/">Backlog</a> › <span>005 Solo</span></nav>'), solo);
+});
+
+test('renderItemView: a loading or failed body keeps the header and the children', () => {
+  const loading = renderItemView(itemView({ body: null }), esc);
+  assert.ok(loading.includes('<div id="item-body" class="md"><p class="muted">loading</p></div>'), loading);
+  const failed = renderItemView(itemView({ body: '<p class="muted">body unavailable (404)</p>' }), esc);
+  assert.ok(failed.includes('body unavailable (404)'), failed);
+  for (const html of [loading, failed]) {
+    assert.ok(html.includes('class="item-head"') && html.includes('<table'), 'the header and the table stay');
+  }
+  assert.ok(renderItemView(itemView({ file: 'F999-x.md' }), esc).includes('Item not found'));
+});
+
+test('internalHref: names, directories, and kinds resolve through the tree', () => {
+  const tree = detailTree();
+  const task = '#/item/task/001-one.md';
+  for (const href of ['001-one.md', '../tasks/001-one.md', './001-one.md#h', '../tasks/001-one.md?x=1', '.constellation/tasks/001-one.md']) {
+    assert.equal(internalHref(href, tree), task, href);
+  }
+  assert.equal(internalHref('../plans/001-one.md', tree), '#/plan/001-one.md', 'the plans directory fixes the kind');
+  assert.equal(internalHref('../features/F001-a.md', tree), '#/item/feature/F001-a.md');
+  assert.equal(internalHref('../epics/E01-a.md', tree), '#/item/epic/E01-a.md');
+  assert.equal(internalHref('F001-a.md', tree), '#/item/feature/F001-a.md', 'a bare name tries every kind');
+  assert.equal(internalHref('050-x.md', tree), '#/plan/050-x.md', 'an orphan plan by bare name');
+  assert.equal(internalHref('../tasks/F001-a.md', tree), null, 'a feature file is not a task');
+  for (const href of ['zzz.md', 'https://x/001-one.md', 'mailto:a', '../tasks/../x.md', '../tasks/../001-one.md', '#top', '', null, 'a/.md', '../tasks/x.txt']) {
+    assert.equal(internalHref(href, tree), null, String(href));
+  }
+  assert.equal(internalHref('001-one.md', null), null);
+});
+
+test('renderMarkdown with the vendored library and a tree: internal links get a hash and no target', () => {
+  const md = loadVendor();
+  const tree = detailTree();
+  const html = renderMarkdown('[t](../tasks/001-one.md)\n\n[p](../plans/001-one.md)\n\n[z](zzz.md)\n\n[r](https://example.com)', md, esc, tree);
+  assert.ok(html.includes('<a href="#/item/task/001-one.md">t</a>'), html);
+  assert.ok(html.includes('<a href="#/plan/001-one.md">p</a>'), html);
+  assert.ok(html.includes('<a>z</a>'), html);
+  assert.ok(html.includes('target="_blank">r</a>'), 'a remote link still opens in a new tab');
+  assert.ok(!/href="#\/[^"]*"[^>]*target/.test(html), 'an internal link stays on the page');
+  const dialog = renderPlanDialog({ plan: { file: '001-one.md', status: 'approved', title: 'P', taskId: '001' }, item: { text: '[t](001-one.md)' }, markdownit: md, tree }, esc);
+  assert.ok(dialog.includes('<a href="#/item/task/001-one.md">t</a>'), 'the plan dialog rewrites links too');
+  assert.ok(renderItemBody({ text: '[t](001-one.md)' }, md, esc, tree).includes('href="#/item/task/001-one.md"'));
+});
+
+test('renderNowActions: Open task is enabled only when the tree holds the in-flight task', () => {
+  const tree = buildTree([mk('task', '023-x.md', ['status: in-progress']), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md'])], null);
+  const ok = renderNowActions({ state: nowState, tree }, esc);
+  assert.ok(ok.includes('<button type="button" class="btn secondary" data-action="open-task" data-file="023-x.md">Open task</button>'), ok);
+  const missing = renderNowActions({ state: nowState, tree: buildTree([mk('task', '024-y.md', ['status: in-progress'])], null) }, esc);
+  assert.ok(missing.includes('disabled title="task 023-x.md is not in .constellation/tasks/">Open task</button>'), missing);
+  assert.ok(!missing.includes('data-action="open-task"'));
+  const none = renderNowActions({ state: { ...nowState, task: undefined }, tree }, esc);
+  assert.ok(none.includes('disabled title="no task in the workflow state">Open task</button>'), none);
+  assert.ok(none.includes('data-action="view-plan"'), 'View plan is unchanged');
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: the page runtime (fetch slots, routes, list edits, detail views)
+// ---------------------------------------------------------------------------
+
+/** One epic, one feature F001-a.md with the in-flight task 023-x.md and 024-y.md, one plan for 023-x.md. */
+const itemPageTree = (statusOfY = 'inbox', { mtimeOfY = MTIME, extra = [] } = {}) => buildTree([
+  mkTitled('epic', 'E01-a.md', ['status: active'], 'Epic A'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md'], 'Feature A'),
+  mkTitled('task', '023-x.md', ['status: in-progress', 'feature: F001-a.md'], 'Task X'),
+  mkTitled('task', '024-y.md', [`status: ${statusOfY}`, 'feature: F001-a.md'], 'Task Y', mtimeOfY),
+  mkTitled('plan', '023-x.md', ['status: approved', 'task: 023-x.md'], 'Plan X'),
+  ...extra,
+], null);
+const taskUrl = (file) => `/api/item?kind=task&file=${file}`;
+const okItem = (kind, file, text) => ({ kind, file, mtime: MTIME, truncated: false, text });
+
+test('page.js: a failed task body is fetched again on the next snapshot and on reconnect', async () => {
+  let failing = true;
+  const page = bootPage({ reply: (url) => (failing ? { error: 500 } : okItem('task', '023-x.md', 'good body')) });
+  const taskFetches = () => page.fetches.filter((u) => u === taskUrl('023-x.md')).length;
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('task body unavailable (500)'), page.els.desc.innerHTML);
+  assert.equal(taskFetches(), 1);
+  failing = false;
+  page.feed(pageSnapshot());
+  await flush();
+  assert.equal(taskFetches(), 2, 'the next snapshot fetches the failed body again');
+  assert.ok(page.els.desc.innerHTML.includes('good body'), page.els.desc.innerHTML);
+  page.es.onopen();
+  await flush();
+  assert.equal(taskFetches(), 2, 'a good body is not fetched again on reconnect');
+  failing = true;
+  page.feed(pageSnapshot({ tree: pageTree('2026-10-19T12:00:00.000Z') }));
+  await flush();
+  assert.equal(taskFetches(), 3);
+  page.es.onopen();
+  await flush();
+  assert.equal(taskFetches(), 4, 'a reconnect fetches a failed body again');
+});
+
+test('page.js: a new in-flight task shows loading until its body arrives', async () => {
+  const page = bootPage({ deferred: true });
+  const tree = itemPageTree();
+  const stateFor = (task) => ({ ...nowState, task, plan: undefined });
+  page.feed(pageSnapshot({ state: stateFor('023-x.md'), tree }));
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'old body'));
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(old body)'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ state: stateFor('024-y.md'), tree }));
+  assert.ok(page.els.desc.innerHTML.includes('<p class="muted">loading</p>'), page.els.desc.innerHTML);
+  assert.ok(!page.els.desc.innerHTML.includes('old body'), 'the old body is gone before the reply');
+  page.resolve(taskUrl('024-y.md'), okItem('task', '024-y.md', 'new body'));
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(new body)'), page.els.desc.innerHTML);
+  // An mtime change of the same task keeps the body on screen until the reply, so the region does not flash.
+  page.feed(pageSnapshot({ state: stateFor('024-y.md'), tree: itemPageTree('inbox', { mtimeOfY: '2026-10-19T12:00:00.000Z' }) }));
+  assert.equal(page.fetches.filter((u) => u === taskUrl('024-y.md')).length, 2, 'the mtime change fetches again');
+  assert.ok(page.els.desc.innerHTML.includes('R(new body)'), 'the old body stays on an mtime change');
+});
+
+test('page.js: an older task body reply after a newer one is ignored', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(pageSnapshot({ tree: pageTree(MTIME) }));
+  page.feed(pageSnapshot({ tree: pageTree('2026-10-19T12:00:00.000Z') }));
+  assert.equal(page.fetches.length, 2);
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'second'), 1);
+  await flush();
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'first'), 0);
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(second)') && !page.els.desc.innerHTML.includes('first'), page.els.desc.innerHTML);
+});
+
+test('page.js: an older plan reply after a newer one is ignored', async () => {
+  const page = bootPage({ hash: '#/plan/023-x.md', deferred: true });
+  const tree = itemPageTree('inbox', { extra: [mkTitled('plan', '024-y.md', ['status: draft', 'task: 024-y.md'], 'Plan Y')] });
+  page.feed(pageSnapshot({ state: null, tree }));
+  page.location.hash = '#/plan/024-y.md';
+  const planUrl = (file) => `/api/item?kind=plan&file=${file}`;
+  assert.deepEqual(page.fetches, [planUrl('023-x.md'), planUrl('024-y.md')]);
+  page.resolve(planUrl('024-y.md'), okItem('plan', '024-y.md', 'plan b'));
+  await flush();
+  page.resolve(planUrl('023-x.md'), okItem('plan', '023-x.md', 'plan a'));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('R(plan b)') && !page.els.dialog.innerHTML.includes('plan a'), page.els.dialog.innerHTML);
+});
+
+test('page.js: an older detail body reply after a newer one is ignored', async () => {
+  const page = bootPage({ hash: '#/item/task/023-x.md', deferred: true });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  page.location.hash = '#/item/task/024-y.md';
+  page.resolve(taskUrl('024-y.md'), okItem('task', '024-y.md', 'body y'));
+  await flush();
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'body x'));
+  await flush();
+  assert.ok(page.els['bl-item'].innerHTML.includes('R(body y)') && !page.els['bl-item'].innerHTML.includes('body x'), page.els['bl-item'].innerHTML);
+});
+
+test('page.js: a feature route shows the detail view and a new snapshot updates its children', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree('inbox') }));
+  await flush();
+  assert.equal(page.els['bl-list'].hidden, true);
+  assert.equal(page.els['bl-item'].hidden, false);
+  const view = () => page.els['bl-item'].innerHTML;
+  assert.ok(view().includes('<h3>Tasks</h3>') && view().includes('data-href="#/item/task/024-y.md"'), view());
+  assert.ok(view().includes('class="chip s-inbox">inbox</span>'), view());
+  assert.ok(view().includes('R(body of /api/item?kind=feature&file=F001-a.md)'), 'the body is the fetched feature');
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree('refined') }));
+  await flush();
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.ok(view().includes('class="chip s-refined">refined</span>') && !view().includes('class="chip s-inbox">inbox</span>'), view());
+  assert.equal(page.fetches.length, 1, 'a snapshot does not fetch the body again');
+});
+
+test('page.js: an item route outside the tree shows the list and keeps the hash', async () => {
+  const page = bootPage({ hash: '#/item/feature/F999-x.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  assert.equal(page.els['bl-item'].hidden, true);
+  assert.equal(page.els['bl-list'].hidden, false);
+  assert.ok(page.els.backlog.innerHTML.includes('<table'), page.els.backlog.innerHTML);
+  assert.equal(page.location.hash, '#/item/feature/F999-x.md');
+  assert.deepEqual(page.fetches, []);
+});
+
+/** Two tasks: 'Board search' (done) and 'Other' (inbox). */
+const filterPageTree = () => buildTree([
+  mkTitled('task', '001-board.md', ['status: done', 'type: fix'], 'Board search'),
+  mkTitled('task', '002-other.md', ['status: inbox', 'type: feature'], 'Other'),
+], null);
+const rowFiles = (html) => [...html.matchAll(/data-href="#\/item\/task\/([^"]+)"/g)].map((m) => m[1]);
+const FULL_STATUS_HASH = '#/backlog?status=inbox,refined,in-progress,parked,other,done';
+
+test('page.js: a status chip click replaces the hash and shows done rows', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md'], 'done is hidden by default');
+  page.clickOn('backlog-card', { action: 'status', value: 'done' });
+  assert.equal(page.replaced.at(-1), FULL_STATUS_HASH);
+  assert.equal(page.hashchanges, 0, 'a filter edit adds no hashchange and no history entry');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md', '001-board.md'], 'the done row shows, after the inbox row');
+  page.clickOn('backlog-card', { action: 'type', value: 'fix' });
+  assert.equal(page.replaced.at(-1), `${FULL_STATUS_HASH}&type=feature,refactor,debt,spike,discovery`);
+  page.clickOn('backlog-card', { action: 'kind', value: 'feature' });
+  assert.ok(page.replaced.at(-1).includes('kind=feature'), page.replaced.at(-1));
+  assert.ok(page.els['bl-chips'].innerHTML.includes('data-value="feature" aria-pressed="true"'), 'the Kind control follows the route');
+});
+
+test('page.js: a reload on a filter hash applies the filters and fills the search', async () => {
+  const page = bootPage({ hash: `${FULL_STATUS_HASH}&q=board` });
+  assert.equal(page.els.q.value, 'board', 'the boot copies q into the search box');
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md']);
+  page.location.hash = '#/backlog?q=other';
+  assert.equal(page.els.q.value, 'other', 'a hashchange copies q too');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md']);
+});
+
+test('page.js: typing in the search filters the rows after 100 ms and writes q', async () => {
+  const page = bootPage({ hash: FULL_STATUS_HASH });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.equal(rowFiles(page.els.backlog.innerHTML).length, 2);
+  page.els.q.value = 'BOARD';
+  page.els.q.handlers.input();
+  assert.equal(rowFiles(page.els.backlog.innerHTML).length, 2, 'the rows wait for the debounce');
+  page.runTimers();
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md']);
+  assert.equal(page.replaced.at(-1), `${FULL_STATUS_HASH}&q=BOARD`);
+  assert.equal(page.els.q.value, 'BOARD', 'the box keeps what the user typed');
+});
+
+test('page.js: Reset returns the default filters and empties the search', async () => {
+  const page = bootPage({ hash: `${FULL_STATUS_HASH}&q=board` });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  page.clickOn('backlog-card', { action: 'reset' });
+  assert.equal(page.replaced.at(-1), '#/');
+  assert.equal(page.els.q.value, '');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md']);
+});
+
+test('page.js: the attention banner turns the toggle on and leaves only attention rows', async () => {
+  const tree = buildTree([
+    mkTitled('task', '001-fine.md', ['status: inbox'], 'Fine'),
+    mkTitled('task', '002-gone.md', ['status: done', 'feature: F999-gone.md'], 'Gone'),
+  ], null);
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree }));
+  assert.ok(page.els['bl-banner'].innerHTML.includes('1 item needs attention'), page.els['bl-banner'].innerHTML);
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-fine.md']);
+  page.clickOn('backlog-card', { action: 'show-attention' });
+  assert.ok(page.replaced.at(-1).includes('attn=1'), page.replaced.at(-1));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-gone.md'], 'the done row with a warning shows');
+});
+
+test('page.js: Open task opens the task detail view and scrolls to the backlog', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ tree: itemPageTree() }));
+  await flush();
+  assert.ok(page.els['now-actions'].innerHTML.includes('data-action="open-task"'), page.els['now-actions'].innerHTML);
+  assert.equal(page.els['bl-item'].hidden, true, 'the list shows first');
+  page.clickOn('now-actions', { action: 'open-task', file: '023-x.md' });
+  await flush();
+  assert.equal(page.location.hash, '#/item/task/023-x.md');
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.equal(page.els['bl-list'].hidden, true);
+  assert.ok(page.els['bl-item'].innerHTML.includes('Task X'), page.els['bl-item'].innerHTML);
+  assert.equal(page.els['backlog-card'].scrolls.length, 1);
+});
+
+test('page.js: View plan from a task detail view returns to that view on close', async () => {
+  const page = bootPage({ hash: '#/item/task/023-x.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  assert.ok(page.els['bl-item'].innerHTML.includes('data-action="view-plan" data-file="023-x.md"'), page.els['bl-item'].innerHTML);
+  page.clickOn('backlog-card', { action: 'view-plan', file: '023-x.md' });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  assert.equal(page.els['bl-item'].hidden, false, 'the detail view stays behind the dialog');
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/item/task/023-x.md');
+  assert.equal(page.els['bl-item'].hidden, false);
+});
+
+test('page.js: a failed detail body shows body unavailable with the header and children', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md', reply: () => ({ error: 404 }) });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  const view = page.els['bl-item'].innerHTML;
+  assert.ok(view.includes('body unavailable (404)'), view);
+  assert.ok(view.includes('class="item-head"') && view.includes('<h3>Tasks</h3>') && view.includes('data-href="#/item/task/024-y.md"'), view);
+  assert.ok(!view.includes('>loading<'), 'the loading line is gone');
+});
+
+// ---------------------------------------------------------------------------
+// Task 024 suggestions: search debounce vs navigation, focus after repaint, task outside the tree
+// ---------------------------------------------------------------------------
+
+test('page.js: Back from a detail view opened on a filtered table returns the same filters, search, and rows', async () => {
+  const filtered = `${FULL_STATUS_HASH}&q=board`;
+  const page = bootPage({ hash: filtered });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+
+  page.clickOn('backlog-card', { href: '#/item/task/001-board.md' });
+  await flush();
+  assert.equal(page.hashchanges, 1, 'the row click pushes one history entry');
+  assert.equal(page.els['bl-item'].hidden, false, 'the detail view is open');
+  assert.deepEqual(page.replaced, [], 'nothing overwrote the filtered list entry');
+
+  page.els.q.value = '';
+  page.location.hash = filtered; // The browser Back button restores the earlier entry and fires hashchange.
+  await flush();
+
+  assert.equal(page.els['bl-item'].hidden, true, 'the detail view closes');
+  assert.equal(page.els['bl-list'].hidden, false, 'the table returns');
+  assert.equal(page.els.q.value, 'board', 'the search box refills from the hash');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md'], 'the filters still apply: done shown, search board');
+});
+
+test('page.js: a click within the search debounce keeps the item route', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  page.els.q.value = 'x';
+  page.els.q.handlers.input();
+  page.clickOn('backlog-card', { href: '#/item/task/024-y.md' });
+  page.runTimers();
+  assert.equal(page.location.hash, '#/item/task/024-y.md');
+  assert.deepEqual(page.replaced, [], 'no replaceState wrote the list over the item entry');
+  // The timer also stands down when the route moves without a hashchange the page saw first.
+  page.location.current = '#/item/task/023-x.md';
+  page.els.q.handlers.input();
+  page.runTimers();
+  assert.deepEqual(page.replaced, []);
+  // Back to another list inside the debounce: the pending write would add the stale search to that list.
+  page.els.q.value = 'stale';
+  page.els.q.handlers.input();
+  page.location.hash = '#/backlog?kind=epic';
+  page.runTimers();
+  assert.deepEqual(page.replaced, [], 'a route change drops the pending search write');
+});
+
+test('page.js: a repaint returns the focus to the same chip', async () => {
+  const page = bootPage();
+  const card = page.els['backlog-card'];
+  const focused = [];
+  const options = [];
+  const chip = (name) => ({ getAttribute: (n) => ({ 'data-action': 'status', 'data-value': 'done', href: null })[n] ?? null, focus: (o) => { focused.push(name); options.push(o); } });
+  const old = chip('old');
+  card.contains = (el) => el === old;
+  page.document.getElementById('bl-list').querySelectorAll = () => [{ getAttribute: () => null, focus: () => focused.push('other') }, chip('new')];
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, [], 'nothing focused: no active element');
+  page.document.activeElement = old;
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, ['new']);
+  assert.equal(JSON.stringify(options), '[{"preventScroll":true}]', 'a repaint must not scroll the page'); // JSON: the object comes from the vm realm
+  page.document.activeElement = { getAttribute: () => null, focus: () => focused.push('input') };
+  card.contains = () => true;
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, ['new'], 'an element with no key is left alone');
+});
+
+test('page.js: a task outside the tree is not fetched on any render', async () => {
+  const page = bootPage();
+  const snapshot = () => pageSnapshot({ tree: buildTree([mk('task', '024-y.md', ['status: inbox'])], null) });
+  page.feed(snapshot());
+  page.feed(snapshot());
+  page.es.onerror();
+  await flush();
+  assert.deepEqual(page.fetches, []);
+  assert.ok(page.els.desc.innerHTML.includes('task file not in .constellation/tasks/'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ tree: null }));
+  assert.ok(page.els.desc.innerHTML.includes('backlog unavailable') && !page.els.desc.innerHTML.includes('not in .constellation'), page.els.desc.innerHTML);
+  assert.deepEqual(page.fetches, []);
+});
+
+test('page.js: in the detail view the focus goes to the visible anchor, not the hidden list one', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md' });
+  const href = '#/item/task/024-y.md';
+  const focused = [];
+  const anchor = (name) => ({ getAttribute: (n) => (n === 'href' ? href : null), focus: () => focused.push(name) });
+  const old = anchor('old');
+  page.els['backlog-card'].contains = (el) => el === old;
+  page.document.getElementById('bl-list').querySelectorAll = () => [anchor('hidden list')];
+  page.document.getElementById('bl-item').querySelectorAll = () => [anchor('visible detail')];
+  page.document.activeElement = old;
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.deepEqual(focused, ['visible detail']);
 });

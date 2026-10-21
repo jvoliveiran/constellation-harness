@@ -16,10 +16,10 @@
   .mt16 { margin-top: 16px; }
   .mb12 { margin-bottom: 12px; }
 
-  /* Chip: status and modifier pills. .badge is the legacy class of the tree rows; task 024 removes it with the tree. */
-  .chip, .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); background: var(--surface-2); }
+  /* Chip: status and modifier pills. */
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); background: var(--surface-2); }
   .chip.accent, .mods .chip { color: var(--accent); border-color: var(--accent); }
-  .chip.warn, .badge.warn { color: var(--danger); border-color: var(--danger); }
+  .chip.warn { color: var(--danger); border-color: var(--danger); }
   .chip.s-inbox, .chip.s-parked, .chip.s-other { color: var(--muted); }
   .chip.s-refined { color: var(--accent); border-color: var(--accent); }
   .chip.s-in-progress { color: var(--warn); border-color: var(--warn); }
@@ -106,13 +106,38 @@
   .run { color: var(--warn); }
   .dur { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
 
-  /* Backlog tree */
-  .warn-line { font-size: 12px; color: var(--muted); margin: 0 0 4px 24px; }
-  details summary { cursor: pointer; color: var(--muted); }
-  .task { padding: 3px 0; font-size: 13px; }
-  .grp, .epic { margin: 8px 0 8px 12px; }
+  /* Backlog: toolbar, table, detail */
   .gh { font-weight: 600; margin: 6px 0 2px; }
-  .attn { border: 1px solid var(--danger); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  #q { flex: 1 1 220px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button.chip, .seg { cursor: pointer; font: inherit; font-size: 12px; }
+  .chip[aria-pressed="false"], .seg[aria-pressed="false"] { opacity: .5; }
+  .seg { height: 26px; padding: 0 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; }
+  .seg[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+  .attn { display: flex; gap: 10px; align-items: center; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; font-size: 13px; }
+  .tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+  .tbl th { position: sticky; top: 0; background: var(--surface-2); color: var(--muted); font-weight: 600; text-align: left; font-size: 12px; }
+  .tbl th, .tbl td { padding: 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; vertical-align: top; }
+  .tbl tbody tr { cursor: pointer; }
+  .tbl tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 50%, transparent); }
+  .tbl tbody tr:hover { background: var(--surface-2); }
+  .tbl tr.inflight td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .tbl a { color: var(--text); } .tbl td.col-feature a, .tbl td.col-epic a { color: var(--accent); }
+  .col-id { width: 64px; } .col-type { width: 76px; } .col-status { width: 120px; } .col-plan { width: 96px; } .col-updated { width: 96px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-right: 4px; }
+  .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 10px; } .crumbs a { color: var(--accent); }
+  .item-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .item-title { font-size: 16px; font-weight: 600; }
+  .related { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #bl-item h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 8px; }
+
+  /* At phone width the fixed columns leave the Title about 30 px, so Type hides with Epic, Plan, and Updated and ID and Status narrow. */
+  @media (max-width: 640px) {
+    .col-epic, .col-plan, .col-updated, .col-type { display: none; }
+    .col-id { width: 44px; } .col-status { width: 96px; }
+  }
 
   @media (min-width: 1100px) {
     main { grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }

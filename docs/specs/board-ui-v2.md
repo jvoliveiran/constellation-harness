@@ -154,6 +154,8 @@ re-render keep the view.
 `^[A-Za-z0-9][A-Za-z0-9._-]*\.md$` and must exist in the snapshot tree.
 Any other value renders the overview.
 
+`sort=` arrives with task 032.
+
 ## 5. Now panel (phase 023)
 
 Header row: the track chip with `step n of N`, the branch in code, the task
@@ -210,8 +212,14 @@ Toolbar, left to right:
   in-progress, parked, other. Done and dropped start off.
 - `Type` chips (tasks only): feature, fix, refactor, debt, spike, discovery.
 - `Plan` select (tasks only): any, has plan, no plan.
-- `Attention` toggle: only rows with a `malformed` or `lenient` flag.
+- `Attention` toggle: only rows with a `malformed` or `lenient` flag. The
+  built toggle uses `tree.attention` (criterion 16 of the task 024 plan
+  overrides this wording). Task 035 tracks the open part.
 - `Reset` link.
+
+Task 024 ships without sortable headers, the `Plan` select, and the `/`
+shortcut. Task 032 holds them. The counts strip folds into the Status
+chips.
 
 Counts strip under the toolbar: one chip per task status with its count,
 from `tree.counts`. A click on a chip toggles that status filter.
