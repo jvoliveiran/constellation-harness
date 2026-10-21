@@ -1,8 +1,18 @@
 // Constellation Harness — board render: the pure render functions of the page.
 //
-// Every export is a function whose body uses no module-scope symbol and no import. board.mjs
-// ships each export to the page through toString(), so the page runs the same code that
-// board.test.mjs tests. A constant that a function needs sits inside its body.
+// Every export is a function whose body uses no module-scope symbol and no import. An export may
+// call another export, because the page defines every export at top level. Nothing else is in
+// scope. board.mjs ships each export to the page through toString(), so the page runs the same
+// code that board.test.mjs tests. A constant that a function needs sits inside its body.
+
+/**
+ * The chip class for a value: prefix + value when allowed holds it, else prefix + 'other'. The
+ * page receives this function through toString(), so the body uses no module-scope symbol and no
+ * import. indexOf on an array keeps Object prototype keys such as `constructor` out of the class.
+ */
+export function chipClass(prefix, allowed, value) {
+  return allowed.indexOf(value) >= 0 ? prefix + value : prefix + 'other';
+}
 
 /**
  * Render the backlog tree as an HTML string. The page receives this function through
@@ -46,8 +56,7 @@ export function renderBacklog(tree, esc) {
   }
   var STATUS_CLASSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
   function header(node) {
-    var statusClass = STATUS_CLASSES.indexOf(node.status) >= 0 ? node.status : 'other';
-    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip s-' + statusClass + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
+    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip ' + chipClass('s-', STATUS_CLASSES, node.status) + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
   }
   function featureGroup(f) {
     return '<div class="grp">' + header(f) + taskGroups(f.tasks, f.file) + '</div>';
@@ -120,7 +129,7 @@ export function renderAgents(view, esc) {
  * this function through toString(), so the body uses no module-scope symbol and no import.
  */
 export function renderMarkdown(text, markdownit, esc) {
-  var body = String(text == null ? '' : text).replace(/^﻿/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
+  var body = String(text == null ? '' : text).replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
   if (!markdownit) return '<pre class="md-raw">' + esc(body) + '</pre>';
   var md = markdownit({ html: false, linkify: false, typographer: false, breaks: false });
   var isRemote = function (href) { return /^https?:\/\//i.test(href || ''); };
@@ -238,11 +247,9 @@ export function renderNowActions(view, esc) {
  */
 export function renderPlanDialog(view, esc) {
   var plan = view.plan, item = view.item;
-  var STATUS_CLASSES = ['draft', 'approved'];
-  var statusClass = STATUS_CLASSES.indexOf(plan.status) >= 0 ? 'p-' + plan.status : 'p-other';
   var head = '<div class="dlg-head"><span id="dialog-title">' + esc(plan.title || plan.file) + '</span>'
     + '<code>' + esc(plan.file) + '</code>'
-    + '<span class="chip ' + statusClass + '">' + esc(plan.status || '') + '</span>'
+    + '<span class="chip ' + chipClass('p-', ['draft', 'approved'], plan.status) + '">' + esc(plan.status || '') + '</span>'
     + (plan.taskId ? '<span class="muted">task ' + esc(plan.taskId) + '</span>' : '')
     + '<button type="button" class="btn secondary" data-action="close-dialog" aria-label="Close">✕</button></div>';
   var body = !item || item.error

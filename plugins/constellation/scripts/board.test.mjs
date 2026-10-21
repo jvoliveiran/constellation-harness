@@ -14,7 +14,7 @@ import {
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog } from './board-render.mjs';
+import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
@@ -639,7 +639,8 @@ test('renderBacklog: a plan status that names an Object prototype key renders th
 });
 
 test('renderBacklog: source runs with no module scope', () => {
-  const isolated = new Function('return ' + renderBacklog.toString())();
+  // An export may call another export, so the context holds the whole prelude and nothing else.
+  const isolated = vm.runInNewContext(`${renderPrelude}\n;renderBacklog`, {});
   const tree = rendererTree();
   assert.equal(isolated(tree, esc), renderBacklog(tree, esc));
 });
@@ -1066,6 +1067,27 @@ test('serve: every response carries nosniff', async () => {
       try {
         assert.equal(r.status, status, name);
         assert.equal(r.headers['x-content-type-options'], 'nosniff', name);
+      } finally { r.req?.destroy(); }
+    }
+  });
+});
+
+test('serve: every response carries referrer-policy no-referrer', async () => {
+  await withBoardServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    const cases = [
+      ['/ 200', () => httpRequest(port, { host, url: '/' }), 200],
+      ['/api/snapshot 200', () => httpRequest(port, { host }), 200],
+      ['/events 200', () => openEvents(port), 200],
+      ['/nope 404', () => httpRequest(port, { host, url: '/nope' }), 404],
+      ['POST / 405', () => httpRequest(port, { host, method: 'POST', url: '/' }), 405],
+      ['foreign Host 403', () => httpRequest(port, { host: 'attacker.example:' + port }), 403],
+    ];
+    for (const [name, request, status] of cases) {
+      const r = await request();
+      try {
+        assert.equal(r.status, status, name);
+        assert.equal(r.headers['referrer-policy'], 'no-referrer', name);
       } finally { r.req?.destroy(); }
     }
   });
@@ -2042,7 +2064,7 @@ test('extractTitle: the first H1 after the front matter, else null', () => {
   assert.equal(extractTitle('---\nstatus: x\n---\n#Title\n'), null);
   assert.equal(extractTitle('---\nstatus: x\n---\nno heading\n## sub\n'), null);
   assert.equal(extractTitle('---\r\nstatus: x\r\n---\r\n# Title  \r\nbody'), 'Title');
-  assert.equal(extractTitle('﻿---\nstatus: x\n---\n# Title\n'), 'Title');
+  assert.equal(extractTitle('\uFEFF---\nstatus: x\n---\n# Title\n'), 'Title');
   assert.equal(extractTitle(null), null);
 });
 
@@ -2390,4 +2412,86 @@ test('serve: every id that page.js looks up appears in the served markup before 
     assert.ok(ids.length >= 9, `ids found: ${ids.join()}`);
     for (const id of ids) assert.ok(before.includes(`id="${id}"`), `#${id} is not in the markup before the first <script>`);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 024 (folded from tasks 030 and 031): chipClass, isolation, title parity, BOM escape, dialog close
+// ---------------------------------------------------------------------------
+
+test('chipClass: the allow-list picks the class, anything else is other', () => {
+  const groups = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
+  assert.equal(chipClass('s-', groups, 'done'), 's-done');
+  assert.equal(chipClass('p-', ['draft', 'approved'], 'approved'), 'p-approved');
+  for (const value of ['weird', 'constructor', '__proto__', 'toString', null, undefined, '']) {
+    assert.equal(chipClass('s-', groups, value), 's-other', String(value));
+  }
+});
+
+/** One thunk per export: the arguments that the isolation test passes to it. */
+const ISOLATION_ARGS = {
+  chipClass: () => ['s-', ['inbox', 'done'], 'done'],
+  renderBacklog: () => [rendererTree(), esc],
+  feedText: () => [{ kind: 'transition', file: 'a.md', from: null, to: 'inbox' }, esc],
+  renderAgents: () => [agentsView(agentsFixture(1, 25)), esc],
+  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc],
+  renderItemBody: () => [{ text: 'x', truncated: true }, null, esc],
+  treeHolds: () => [rendererTree(), 'task', '001-open.md'],
+  parseRoute: () => ['#/plan/023-x.md'],
+  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc],
+  renderNow: () => [nowView(), esc],
+  renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
+  renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
+};
+
+test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
+  const names = Object.keys(renderModule);
+  assert.deepEqual(names.filter((n) => !Object.hasOwn(ISOLATION_ARGS, n)), [], 'an export has no ISOLATION_ARGS entry');
+  assert.deepEqual(Object.keys(ISOLATION_ARGS).filter((n) => !names.includes(n)), [], 'ISOLATION_ARGS names a missing export');
+  // The bare context holds the ECMAScript built-ins and the prelude, as the page does before page.js runs.
+  const isolated = vm.runInNewContext(`${renderPrelude}\n;({ ${names.join(', ')} })`, {});
+  for (const name of names) {
+    const args = ISOLATION_ARGS[name]();
+    const inContext = JSON.stringify(isolated[name](...args));
+    assert.notEqual(inContext, undefined, `${name} returned undefined in the context`);
+    assert.equal(inContext, JSON.stringify(renderModule[name](...args)), name);
+  }
+});
+
+test('extractTitle and renderMarkdown drop the same line for BOM, CRLF, no front matter, and a fenced H1', () => {
+  const fixtures = {
+    bom: '\uFEFF---\nstatus: x\n---\n# x\nbody\n',
+    crlf: '---\r\nstatus: x\r\n---\r\n# x\r\nbody\r\n',
+    'no front matter': '# x\nbody\n',
+    // Task 023 D3 accepts this: both rules take the fenced line.
+    'fence first': '---\nstatus: x\n---\n```\n# x\n```\nbody\n',
+  };
+  for (const [name, text] of Object.entries(fixtures)) {
+    const record = {};
+    const stub = () => ({ render: (input) => { record.input = input; return ''; }, renderer: { rules: {} } });
+    assert.equal(extractTitle(text), 'x', `${name}: title`);
+    renderMarkdown(text, stub, esc);
+    assert.ok(!/^# x/m.test(record.input), `${name}: the title line reached the renderer`);
+    assert.ok(!record.input.includes('status: x'), `${name}: the front matter reached the renderer`);
+    assert.ok(record.input.includes('body'), `${name}: the body is gone`);
+  }
+});
+
+test('board-render.mjs and page.js hold no literal U+FEFF', () => {
+  for (const [name, text] of [['board-render.mjs', fs.readFileSync(path.join(here, 'board-render.mjs'), 'utf8')], ['page.js', uiText('page.js')]]) {
+    assert.ok(!text.includes('\uFEFF'), `${name} holds a literal U+FEFF`);
+  }
+});
+
+test('page.js: the close button closes the dialog and restores the route', async () => {
+  const page = bootPage({ hash: '#/other' });
+  page.feed(pageSnapshot());
+  await flush();
+  const view = { getAttribute: (name) => (name === 'data-file' ? '023-x.md' : null) };
+  page.els['now-actions'].handlers.click({ target: { closest: (selector) => (selector === '[data-action="view-plan"]' ? view : null) } });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  const close = { closest: (selector) => (selector === '[data-action="close-dialog"]' ? {} : null) };
+  page.els.dialog.handlers.click({ target: close });
+  assert.equal(page.els.dialog.open, false);
+  assert.equal(page.location.hash, '#/other');
 });

@@ -105,6 +105,9 @@
   }
 
   // Esc and the close button end here. replaceState fires no hashchange, so syncRoute runs by hand.
+  // When the plan leaves the tree, syncRoute closes the dialog while the hash still names the plan.
+  // This handler then replaces the hash, so the route never names a plan that the tree does not hold
+  // and the plan does not reopen by itself when its file returns.
   function onDialogClose() {
     dialogFile = null;
     if (parseRoute(location.hash).view === 'plan') {
