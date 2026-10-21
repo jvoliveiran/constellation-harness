@@ -390,6 +390,18 @@ Pure, in `board-session.mjs`:
 
 Spec §8.3, plus the derived agent path. In `board-session.mjs`:
 
+- **Project folder (added at the Gate 1 fix, 21-10-2026)**: a main
+  transcript must sit directly in `<root>/<projectSlug>/`, where
+  `projectSlug` is `realpath(projectDir)` with every character that is not
+  a letter or a digit replaced by `-`. Other folders give the fixed
+  reason `other project`.
+  - Residual: paths such as `/a/b-c`, `/a/b/c` and `/a/b.c` map to one
+    slug. Claude Code stores their sessions in one folder, so the gate
+    treats them as one project.
+  - Known limit: a session started in a subdirectory or a worktree, or a
+    slug that Claude Code shortens, is refused as `other project`. The
+    tokens fact then falls back to the state file.
+
 - **Root**: `lexicalRoot = path.join(os.homedir(), '.claude', 'projects')`,
   `realRoot = fs.realpathSync(lexicalRoot)`. Resolve at each sync, so a
   root that appears later works. A missing root refuses every path with
