@@ -79,7 +79,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in-flight `▶ <step>` marker, the warnings in the row title, and one line
   for plans without a task.
 - Every response carries `referrer-policy: no-referrer` (#030).
-- The board test count grows from 138 to 242 (#022, #023, #024).
+- The board test count grows from 138 to 243 (#022, #023, #024).
 
 ### Fixed
 - **Board page markup guards from the task 022 review** (#029). A test
