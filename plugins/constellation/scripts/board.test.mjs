@@ -3886,3 +3886,27 @@ test('attributeAgents: runs of an earlier workflow attach to no step and do not 
   assert.deepEqual(attributeAgents(agents, progressOf('planned'), 'not a date'), {});
   assert.deepEqual(attributeAgents(agents, progressOf('planned')), {});
 });
+
+// Task 025 criterion 9, through the real CLI wiring: with no workflow state, a finished agent
+// from the event log opens no transcript and the reply says why.
+test('cli: /api/agent for a finished agent with no workflow in flight reads nothing and says so', async () => {
+  const dir = tmpProject();
+  const home = mkTmp('board-home-');
+  const id = 'a0e575badeb8675d0';
+  fs.writeFileSync(eventsFile(dir), [
+    { ts: '2026-10-21T09:00:00Z', event: 'SubagentStart', agent_id: id, agent_type: 'constellation:sdet' },
+    { ts: '2026-10-21T09:01:00Z', event: 'SubagentStop', agent_id: id, agent_type: 'constellation:sdet' },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir], { HOME: home });
+  try {
+    const snap = await waitForSnapshot(port, 3000);
+    assert.equal(snap?.state, null);
+    assert.equal(snap.agents.some((a) => a.agent_id === id && !a.running), true);
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: `/api/agent?id=${id}` });
+    const body = JSON.parse(r.body);
+    assert.deepEqual([r.status, body.report, body.error], [200, null, 'no workflow in flight']);
+  } finally { run.child.kill('SIGKILL'); }
+});
