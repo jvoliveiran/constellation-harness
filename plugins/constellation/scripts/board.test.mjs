@@ -14,7 +14,10 @@ import {
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass } from './board-render.mjs';
+import {
+  renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
+  parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
+} from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
@@ -2159,7 +2162,7 @@ test('treeHolds: the name rule and the tree membership for tasks and plans', () 
 
 test('parseRoute: #/plan/<file> opens the plan dialog and every other hash is the overview', () => {
   assert.deepEqual(parseRoute('#/plan/023-x.md'), { view: 'plan', file: '023-x.md' });
-  for (const hash of ['#/plan/../x.md', '#/item/task/x.md', '#/', '', '#/plan/', '#/plan/x.txt', null]) {
+  for (const hash of ['#/plan/../x.md', '#/', '', '#/plan/', '#/plan/x.txt', '#/item/task/x.md/extra', null]) {
     assert.deepEqual(parseRoute(hash), { view: 'overview' }, String(hash));
   }
 });
@@ -2441,6 +2444,12 @@ const ISOLATION_ARGS = {
   renderNow: () => [nowView(), esc],
   renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
   renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
+  parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
+  formatBacklogRoute: () => [parseBacklogRoute('#/backlog?type=fix&q=a')],
+  toggleBacklogRoute: () => [parseBacklogRoute(''), 'status', 'done'],
+  backlogRows: () => [rowsTree(), 'task'],
+  filterRows: () => [backlogRows(rowsTree(), 'task'), parseBacklogRoute(''), rowsTree().attention],
+  sortRows: () => [backlogRows(rowsTree(), 'task')],
 };
 
 test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
@@ -2552,4 +2561,161 @@ test('serve: /api/item serves epic and feature bodies and refuses names outside 
     assert.equal((await get(itemUrl('feature', 'F999-x.md'))).status, 404);
     assert.equal((await get(itemUrl('epic', 'F001-a.md'))).status, 404, 'a feature file is not an epic');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: routes and rows
+// ---------------------------------------------------------------------------
+
+const DEFAULT_LIST_ROUTE = { kind: 'task', status: ['inbox', 'refined', 'in-progress', 'parked', 'other'], type: null, q: '', attention: false };
+const mkTitled = (kind, file, lines, title) => toNode(kind, file, ['---', ...lines, '---', '', ...(title ? [`# ${title}`] : [])].join('\n'), MTIME);
+/** Two features (one under an epic), five tasks (one in flight, one with a broken link, one with no H1), one plan. */
+const rowsTree = () => buildTree([
+  mkTitled('epic', 'E01-board.md', ['status: active'], 'Board UI'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-board.md'], 'Backlog table'),
+  mkTitled('feature', 'F002-loose.md', ['status: active'], 'Loose feature'),
+  mkTitled('task', '010-one.md', ['status: inbox', 'type: fix', 'feature: F001-a.md', 'date-created: 14-10-2026', 'last-edit: 21-10-2026'], 'Fix the thing'),
+  mkTitled('task', '011-two.md', ['status: done', 'type: feature', 'feature: F001-a.md'], 'Two'),
+  mkTitled('task', '012-three.md', ['status: refined', 'feature: F002-loose.md'], 'Three'),
+  mkTitled('task', '013-no-title-here.md', ['status: inbox'], null),
+  mkTitled('task', '014-broken-link.md', ['status: inbox', 'feature: F999-gone.md'], 'Broken'),
+  mk('plan', '010-one.md', ['status: approved', 'task: 010-one.md']),
+], { task: '010-one.md', currentStep: 'engineer' });
+
+test('parseRoute: #/item/<kind>/<file> opens a detail view for epic, feature, and task only', () => {
+  for (const kind of ['epic', 'feature', 'task']) {
+    assert.deepEqual(parseRoute(`#/item/${kind}/014-x.md`), { view: 'item', kind, file: '014-x.md' }, kind);
+  }
+  for (const hash of ['#/item/plan/x.md', '#/item/bogus/x.md', '#/item/task/../x.md', '#/item/task/', '#/item/task/x.txt', '#/item/task/a/b.md']) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, hash);
+  }
+});
+
+test('parseBacklogRoute: defaults, each key, and unknown values', () => {
+  for (const hash of ['#/', '', '#/plan/x.md', '#/item/task/x.md', '#/backlog', '#/other?kind=epic', null]) {
+    assert.deepEqual(parseBacklogRoute(hash), DEFAULT_LIST_ROUTE, String(hash));
+  }
+  assert.deepEqual(parseBacklogRoute('#/backlog?kind=feature'), { ...DEFAULT_LIST_ROUTE, kind: 'feature' });
+  assert.deepEqual(parseBacklogRoute('#/backlog?kind=plan'), DEFAULT_LIST_ROUTE, 'an unknown kind keeps the default');
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done,bogus').status, ['done']);
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done,inbox,done').status, ['inbox', 'done'], 'fixed order, no duplicate');
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=').status, [], 'an empty status keeps no status');
+  assert.deepEqual(parseBacklogRoute('#/backlog?type=fix,bogus').type, ['fix']);
+  assert.deepEqual(parseBacklogRoute('#/backlog?type=').type, []);
+  assert.equal(parseBacklogRoute('#/backlog?q=a%26b%20c').q, 'a&b c');
+  assert.equal(parseBacklogRoute('#/backlog?q=%E0').q, '', 'a bad escape gives an empty search');
+  assert.equal(parseBacklogRoute('#/backlog?attn=1').attention, true);
+  assert.equal(parseBacklogRoute('#/backlog?attn=0').attention, false);
+  assert.deepEqual(parseBacklogRoute('#/backlog?status=done&kind=epic&q=x&nokey&attn=1&type=debt'),
+    { kind: 'epic', status: ['done'], type: ['debt'], q: 'x', attention: true });
+});
+
+test('formatBacklogRoute: the default is #/, every route round-trips, and a toggle gives the next route', () => {
+  assert.equal(formatBacklogRoute(DEFAULT_LIST_ROUTE), '#/');
+  const routes = [
+    { ...DEFAULT_LIST_ROUTE, kind: 'feature' },
+    { ...DEFAULT_LIST_ROUTE, status: [...DEFAULT_LIST_ROUTE.status, 'done'] },
+    { ...DEFAULT_LIST_ROUTE, status: [], type: [], q: 'x' },
+    { kind: 'epic', status: ['done', 'dropped'], type: ['fix', 'debt'], q: 'a&b c=d#e', attention: true },
+    { ...DEFAULT_LIST_ROUTE, q: 'ünï 日本' },
+  ];
+  for (const route of routes) assert.deepEqual(parseBacklogRoute(formatBacklogRoute(route)), route, formatBacklogRoute(route));
+  assert.equal(formatBacklogRoute(routes[1]), '#/backlog?status=inbox,refined,in-progress,parked,other,done');
+  assert.equal(formatBacklogRoute(routes[3]), '#/backlog?kind=epic&status=done,dropped&type=fix,debt&q=a%26b%20c%3Dd%23e&attn=1');
+  // The toggle: status flips in fixed order, type leaves null on the first click and returns to null with all six.
+  const start = DEFAULT_LIST_ROUTE;
+  assert.deepEqual(toggleBacklogRoute(start, 'status', 'done').status, [...start.status, 'done']);
+  assert.deepEqual(toggleBacklogRoute(start, 'status', 'inbox').status, ['refined', 'in-progress', 'parked', 'other']);
+  assert.deepEqual(toggleBacklogRoute(start, 'type', 'fix').type, ['feature', 'refactor', 'debt', 'spike', 'discovery']);
+  assert.equal(toggleBacklogRoute({ ...start, type: ['fix'] }, 'type', 'fix').type.length, 0);
+  assert.equal(toggleBacklogRoute({ ...start, type: ['feature', 'refactor', 'debt', 'spike', 'discovery'] }, 'type', 'fix').type, null);
+  assert.equal(toggleBacklogRoute(start, 'kind', 'epic').kind, 'epic');
+  assert.equal(toggleBacklogRoute(start, 'kind', 'plan').kind, 'task');
+  assert.equal(toggleBacklogRoute(start, 'attention').attention, true);
+  assert.equal(toggleBacklogRoute({ ...start, attention: true }, 'attention').attention, false);
+  assert.equal(toggleBacklogRoute({ ...start, attention: true }, 'show-attention').attention, true);
+  assert.deepEqual(start, DEFAULT_LIST_ROUTE, 'the argument is unchanged');
+});
+
+test('backlogRows: tasks carry feature and epic from the tree, a slug title without H1, and standalone dashes', () => {
+  const tree = rowsTree();
+  const byFile = (rows) => Object.fromEntries(rows.map((r) => [r.file, r]));
+  const tasks = byFile(backlogRows(tree, 'task'));
+  assert.equal(Object.keys(tasks).length, 5);
+  assert.deepEqual(tasks['010-one.md'].feature, { file: 'F001-a.md', id: 'F001', title: 'Backlog table' });
+  assert.deepEqual(tasks['010-one.md'].epic, { file: 'E01-board.md', id: 'E01', title: 'Board UI' });
+  assert.deepEqual(tasks['012-three.md'].epic, null, 'an orphan feature has no epic');
+  assert.equal(tasks['012-three.md'].feature.title, 'Loose feature');
+  assert.equal(taskNode(tree, '014-broken-link.md').links.feature, 'F999-gone.md', 'the raw link is broken');
+  assert.deepEqual([tasks['014-broken-link.md'].feature, tasks['014-broken-link.md'].epic], [null, null]);
+  assert.deepEqual([tasks['013-no-title-here.md'].feature, tasks['013-no-title-here.md'].epic], [null, null]);
+  assert.equal(tasks['013-no-title-here.md'].title, 'no title here', 'no H1 gives the slug with spaces');
+  assert.equal(tasks['010-one.md'].title, 'Fix the thing');
+  assert.deepEqual(tasks['010-one.md'].plan, { file: '010-one.md', status: 'approved' });
+  assert.deepEqual([tasks['010-one.md'].inFlight, tasks['010-one.md'].currentStep, tasks['010-one.md'].edited], [true, 'engineer', '21-10-2026']);
+  assert.deepEqual([tasks['011-two.md'].group, tasks['011-two.md'].type, tasks['011-two.md'].plan], ['done', 'feature', null]);
+  const features = byFile(backlogRows(tree, 'feature'));
+  assert.deepEqual(features['F001-a.md'].taskCounts, { inbox: 1, done: 1 });
+  assert.deepEqual([features['F001-a.md'].taskCount, features['F001-a.md'].epic.title], [2, 'Board UI']);
+  assert.deepEqual([features['F002-loose.md'].taskCounts, features['F002-loose.md'].epic], [{ refined: 1 }, null]);
+  assert.equal(features['F001-a.md'].group, 'other', 'a feature status outside the task groups is other');
+  const [epic] = backlogRows(tree, 'epic');
+  assert.deepEqual([epic.file, epic.featureCount, epic.taskCount, epic.taskCounts], ['E01-board.md', 1, 2, { inbox: 1, done: 1 }]);
+  assert.deepEqual(backlogRows(null, 'task'), []);
+});
+
+/** A row with every key that filterRows reads; `extra` overrides. */
+const filterRow = (extra) => ({
+  kind: 'task', file: 'f.md', id: '1', title: 'plain', type: 'chore', status: 'inbox', group: 'inbox', feature: null, epic: null, ...extra,
+});
+
+test('filterRows: the search matches the seven fields, case-insensitive', () => {
+  const rows = [
+    filterRow({ tag: 'id', id: 'xBOARDx' }),
+    filterRow({ tag: 'title', title: 'a Board here' }),
+    filterRow({ tag: 'file', file: '001-BOARD.md' }),
+    filterRow({ tag: 'type', type: 'boardtype' }),
+    filterRow({ tag: 'status', status: 'boardstatus' }),
+    filterRow({ tag: 'feature', feature: { file: 'F1.md', id: 'F1', title: 'The BoArD feature' } }),
+    filterRow({ tag: 'epic', epic: { file: 'E1.md', id: 'E1', title: 'bOARd epic' } }),
+    filterRow({ tag: 'none', title: 'unrelated' }),
+  ];
+  const tags = (q) => filterRows(rows, { ...DEFAULT_LIST_ROUTE, q }, []).map((r) => r.tag);
+  assert.deepEqual(tags('BoArD'), ['id', 'title', 'file', 'type', 'status', 'feature', 'epic']);
+  assert.deepEqual(tags('  board '), ['id', 'title', 'file', 'type', 'status', 'feature', 'epic'], 'the search is trimmed');
+  assert.equal(tags('').length, 8, 'an empty search passes every row');
+  assert.deepEqual(tags('a.b'), [], 'the search is no regex');
+});
+
+test('filterRows: status, type, and attention filters', () => {
+  const rows = [
+    filterRow({ tag: 'inbox', file: 'a.md', type: 'fix' }),
+    filterRow({ tag: 'done', file: 'd.md', type: 'fix', group: 'done', status: 'done' }),
+    filterRow({ tag: 'dropped', file: 'x.md', group: 'dropped', status: 'dropped' }),
+    filterRow({ tag: 'feature-type', file: 'b.md', type: 'feature' }),
+    filterRow({ tag: 'no-type', file: 'c.md', type: null }),
+    filterRow({ tag: 'feature-row', kind: 'feature', file: 'd.md', group: 'other', status: 'active' }),
+  ];
+  const tags = (route, attention = []) => filterRows(rows, { ...DEFAULT_LIST_ROUTE, ...route }, attention).map((r) => r.tag);
+  assert.deepEqual(tags({}), ['inbox', 'feature-type', 'no-type', 'feature-row'], 'the default hides done and dropped, and a feature row ignores the chips');
+  assert.deepEqual(tags({ status: ['done', 'dropped'] }), ['done', 'dropped', 'feature-row']);
+  assert.deepEqual(tags({ status: [] }), ['feature-row']);
+  assert.deepEqual(tags({ type: ['fix'], status: ['inbox', 'done'] }), ['inbox', 'done', 'feature-row'], 'a null type hides under a type filter');
+  assert.deepEqual(tags({ type: null }), ['inbox', 'feature-type', 'no-type', 'feature-row'], 'no type key keeps every type');
+  assert.deepEqual(tags({ attention: true }, [{ kind: 'task', file: 'd.md' }]), ['done'], 'attention shows a done row and keys on kind and file');
+});
+
+test('sortRows: status group order, then id descending, numeric aware', () => {
+  const row = (group, id) => ({ group, id, tag: `${group}:${id}` });
+  const input = [
+    row('done', '500'), row('inbox', '099'), row('parked', '001'), row('inbox', null), row('inbox', 'F009'),
+    row('refined', '002'), row('inbox', '100'), row('inbox', 'F010'), row('dropped', '900'), row('other', '003'), row('in-progress', '004'),
+  ];
+  const before = input.map((r) => r.tag);
+  const sorted = sortRows(input);
+  assert.deepEqual(sorted.map((r) => r.tag), [
+    'inbox:F010', 'inbox:F009', 'inbox:100', 'inbox:099', 'inbox:null', 'refined:002', 'in-progress:004', 'parked:001', 'other:003', 'done:500', 'dropped:900',
+  ]);
+  assert.deepEqual(input.map((r) => r.tag), before, 'the input array is unchanged');
+  assert.notEqual(sorted, input);
 });

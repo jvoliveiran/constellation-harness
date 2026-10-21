@@ -174,12 +174,185 @@ export function treeHolds(tree, kind, file) {
 }
 
 /**
- * Parse a location hash into a route. `#/plan/<file>` with a valid file name gives the plan view;
- * every other hash gives the overview. Task 024 extends the table.
+ * Parse a location hash into a route. `#/plan/<file>` gives the plan view, `#/item/<kind>/<file>`
+ * with kind epic, feature, or task gives the detail view, and every other hash gives the overview.
+ * The file passes the name rule of spec §4.4 here; tree membership is the page's check (treeHolds).
  */
 export function parseRoute(hash) {
-  var match = /^#\/plan\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(String(hash || ''));
-  return match ? { view: 'plan', file: match[1] } : { view: 'overview' };
+  var text = String(hash || '');
+  var plan = /^#\/plan\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(text);
+  if (plan) return { view: 'plan', file: plan[1] };
+  var item = /^#\/item\/(epic|feature|task)\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(text);
+  return item ? { view: 'item', kind: item[1], file: item[2] } : { view: 'overview' };
+}
+
+/**
+ * Parse the list state out of a hash: `#/backlog?kind=…&status=a,b&type=…&q=…&attn=1`. Each key is
+ * optional and a missing key keeps its default, as does every other hash. A value outside the
+ * fixed lists drops out; an empty `status=` keeps no status. The lists come back in their fixed
+ * order. Parsing uses split, not URLSearchParams: the page defines this function in a bare scope.
+ * Returns { kind, status, type, q, attention }; type null means no type filter.
+ */
+export function parseBacklogRoute(hash) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  var TYPES = ['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'];
+  var KINDS = ['task', 'feature', 'epic'];
+  var route = { kind: 'task', status: ['inbox', 'refined', 'in-progress', 'parked', 'other'], type: null, q: '', attention: false };
+  var text = String(hash || '');
+  if (text.indexOf('#/backlog?') !== 0) return route;
+  function pick(order, raw) {
+    var wanted = raw.split(',');
+    return order.filter(function (value) { return wanted.indexOf(value) >= 0; });
+  }
+  text.slice('#/backlog?'.length).split('&').forEach(function (pair) {
+    var eq = pair.indexOf('=');
+    var key = eq < 0 ? pair : pair.slice(0, eq);
+    var raw = eq < 0 ? '' : pair.slice(eq + 1);
+    if (key === 'kind' && KINDS.indexOf(raw) >= 0) route.kind = raw;
+    else if (key === 'status') route.status = pick(TASK_GROUPS, raw);
+    else if (key === 'type') route.type = pick(TYPES, raw);
+    else if (key === 'q') {
+      try { route.q = decodeURIComponent(raw); } catch (e) { route.q = ''; }
+    } else if (key === 'attn') route.attention = raw === '1';
+  });
+  return route;
+}
+
+/**
+ * The inverse of parseBacklogRoute. The default route gives `#/`. Any other route gives
+ * `#/backlog?` and only the keys that differ from the default, in the order kind, status, type,
+ * q, attn.
+ */
+export function formatBacklogRoute(route) {
+  var base = parseBacklogRoute('');
+  var parts = [];
+  if (route.kind !== base.kind) parts.push('kind=' + route.kind);
+  if (route.status.join(',') !== base.status.join(',')) parts.push('status=' + route.status.join(','));
+  if (route.type !== null) parts.push('type=' + route.type.join(','));
+  if (route.q !== '') parts.push('q=' + encodeURIComponent(route.q));
+  if (route.attention) parts.push('attn=1');
+  return parts.length ? '#/backlog?' + parts.join('&') : '#/';
+}
+
+/**
+ * The next list state after one toolbar click. action is status, type, kind, attention, or
+ * show-attention; value is the chip or the kind. Status and type keep their fixed order. A type
+ * list that holds every type becomes null, the no-filter state. show-attention turns the toggle
+ * on. It returns a new route and leaves the argument as it is.
+ */
+export function toggleBacklogRoute(route, action, value) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  var TYPES = ['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'];
+  var KINDS = ['task', 'feature', 'epic'];
+  function flip(list, order) {
+    var held = list.indexOf(value) >= 0;
+    return order.filter(function (item) { return item === value ? !held : list.indexOf(item) >= 0; });
+  }
+  var next = { kind: route.kind, status: route.status, type: route.type, q: route.q, attention: route.attention };
+  if (action === 'status') next.status = flip(route.status, TASK_GROUPS);
+  else if (action === 'type') {
+    var types = flip(route.type === null ? TYPES : route.type, TYPES);
+    next.type = types.length === TYPES.length ? null : types;
+  } else if (action === 'kind' && KINDS.indexOf(value) >= 0) next.kind = value;
+  else if (action === 'attention') next.attention = !route.attention;
+  else if (action === 'show-attention') next.attention = true;
+  return next;
+}
+
+/**
+ * Flatten the tree into the rows of one kind: 'task', 'feature', or 'epic'. One row shape serves
+ * every kind; the keys that a kind does not use are null. The feature and the epic of a task come
+ * from the tree structure, so a task with a broken link has neither. The title is the H1, else the
+ * file name with every dash as a space. A null tree gives no row.
+ */
+export function backlogRows(tree, kind) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  if (!tree) return [];
+  function title(node) { return node.title || String(node.name).replace(/-/g, ' '); }
+  function ref(node) { return { file: node.file, id: node.id, title: title(node) }; }
+  var taskByFile = new Map();
+  tree.tasks.forEach(function (t) { taskByFile.set(t.file, t); });
+  var parents = new Map();
+  tree.epics.forEach(function (e) {
+    e.features.forEach(function (f) { f.tasks.forEach(function (file) { parents.set(file, { feature: ref(f), epic: ref(e) }); }); });
+  });
+  tree.orphanFeatures.forEach(function (f) { f.tasks.forEach(function (file) { parents.set(file, { feature: ref(f), epic: null }); }); });
+  function countGroups(files) {
+    var counts = {};
+    files.forEach(function (file) {
+      var task = taskByFile.get(file);
+      if (task) counts[task.group] = (counts[task.group] || 0) + 1;
+    });
+    return counts;
+  }
+  function row(node, extra) {
+    var base = {
+      kind: kind, file: node.file, id: node.id, title: title(node), type: null, status: node.status,
+      group: TASK_GROUPS.indexOf(node.status) >= 0 ? node.status : 'other',
+      edited: node.edited || null, flags: node.flags, warnings: node.warnings, plan: null, inFlight: false, currentStep: null,
+      feature: null, epic: null, taskCounts: null, featureCount: null, taskCount: null,
+    };
+    return Object.assign(base, extra);
+  }
+  if (kind === 'task') {
+    return tree.tasks.map(function (t) {
+      var parent = parents.get(t.file) || { feature: null, epic: null };
+      return row(t, {
+        type: t.type, group: t.group, plan: t.plan ? { file: t.plan.file, status: t.plan.status } : null,
+        inFlight: t.inFlight, currentStep: t.currentStep, feature: parent.feature, epic: parent.epic,
+      });
+    });
+  }
+  if (kind === 'feature') {
+    var features = [];
+    tree.epics.forEach(function (e) { e.features.forEach(function (f) { features.push({ node: f, epic: ref(e) }); }); });
+    tree.orphanFeatures.forEach(function (f) { features.push({ node: f, epic: null }); });
+    return features.map(function (entry) {
+      return row(entry.node, { epic: entry.epic, taskCounts: countGroups(entry.node.tasks), taskCount: entry.node.tasks.length });
+    });
+  }
+  return tree.epics.map(function (e) {
+    var files = [];
+    e.features.forEach(function (f) { files = files.concat(f.tasks); });
+    return row(e, { taskCounts: countGroups(files), featureCount: e.features.length, taskCount: files.length });
+  });
+}
+
+/**
+ * Keep the rows that pass the list state: the search over id, title, file, type, status, feature
+ * title, and epic title (case-insensitive, no regex); for tasks the status and type chips; and,
+ * with the Attention toggle, only the rows whose kind/file the attention list holds. The Attention
+ * toggle replaces the status chips, so an attention row shows whatever its status. attention is
+ * tree.attention.
+ */
+export function filterRows(rows, route, attention) {
+  var needle = String(route.q || '').trim().toLowerCase();
+  var flagged = new Set((attention || []).map(function (a) { return a.kind + '/' + a.file; }));
+  function haystack(row) {
+    return [row.id, row.title, row.file, row.type, row.status, row.feature && row.feature.title, row.epic && row.epic.title]
+      .map(function (value) { return value == null ? '' : String(value); }).join('\n').toLowerCase();
+  }
+  return rows.filter(function (row) {
+    if (route.attention && !flagged.has(row.kind + '/' + row.file)) return false;
+    if (needle && haystack(row).indexOf(needle) < 0) return false;
+    if (row.kind !== 'task') return true;
+    if (!route.attention && route.status.indexOf(row.group) < 0) return false;
+    return route.type === null || route.type.indexOf(row.type) >= 0;
+  });
+}
+
+/**
+ * Sort rows by status group (inbox, refined, in-progress, parked, other, done, dropped), then by
+ * id descending with numbers compared as numbers. A row with no id sorts last. It returns a new array.
+ */
+export function sortRows(rows) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  return rows.slice().sort(function (a, b) {
+    var byGroup = TASK_GROUPS.indexOf(a.group) - TASK_GROUPS.indexOf(b.group);
+    if (byGroup) return byGroup;
+    if (a.id == null || b.id == null) return a.id == null ? (b.id == null ? 0 : 1) : -1;
+    return b.id.localeCompare(a.id, undefined, { numeric: true });
+  });
 }
 
 /**
