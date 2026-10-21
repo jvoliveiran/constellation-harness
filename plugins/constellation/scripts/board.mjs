@@ -161,6 +161,29 @@ function readPrefix(root, file, buffer = readBuffer) {
   }
 }
 
+export const BODY_CAP_BYTES = 512 * 1024;
+let bodyBuffer = null;
+// Allocated on the first /api/item request, then reused: the server is single-threaded and the read is synchronous.
+const getBodyBuffer = () => (bodyBuffer ??= Buffer.alloc(BODY_CAP_BYTES));
+const ITEM_DIRS = { task: 'tasksDir', plan: 'plansDir' };
+
+/**
+ * Read one work-item body for /api/item: at most BODY_CAP_BYTES through openContained. The caller
+ * has checked the kind, the name, and the tree. Returns { kind, file, mtime, truncated, text }, or
+ * null when the file cannot be read (missing, outside the root, not a regular file).
+ */
+export function readItem(projectDir, kind, file) {
+  const p = paths(projectDir);
+  const { root } = resolveRoot(projectDir);
+  if (!root || !ITEM_DIRS[kind]) return null;
+  try {
+    const { text, truncated, mtime } = readPrefix(root, path.join(p[ITEM_DIRS[kind]], file), getBodyBuffer());
+    return { kind, file, mtime, truncated, text };
+  } catch {
+    return null;
+  }
+}
+
 function readWorkItem(kind, dir, name, root) {
   try {
     const { text, truncated, mtime } = readPrefix(root, path.join(dir, name));
@@ -381,7 +404,7 @@ function signature(p, root) {
 // HTTP
 // ---------------------------------------------------------------------------
 
-export function serve(getSnapshot, subscribe) {
+export function serve(getSnapshot, subscribe, readItemBody = () => null) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
@@ -401,6 +424,16 @@ export function serve(getSnapshot, subscribe) {
     if (url.pathname === '/api/snapshot') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(getSnapshot()));
+      return;
+    }
+    if (url.pathname === '/api/item') {
+      const kind = url.searchParams.get('kind');
+      const file = url.searchParams.get('file');
+      // The snapshot tree is the allow-list: a name it does not hold never reaches the filesystem.
+      const item = render.treeHolds(getSnapshot().tree, kind, file) ? readItemBody(kind, file) : null;
+      if (!item) { res.writeHead(404, { 'content-type': 'text/plain' }).end('not found'); return; }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(item));
       return;
     }
     if (url.pathname === '/events') {
@@ -445,16 +478,29 @@ function fillMarker(html, marker, text) {
   if (parts.length !== 2) throw new Error(`board: page.html must hold ${marker} exactly once`);
   return parts.join(text);
 }
-const PAGE = fillMarker(fillMarker(uiFile('page.html'), '@@CSS@@', PAGE_STYLE), '@@SCRIPT@@', PAGE_SCRIPT);
+
+/** The vendored markdown-it text, or null. A missing file logs one line: the page then shows bodies in <pre>. */
+function readVendor() {
+  try {
+    return fs.readFileSync(new URL('./board-vendor/markdown-it.min.js', import.meta.url), 'utf8');
+  } catch (e) {
+    console.error(`board: board-vendor/markdown-it.min.js missing (${e.code ?? 'error'}) — task and plan bodies render as plain text`);
+    return null;
+  }
+}
+const VENDOR = readVendor();
+const PAGE = fillMarker(fillMarker(fillMarker(uiFile('page.html'), '@@CSS@@', PAGE_STYLE), '@@VENDOR@@', VENDOR == null ? '' : `<script>${VENDOR}</script>`), '@@SCRIPT@@', PAGE_SCRIPT);
 
 /** The CSP source for one inline text: the base64 SHA-256 of its exact UTF-8 bytes. */
 const cspHash = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
 
-// The page loads one inline script and one inline style, and nothing else. The hashes cover the
-// exact text that is served, so an edit of either text without a rebuild breaks the page at once.
+// The page loads two inline scripts (the vendored markdown-it, then the page script) and one inline
+// style, and nothing else. The hashes cover the exact text that is served, so an edit of any text
+// without a rebuild breaks the page at once. A missing vendor file leaves one script hash.
+const SCRIPT_HASHES = [VENDOR, PAGE_SCRIPT].filter((t) => t != null).map(cspHash).join(' ');
 const PAGE_CSP = [
   "default-src 'none'",
-  `script-src ${cspHash(PAGE_SCRIPT)}`,
+  `script-src ${SCRIPT_HASHES}`,
   `style-src ${cspHash(PAGE_STYLE)}`,
   "connect-src 'self'",
   'img-src data:',
@@ -635,7 +681,7 @@ function runServer({ projectDir, port, quiet }) {
     for (const l of listeners) l(snapshot);
   };
 
-  const server = serve(getSnapshot, (l) => listeners.add(l));
+  const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file));
   server.on('listening', () => {
     getSnapshot();
     stopWatch = watch(projectDir, refresh);

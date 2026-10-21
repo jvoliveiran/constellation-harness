@@ -5,7 +5,7 @@ source: user
 feature: F001-board-ui-overhaul.md
 order: 3
 date-created: 14-10-2026
-last-edit: 14-10-2026
+last-edit: 19-10-2026
 ---
 # Board UI: backlog table, search, filters, epic and feature detail views
 
@@ -56,3 +56,8 @@ Depends on task 023.
 11. Given the change, then `filterRows`, `sortRows`, `parseBacklogRoute`,
     and `renderTable` have tests, and `scripts/selftest.sh` prints
     `selftest: ALL GREEN`.
+
+## Scope notes from the task 023 scope pass (19-10-2026)
+
+- Task 023 moved here: the Open task button in the Now panel, the `#/item/...` route, `/api/item` kinds `epic` and `feature`, and the internal link rewrite. In 023, a relative link renders as text.
+- Task 023 ships the snapshot node `title`. The Title column uses it.

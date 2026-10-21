@@ -6,6 +6,7 @@
   :root[data-theme="light"] { color-scheme: light; --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #e3e6ec; --text: #171a21; --muted: #646b7a; --accent: #4f5fe6; --ok: #1f9d61; --warn: #b7791f; --danger: #d64545; }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; padding: 0 16px 32px; }
   h1 { font-size: 20px; margin: 0; }
   ul { list-style: none; margin: 0; padding: 0; }
@@ -26,6 +27,7 @@
   .chip.s-dropped { color: var(--danger); border-color: var(--danger); }
   .chip.p-draft { color: var(--muted); }
   .chip.p-approved { color: var(--ok); border-color: var(--ok); }
+  .chip.p-other { color: var(--muted); }
 
   /* Button */
   .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
@@ -61,6 +63,37 @@
   .fact .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
   .fact .v { font-size: 16px; font-variant-numeric: tabular-nums; }
   .errs { color: var(--danger); font-size: 12px; margin-top: 10px; }
+
+  /* Now card: description and actions */
+  #desc { max-height: 50vh; overflow: auto; margin-top: 14px; padding-right: 4px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  /* Markdown prose */
+  .md { max-width: 72ch; overflow-wrap: anywhere; }
+  .md h1, .md h2, .md h3, .md h4 { line-height: 1.25; margin: 18px 0 8px; }
+  .md h1 { font-size: 20px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 14px; }
+  .md p, .md ul, .md ol { margin: 0 0 10px; }
+  .md ul, .md ol { padding-left: 22px; } .md ul { list-style: disc; } .md ol { list-style: decimal; }
+  .md li { display: list-item; padding: 2px 0; border: 0; font-size: 14px; }
+  .md code { color: var(--text); background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+  .md pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow: auto; }
+  .md pre code { background: transparent; padding: 0; }
+  .md blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid var(--accent); color: var(--muted); }
+  .md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 12px; font-size: 13px; }
+  .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .md th { background: var(--surface-2); }
+  .md a { color: var(--accent); } .md a:not([href]) { color: inherit; text-decoration: underline dotted; cursor: default; }
+  .md-raw { white-space: pre-wrap; font-size: 13px; }
+
+  /* Dialog */
+  dialog { width: min(960px, 92vw); height: 85vh; max-height: 85vh; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: 0 24px 64px color-mix(in srgb, var(--bg) 70%, transparent); }
+  dialog::backdrop { background: color-mix(in srgb, var(--bg) 60%, transparent); }
+  dialog[open] { display: flex; flex-direction: column; }
+  .dlg-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .dlg-head #dialog-title { font-size: 16px; font-weight: 600; }
+  .dlg-head .btn { margin-left: auto; width: 32px; padding: 0; }
+  .dlg-body { overflow: auto; min-height: 0; padding: 16px; }
 
   /* Agents card */
   #agents-card { display: flex; flex-direction: column; max-height: calc(100vh - 96px); }

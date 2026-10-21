@@ -11,12 +11,13 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta,
-  parseFrontMatter, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
-import { renderBacklog, feedText, renderAgents } from './board-render.mjs';
+import { renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog } from './board-render.mjs';
+import * as renderModule from './board-render.mjs';
 import {
-  loadSnapshot, serve, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -1023,15 +1024,17 @@ test('serve: POST with a correct Host returns 405', async () => {
 
 const sha256Source = (text) => `'sha256-${crypto.createHash('sha256').update(text, 'utf8').digest('base64')}'`;
 const fetchPage = (port) => httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
+// Every inline block of one tag, in page order. The vendor script is [0], the page script is [1].
+const inlineBlocks = (html, tag) => [...html.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))].map((m) => m[1]);
 
-test('serve: the page CSP hashes match the inline script and style', async () => {
+test('serve: the page CSP hashes match the inline scripts and style', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
     const csp = r.headers['content-security-policy'];
-    const script = /<script>([\s\S]*?)<\/script>/.exec(r.body)[1];
-    const style = /<style>([\s\S]*?)<\/style>/.exec(r.body)[1];
+    const scripts = inlineBlocks(r.body, 'script');
+    const style = inlineBlocks(r.body, 'style')[0];
     const directives = new Set(csp.split('; '));
-    assert.ok(directives.has(`script-src ${sha256Source(script)}`), `script hash is not in: ${csp}`);
+    assert.ok(directives.has(`script-src ${scripts.map(sha256Source).join(' ')}`), `script hashes are not in: ${csp}`);
     assert.ok(directives.has(`style-src ${sha256Source(style)}`), `style hash is not in: ${csp}`);
     for (const directive of ["default-src 'none'", "connect-src 'self'", 'img-src data:', "frame-ancestors 'none'"]) {
       assert.ok(directives.has(directive), `missing ${directive} in: ${csp}`);
@@ -1216,7 +1219,7 @@ test('serve: the page script compiles and embeds the backlog renderer', async ()
   await withBoardServer(async (port) => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
     assert.equal(r.status, 200);
-    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.ok(script, 'page has an inline script');
     assert.ok(script.includes('function renderBacklog('));
     assert.doesNotThrow(() => new Function(script), 'inline script has a syntax error');
@@ -1226,7 +1229,7 @@ test('serve: the page script compiles and embeds the backlog renderer', async ()
 test('serve: the page script embeds feedText from the module', async () => {
   await withBoardServer(async (port) => {
     const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: '/' });
-    const script = /<script>([\s\S]*)<\/script>/.exec(r.body)?.[1];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.ok(script.includes(`var feedText = ${feedText.toString()};`));
     assert.equal(script.split('function feedText(').length - 1, 1, 'one feedText definition in the page');
     assert.ok(script.includes('feedText(e, esc)'));
@@ -1665,13 +1668,12 @@ test('board-model.mjs: imports nothing from node', () => {
 // ---------------------------------------------------------------------------
 
 const uiText = (name) => fs.readFileSync(path.join(here, 'board-ui', name), 'utf8');
-const inlineBlock = (html, tag) => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(html)?.[1];
 
 test('serve: the page serves page.css and page.js byte for byte', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
-    const style = inlineBlock(r.body, 'style');
-    const script = inlineBlock(r.body, 'script');
+    const style = inlineBlocks(r.body, 'style')[0];
+    const script = inlineBlocks(r.body, 'script').at(-1);
     assert.equal(style, uiText('page.css'));
     assert.ok(script.endsWith(uiText('page.js')), 'the script does not end with page.js');
     const prelude = script.slice(0, script.length - uiText('page.js').length);
@@ -1698,18 +1700,93 @@ test('board-render.mjs: every export is a function that runs with no module scop
   assert.equal(isolatedFeed(entry, esc), render.feedText(entry, esc));
 });
 
-test('serve: the page holds one script, one style, and the script compiles', async () => {
+// Task 022 test, body edited for two scripts: the old 'one script' count no longer holds.
+test('serve: the page holds one style, the page script compiles, and every directive holds a hash per block', async () => {
   await withBoardServer(async (port) => {
     const r = await fetchPage(port);
-    assert.equal(r.body.split('<script>').length - 1, 1, 'script blocks');
-    assert.equal(r.body.split('<style>').length - 1, 1, 'style blocks');
-    assert.doesNotThrow(() => new Function(inlineBlock(r.body, 'script')), 'inline script has a syntax error');
+    assert.equal(inlineBlocks(r.body, 'style').length, 1, 'style blocks');
+    assert.doesNotThrow(() => new Function(inlineBlocks(r.body, 'script').at(-1)), 'inline script has a syntax error');
     const directives = r.headers['content-security-policy'].split('; ');
-    for (const name of ['script-src', 'style-src']) {
+    for (const [name, tag] of [['script-src', 'script'], ['style-src', 'style']]) {
       const directive = directives.find((d) => d.startsWith(`${name} `));
-      assert.equal(directive.split('sha256-').length - 1, 1, `${name} holds one hash: ${directive}`);
+      assert.equal(directive.split('sha256-').length - 1, inlineBlocks(r.body, tag).length, `${name}: ${directive}`);
     }
   });
+});
+
+const vendorDir = path.join(here, 'board-vendor');
+const vendorText = fs.readFileSync(path.join(vendorDir, 'markdown-it.min.js'), 'utf8');
+const versionField = (name) => new RegExp(`^${name}: *(.*)$`, 'm').exec(fs.readFileSync(path.join(vendorDir, 'VERSION'), 'utf8'))?.[1];
+
+test('board-vendor: VERSION pins the vendor file', () => {
+  assert.equal(versionField('version'), '14.3.0');
+  assert.equal(versionField('license').split(' ')[0], 'MIT');
+  assert.ok(versionField('source').startsWith('https://'), versionField('source'));
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(vendorDir, 'markdown-it.min.js'))).digest('hex');
+  assert.equal(versionField('sha256'), digest);
+});
+
+test('serve: the page holds two scripts, the vendor first, and both compile', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const scripts = inlineBlocks(r.body, 'script');
+    assert.equal(scripts.length, 2, 'script blocks');
+    assert.equal(inlineBlocks(r.body, 'style').length, 1, 'style blocks');
+    assert.equal(scripts[0], vendorText);
+    assert.ok(scripts[1].endsWith(uiText('page.js')), 'block 1 does not end with page.js');
+    for (const block of scripts) assert.doesNotThrow(() => new Function(block), 'inline script has a syntax error');
+  });
+});
+
+test('serve: the CSP lists two script hashes, one style hash, and the vendor hash is the VERSION sha256', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const directives = r.headers['content-security-policy'].split('; ');
+    const scriptSrc = directives.find((d) => d.startsWith('script-src '));
+    const styleSrc = directives.find((d) => d.startsWith('style-src '));
+    const hashes = scriptSrc.match(/'sha256-[^']+'/g);
+    assert.deepEqual(hashes, inlineBlocks(r.body, 'script').map(sha256Source));
+    assert.equal(styleSrc.split('sha256-').length - 1, 1, styleSrc);
+    const vendorHex = Buffer.from(hashes[0].slice("'sha256-".length, -1), 'base64').toString('hex');
+    assert.equal(vendorHex, versionField('sha256'));
+  });
+});
+
+test('page sources cannot end their element: no script or comment opener in our code, none in the vendor', async () => {
+  const render = await import('./board-render.mjs');
+  const ours = { 'page.js': uiText('page.js'), ...Object.fromEntries(Object.entries(render).map(([n, fn]) => [n, fn.toString()])) };
+  for (const [name, text] of Object.entries(ours)) {
+    assert.ok(!/<\/script/i.test(text), `${name} holds a script closer`);
+    assert.ok(!text.includes('<!--'), `${name} holds a comment opener`);
+  }
+  assert.ok(!/<\/style/i.test(uiText('page.css')), 'page.css holds a style closer');
+  assert.ok(!/<\/script/i.test(vendorText), 'the vendor file holds a script closer');
+  assert.ok(!/<script/i.test(vendorText), 'the vendor file holds a script opener');
+});
+
+test('cli: a missing vendor file logs one line and serves the page with one script hash', async () => {
+  // The real path: board.mjs runs main() only when argv[1] equals its resolved module path.
+  const copy = fs.realpathSync(mkTmp('board-novendor-'));
+  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
+  fs.cpSync(path.join(here, 'board-ui'), path.join(copy, 'board-ui'), { recursive: true });
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const child = spawn(process.execPath, [path.join(copy, 'board.mjs'), '--quiet', '--port', String(port), tmpProject()], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (c) => { stderr += c; });
+  try {
+    const r = await waitFor(async () => {
+      const res = await fetchPage(port).catch(() => null);
+      return res?.status === 200 ? res : null;
+    }, CHILD_TIMEOUT_MS);
+    assert.ok(r, 'the board did not serve the page');
+    assert.equal(inlineBlocks(r.body, 'script').length, 1);
+    assert.equal(r.headers['content-security-policy'].match(/script-src [^;]*/)[0].split('sha256-').length - 1, 1);
+    const lines = stderr.trim().split('\n');
+    assert.equal(lines.length, 1, stderr);
+    assert.ok(lines[0].startsWith('board: board-vendor/markdown-it.min.js missing'), lines[0]);
+  } finally { child.kill('SIGKILL'); }
 });
 
 // ---------------------------------------------------------------------------
@@ -1867,13 +1944,22 @@ test('renderAgents: a running row carries data-since and the run class', () => {
   assert.ok(finished.includes('<span class="dur">31s</span>'), finished);
 });
 
-// Task 022, criterion 5: run the shipped page.js against stub browser objects.
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) => {
+// Task 022, criterion 5, grown in task 023: run the shipped page against stub browser objects.
+// The script is the render prelude plus page.js, built as board.mjs builds it.
+const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${name} = ${fn.toString()};`).join('\n');
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
   const els = {};
-  const stub = (id) => els[id] ??= { innerHTML: '', addEventListener() {}, getAttribute: () => null };
+  const stub = (id) => els[id] ??= {
+    id, innerHTML: '', hidden: false, handlers: {}, open: false, showModals: 0,
+    addEventListener(t, fn) { this.handlers[t] = fn; }, getAttribute: () => null, querySelectorAll: () => [],
+    showModal() { this.open = true; this.showModals += 1; },
+    close() { if (!this.open) return; this.open = false; this.handlers.close?.(); },
+  };
   const writes = [];
   const localStorage = {
     getItem() { if (storageThrows) throw new Error('denied'); return stored; },
@@ -1884,13 +1970,29 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false } = {}) =>
     getElementById: (id) => (id === 'theme' ? button : stub(id)),
     querySelectorAll: () => [],
   };
-  const sandbox = {
-    document, localStorage, console,
-    window: { matchMedia: () => ({ matches: os === 'light' }) },
-    EventSource: function () {}, setInterval: () => 0, Date,
+  const windowHandlers = {};
+  const location = {
+    current: hash,
+    get hash() { return this.current; },
+    set hash(value) { if (value !== this.current) { this.current = value; windowHandlers.hashchange?.(); } },
   };
-  vm.runInNewContext(uiText('page.js'), sandbox);
-  return { attrs, button, writes, click: () => button.handlers.click() };
+  const replaced = [];
+  const history = { replaceState: (state, title, url) => { location.current = url; replaced.push(url); } };
+  const fetches = [];
+  const fetchStub = (url) => {
+    fetches.push(url);
+    const item = reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` };
+    return Promise.resolve(item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
+  };
+  const sources = [];
+  const sandbox = {
+    document, localStorage, console, location, history, fetch: fetchStub,
+    window: { matchMedia: () => ({ matches: os === 'light' }), addEventListener: (t, fn) => { windowHandlers[t] = fn; }, markdownit: stubFactory() },
+    EventSource: function () { sources.push(this); }, setInterval: () => 0, Date,
+  };
+  vm.runInNewContext(`${renderPrelude}\n${uiText('page.js')}`, sandbox);
+  const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
+  return { attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click() };
 };
 
 test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
@@ -1928,4 +2030,364 @@ test('page.js: refused storage does not stop the page or the toggle', () => {
   assert.equal(page.attrs['data-theme'], undefined);
   page.click();
   assert.equal(page.attrs['data-theme'], 'dark');
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: titles, markdown rendering, and the route parser
+// ---------------------------------------------------------------------------
+
+test('extractTitle: the first H1 after the front matter, else null', () => {
+  assert.equal(extractTitle('---\nstatus: x\n---\n# Title\nbody'), 'Title');
+  assert.equal(extractTitle('---\nstatus: x\n# note\n---\n# Real\n'), 'Real');
+  assert.equal(extractTitle('---\nstatus: x\n---\n#Title\n'), null);
+  assert.equal(extractTitle('---\nstatus: x\n---\nno heading\n## sub\n'), null);
+  assert.equal(extractTitle('---\r\nstatus: x\r\n---\r\n# Title  \r\nbody'), 'Title');
+  assert.equal(extractTitle('﻿---\nstatus: x\n---\n# Title\n'), 'Title');
+  assert.equal(extractTitle(null), null);
+});
+
+test('toNode: a node carries its title', () => {
+  assert.equal(mk('task', '001-a.md', ['status: inbox']).title, 'Title');
+  assert.equal(toNode('task', '002-b.md', '---\nstatus: inbox\n---\nno heading', MTIME).title, null);
+});
+
+test('buildTree: epic, feature, orphan plan, and task.plan carry title', () => {
+  const t = buildTree(v1Nodes(), null);
+  assert.equal(t.epics[0].title, 'Title');
+  assert.equal(t.epics[0].features[0].title, 'Title');
+  assert.equal(t.tasks.find((x) => x.file === '002-two.md').plan.title, 'Title');
+  const orphan = buildTree([mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md'])], null);
+  assert.equal(orphan.orphanPlans[0].title, 'Title');
+});
+
+// The vendor file ends in a // comment with no newline: the newline keeps `markdownit` out of it.
+const loadVendor = () => vm.runInNewContext(`${vendorText}\n;markdownit`, {});
+const stubFactory = (record = {}) => (options) => {
+  record.options = options;
+  return { render: (text) => `R(${text})`, renderer: { rules: {} } };
+};
+
+test('renderMarkdown: strips the front matter, drops the first H1, and passes the §7 options', () => {
+  const record = {};
+  const html = renderMarkdown('---\nstatus: x\n---\n# T\nbody text\n', stubFactory(record), esc);
+  assert.equal(html, 'R(body text\n)');
+  assert.deepEqual(record.options, { html: false, linkify: false, typographer: false, breaks: false });
+});
+
+test('renderMarkdown: only the first H1 goes, a later H1 and an H2 stay', () => {
+  const html = renderMarkdown('# A\ntext\n# B\n## C\n', (() => ({ render: (t) => t, renderer: { rules: {} } })), esc);
+  assert.ok(!html.includes('# A'), html);
+  assert.ok(html.includes('# B') && html.includes('## C'), html);
+});
+
+test('renderMarkdown: no library renders the body in a pre, escaped', () => {
+  assert.equal(renderMarkdown('---\nstatus: x\n---\n# T\n<b>x</b>', null, esc), '<pre class="md-raw">&lt;b&gt;x&lt;/b&gt;</pre>');
+});
+
+test('renderItemBody: a truncated item ends with the muted line', () => {
+  const marker = '<p class="muted">truncated at 512 KB</p>';
+  assert.ok(renderItemBody({ text: 'x', truncated: true }, null, esc).endsWith(marker));
+  assert.ok(!renderItemBody({ text: 'x', truncated: false }, null, esc).includes('truncated'));
+});
+
+test('renderMarkdown with the vendored library: raw HTML is text, unsafe and relative links lose href, http links open in a new tab', () => {
+  const md = loadVendor();
+  const html = renderMarkdown([
+    '<img src=x onerror=alert(1)>', '', '[a](javascript:alert(1))', '', '[b](014-x.md)', '',
+    '[c](https://example.com)', '', '[d](#top)',
+  ].join('\n'), md, esc);
+  assert.ok(html.includes('&lt;img'), html);
+  assert.ok(!html.includes('<img'), html);
+  // markdown-it 14 refuses the javascript: target outright: the source stays as plain text, with no anchor.
+  assert.ok(html.includes('<p>[a](javascript:alert(1))</p>'), html);
+  assert.ok(!/<a[^>]*>a<\/a>/.test(html), html);
+  assert.ok(html.includes('<a>b</a>'), html);
+  assert.ok(html.includes('<a href="https://example.com" rel="noopener noreferrer" target="_blank">c</a>'), html);
+  assert.ok(html.includes('<a>d</a>'), html);
+  assert.ok(!/href="(javascript|014|#)/.test(html), html);
+});
+
+test('renderMarkdown with the vendored library: images render as links with their alt text', () => {
+  const md = loadVendor();
+  const html = renderMarkdown('![alt](https://example.com/i.png)\n\n![alt2](./i.png)\n\n![](https://example.com/j.png)', md, esc);
+  assert.ok(html.includes('<a href="https://example.com/i.png" rel="noopener noreferrer" target="_blank">alt</a>'), html);
+  assert.ok(html.includes('<a>alt2</a>'), html);
+  assert.ok(html.includes('target="_blank">https://example.com/j.png</a>'), html);
+  assert.ok(!html.includes('<img'), html);
+  assert.ok(!html.includes('href="./i.png"'), html);
+});
+
+test('treeHolds: the name rule and the tree membership for tasks and plans', () => {
+  // The tree holds the bad names too, so only the name rule can refuse them.
+  const badNames = ['../x.md', '.x.md', 'a/b.md', 'x.txt'];
+  const tree = buildTree([
+    mk('task', '001-a.md', ['status: inbox']), mk('plan', '001-a.md', ['status: draft', 'task: 001-a.md']),
+    mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md']),
+    ...badNames.map((name) => mk('task', name, ['status: inbox'])),
+  ], null);
+  for (const bad of badNames) assert.ok(tree.tasks.some((t) => t.file === bad), `${bad} is in the tree`);
+  for (const bad of [...badNames, '', null]) assert.equal(treeHolds(tree, 'task', bad), false, String(bad));
+  assert.equal(treeHolds(tree, 'task', '001-a.md'), true);
+  assert.equal(treeHolds(tree, 'plan', '001-a.md'), true, 'a plan on task.plan');
+  assert.equal(treeHolds(tree, 'plan', '050-x.md'), true, 'an orphan plan');
+  assert.equal(treeHolds(tree, 'task', '050-x.md'), false);
+  assert.equal(treeHolds(tree, 'epic', '001-a.md'), false);
+  assert.equal(treeHolds(null, 'task', '001-a.md'), false);
+});
+
+test('parseRoute: #/plan/<file> opens the plan dialog and every other hash is the overview', () => {
+  assert.deepEqual(parseRoute('#/plan/023-x.md'), { view: 'plan', file: '023-x.md' });
+  for (const hash of ['#/plan/../x.md', '#/item/task/x.md', '#/', '', '#/plan/', '#/plan/x.txt', null]) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, String(hash));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: GET /api/item
+// ---------------------------------------------------------------------------
+
+async function withItemServer(dir, fn) {
+  const server = serve(() => loadSnapshot(dir), () => {}, (kind, file) => readItem(dir, kind, file));
+  const port = await listenOnFreePort(server);
+  try { await fn((url, method = 'GET') => httpRequest(port, { host: `127.0.0.1:${port}`, url, method })); } finally { await closeServer(server); }
+}
+const itemProject = () => {
+  const dir = tmpProject();
+  writeItem(dir, 'tasks', '001-a.md', ['status: refined']);
+  writeItem(dir, 'plans', '001-a.md', ['status: draft', 'task: 001-a.md']);
+  return dir;
+};
+const itemUrl = (kind, file) => `/api/item?kind=${kind}&file=${encodeURIComponent(file)}`;
+
+test('serve: /api/item returns 404 and no body for a bad kind, a bad name, and a name outside the tree', async () => {
+  const dir = itemProject();
+  // On disk, but the scan skips a dot file: only the tree check keeps it off the wire.
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '.hidden.md'), doc(['status: inbox']));
+  await withItemServer(dir, async (get) => {
+    for (const url of [itemUrl('epic', '001-a.md'), itemUrl('task', '.hidden.md'), itemUrl('task', '../x.md'), itemUrl('task', 'zzz.md'), itemUrl('task', ''), '/api/item?kind=task', itemUrl('plan', '002-none.md')]) {
+      const r = await get(url);
+      assert.equal(r.status, 404, url);
+      assert.equal(r.body, 'not found', url);
+    }
+    assert.equal((await get(itemUrl('task', '001-a.md'), 'POST')).status, 405);
+  });
+});
+
+test('serve: /api/item serves a task body and a plan body with mtime and cache-control no-store', async () => {
+  const dir = itemProject();
+  await withItemServer(dir, async (get) => {
+    for (const [kind, sub] of [['task', 'tasks'], ['plan', 'plans']]) {
+      const r = await get(itemUrl(kind, '001-a.md'));
+      assert.equal(r.status, 200, kind);
+      assert.match(r.headers['content-type'], /^application\/json/);
+      assert.equal(r.headers['cache-control'], 'no-store');
+      const file = path.join(dir, '.constellation', sub, '001-a.md');
+      const body = JSON.parse(r.body);
+      assert.deepEqual(Object.keys(body).sort(), ['file', 'kind', 'mtime', 'text', 'truncated']);
+      assert.deepEqual([body.kind, body.file, body.truncated], [kind, '001-a.md', false]);
+      assert.equal(body.text, fs.readFileSync(file, 'utf8'));
+      assert.equal(body.mtime, fs.statSync(file).mtime.toISOString());
+    }
+  });
+});
+
+test('serve: /api/item caps the body at 512 KB and flags truncated', async () => {
+  const dir = itemProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '002-big.md'), `${doc(['status: inbox'])}\n${'x'.repeat(600 * 1024)}\n`);
+  await withItemServer(dir, async (get) => {
+    const body = JSON.parse((await get(itemUrl('task', '002-big.md'))).body);
+    assert.equal(body.text.length, BODY_CAP_BYTES);
+    assert.equal(body.truncated, true);
+    assert.equal(JSON.parse((await get(itemUrl('task', '001-a.md'))).body).truncated, false);
+  });
+});
+
+test('serve: /api/item refuses a symlink that leaves .constellation and a FIFO, and reads a symlink inside it', async () => {
+  const dir = itemProject();
+  const tasks = path.join(dir, '.constellation', 'tasks');
+  const outside = path.join(dir, 'secret.md');
+  fs.writeFileSync(outside, doc(['status: inbox', 'secret-key: 1']));
+  fs.symlinkSync(outside, path.join(tasks, '003-leak.md'));
+  fs.symlinkSync(path.join(tasks, '001-a.md'), path.join(tasks, '004-inside.md'));
+  const fifo = path.join(tasks, '005-pipe.md');
+  if (hasMkfifo) assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  try {
+    await withItemServer(dir, async (get) => {
+      assert.deepEqual(taskNode(loadSnapshot(dir).tree, '003-leak.md').warnings, ['unreadable: outside .constellation']);
+      const leak = await get(itemUrl('task', '003-leak.md'));
+      assert.equal(leak.status, 404);
+      assert.ok(!leak.body.includes('secret-key'));
+      const inside = await get(itemUrl('task', '004-inside.md'));
+      assert.equal(inside.status, 200);
+      assert.equal(JSON.parse(inside.body).text, fs.readFileSync(path.join(tasks, '001-a.md'), 'utf8'));
+      if (hasMkfifo) assert.equal((await get(itemUrl('task', '005-pipe.md'))).status, 404);
+    });
+  } finally { fs.rmSync(fifo, { force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 023: Now card, View plan, plan dialog, page runtime, CSS
+// ---------------------------------------------------------------------------
+
+const nowState = {
+  track: 'planned', currentStep: 'engineer', completedSteps: ['architect', 'devops-branch'], task: '023-x.md', plan: '023-x.md',
+  branch: 'feat/x', startedAt: '2026-10-19T10:00:00.000Z', lastUpdatedAt: '2026-10-19T10:05:00.000Z',
+  reviewLoopCount: 1, prNumber: 7, modelProfile: 'balanced',
+};
+const nowView = (extra = {}) => ({
+  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokenDelta: 1500, projectDir: '/p',
+  hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => `${n}t`, since: () => 65, ...extra,
+});
+const taskCard = '<span>task <code>';
+
+test('renderNow: the header shows the task id and its title', () => {
+  const head = (html) => html.slice(0, html.indexOf('<div class="strip">'));
+  const titled = head(renderNow(nowView({ task: { id: '023', title: 'Board UI: markdown' } }), esc));
+  assert.ok(titled.includes(`${taskCard}023</code> Board UI: markdown</span>`), titled);
+  assert.ok(head(renderNow(nowView({ task: null }), esc)).includes(`${taskCard}023-x.md</code></span>`));
+  assert.ok(head(renderNow(nowView({ task: { id: '023', title: null } }), esc)).includes(`${taskCard}023-x.md</code></span>`));
+  assert.ok(head(renderNow(nowView({ task: { id: '023', title: 'a <b> & c' } }), esc)).includes('a &lt;b&gt; &amp; c'));
+});
+
+test('renderNow: a null state renders the empty state and a state renders the strip, modifiers, and facts', () => {
+  const empty = renderNow(nowView({ state: null, progress: null }), esc);
+  assert.ok(empty.includes('No workflow in flight') && empty.includes('<code>watching /p/.constellation/</code>'), empty);
+  const html = renderNow(nowView(), esc);
+  assert.equal(html.split('class="step current"').length - 1, 1);
+  assert.ok(html.includes('🔁 loop 1/3'), html);
+  assert.equal(html.split('class="fact"').length - 1, 6);
+  assert.ok(html.includes('data-since="2026-10-19T10:00:00.000Z"') && html.includes('65s'), html);
+});
+
+test('renderNowActions: View plan is enabled only when the state names a plan that the tree holds', () => {
+  const tree = buildTree([mk('task', '023-x.md', ['status: in-progress']), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md'])], null);
+  const none = renderNowActions({ state: { ...nowState, plan: undefined }, tree }, esc);
+  assert.ok(none.includes('disabled') && none.includes('title="no plan in the workflow state"'), none);
+  const missing = renderNowActions({ state: nowState, tree: buildTree([mk('task', '023-x.md', ['status: in-progress'])], null) }, esc);
+  assert.ok(missing.includes('disabled') && missing.includes('title="plan 023-x.md is not in .constellation/plans/"'), missing);
+  const ok = renderNowActions({ state: nowState, tree }, esc);
+  assert.ok(!ok.includes('disabled'), ok);
+  assert.ok(ok.includes('data-action="view-plan"') && ok.includes('data-file="023-x.md"'), ok);
+  assert.equal(renderNowActions({ state: null, tree }, esc), '');
+});
+
+test('renderPlanDialog: the header shows title, file, status chip, task id, and close; the body is the rendered plan', () => {
+  const plan = { file: '023-x.md', status: 'approved', title: 'Plan T', taskId: '023' };
+  const html = renderPlanDialog({ plan, item: { text: 'plan text', truncated: false }, markdownit: stubFactory() }, esc);
+  for (const part of ['<span id="dialog-title">Plan T</span>', '<code>023-x.md</code>', 'class="chip p-approved"', 'task 023', 'data-action="close-dialog"', 'R(plan text)']) {
+    assert.ok(html.includes(part), `${part} in ${html}`);
+  }
+  const weird = renderPlanDialog({ plan: { ...plan, status: 'weird' }, item: { text: 'x' }, markdownit: stubFactory() }, esc);
+  assert.ok(weird.includes('class="chip p-other"') && !weird.includes('p-weird'), weird);
+  const failed = renderPlanDialog({ plan, item: { error: 404 }, markdownit: stubFactory() }, esc);
+  assert.ok(failed.includes('plan unavailable (404)'), failed);
+});
+
+const pageTree = (...extra) => buildTree([
+  mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
+], null);
+const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
+  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null,
+  progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
+});
+
+test('page.js: a snapshot on #/plan/<file> fetches the plan and opens the dialog', async () => {
+  const page = bootPage({ hash: '#/plan/023-x.md' });
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.fetches.includes('/api/item?kind=plan&file=023-x.md'), page.fetches.join());
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(page.els.dialog.innerHTML.includes('R(body of /api/item?kind=plan&file=023-x.md)'), page.els.dialog.innerHTML);
+  page.feed(pageSnapshot());
+  await flush();
+  assert.equal(page.fetches.filter((u) => u.includes('kind=plan')).length, 1, 'a second snapshot does not refetch the plan');
+  const absent = bootPage({ hash: '#/plan/023-x.md' });
+  absent.feed(pageSnapshot({ tree: buildTree([mk('task', '023-x.md', ['status: in-progress'])], null) }));
+  await flush();
+  assert.ok(!absent.fetches.some((u) => u.includes('kind=plan')), absent.fetches.join());
+  assert.equal(absent.els.dialog.showModals, 0);
+  assert.equal(absent.location.hash, '#/plan/023-x.md', 'the hash stays');
+});
+
+test('page.js: View plan sets the route, and closing the dialog restores the route before the click', async () => {
+  const page = bootPage({ hash: '#/other' });
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.els['now-actions'].innerHTML.includes('data-action="view-plan"'));
+  const button = { getAttribute: (name) => (name === 'data-file' ? '023-x.md' : null) };
+  page.els['now-actions'].handlers.click({ target: { closest: (selector) => (selector === '[data-action="view-plan"]' ? button : null) } });
+  await flush();
+  assert.equal(page.location.hash, '#/plan/023-x.md');
+  assert.equal(page.els.dialog.open, true);
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/other');
+  assert.deepEqual(page.replaced, ['#/other']);
+  assert.equal(page.els.dialog.open, false);
+});
+
+test('page.js: the task body is fetched once per task mtime, not per snapshot', async () => {
+  const page = bootPage();
+  const at = (mtime) => pageSnapshot({ tree: pageTree(mtime) });
+  for (const mtime of [MTIME, MTIME, MTIME, '2026-10-19T12:00:00.000Z']) {
+    page.feed(at(mtime));
+    await flush();
+  }
+  assert.equal(page.fetches.filter((u) => u === '/api/item?kind=task&file=023-x.md').length, 2);
+  assert.equal(page.els.desc.hidden, false);
+  assert.ok(page.els.desc.innerHTML.startsWith('R(body of /api/item?kind=task'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ state: null }));
+  await flush();
+  assert.equal(page.els.desc.hidden, true);
+});
+
+test('page.css: the description scrolls inside 50vh, prose is 72ch, and the dialog has the §4.2 size', () => {
+  const css = uiText('page.css');
+  const desc = ruleBodies(css, '#desc').join(' ');
+  assert.ok(desc.includes('max-height: 50vh') && desc.includes('overflow: auto'), desc);
+  assert.ok(ruleBodies(css, '.md').join(' ').includes('max-width: 72ch'));
+  const dialog = ruleBodies(css, 'dialog').join(' ');
+  assert.ok(dialog.includes('width: min(960px, 92vw)') && dialog.includes('height: 85vh'), dialog);
+});
+
+// ---------------------------------------------------------------------------
+// Task 029 items, folded into task 023
+// ---------------------------------------------------------------------------
+
+test('page.js: a click on a child of Show all shows every row', async () => {
+  const page = bootPage();
+  page.feed({ ...pageSnapshot({ state: null }), agents: agentsFixture(0, 25) });
+  assert.equal(countRows(page.els.agents.innerHTML), 20);
+  assert.ok(page.els.agents.innerHTML.includes('data-action="show-all"'));
+  // The target is a child of the button: it has closest() and no data-action of its own.
+  const child = { closest: (selector) => (selector === '[data-action="show-all"]' ? {} : null) };
+  page.els.agents.handlers.click({ target: child });
+  assert.equal(countRows(page.els.agents.innerHTML), 25);
+  assert.ok(!page.els.agents.innerHTML.includes('data-action="show-all"'));
+});
+
+test('renderBacklog: a status outside the allow-list gets the class s-other only', () => {
+  const html = (status) => renderBacklog(buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), esc);
+  const odd = html('done in-progress');
+  assert.ok(odd.includes('<span class="chip s-other">done in-progress</span>'), odd);
+  assert.ok(html('done').includes('<span class="chip s-done">done</span>'));
+});
+
+test('renderAgents: a non-string agent_type renders its row and the others', () => {
+  const start = '2026-10-19T12:00:00.000Z';
+  const agent = (agent_type) => ({ agent_type, start, running: false, durationSec: 5 });
+  const html = renderAgents(agentsView([agent(42), agent({}), agent(['a']), agent('constellation:sdet'), agent('plain')]), esc);
+  assert.equal(countRows(html), 5);
+  assert.ok(html.includes('<span>42</span>'), html);
+  assert.ok(html.includes('<span>sdet</span>') && html.includes('<span>plain</span>'), html);
+});
+
+// The page script runs while the parser reaches it: an element after the first script does not exist yet.
+test('serve: every id that page.js looks up appears in the served markup before the first script', async () => {
+  await withBoardServer(async (port) => {
+    const r = await fetchPage(port);
+    const before = r.body.slice(0, r.body.indexOf('<script'));
+    const ids = [...new Set([...uiText('page.js').matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1]))];
+    assert.ok(ids.length >= 9, `ids found: ${ids.join()}`);
+    for (const id of ids) assert.ok(before.includes(`id="${id}"`), `#${id} is not in the markup before the first <script>`);
+  });
 });

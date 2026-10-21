@@ -11,6 +11,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   has ten color tokens, the system font stack, cards, chips, and buttons.
   Dark is the default. The page follows the OS theme. A toggle in the top
   bar keeps a manual choice in `localStorage`.
+- **The Now panel shows the task description** (#023). The body of the
+  in-flight task renders from markdown under the facts row, without its
+  front matter and first H1. The header shows the task id and its title.
+  The region scrolls inside half the viewport and follows the file within
+  2 seconds of a change.
+- **View plan opens the plan in a dialog** (#023). The route
+  `#/plan/<file>` opens the native dialog with the plan title, its status
+  chip, and the rendered plan. Esc closes it and restores the route. A
+  reload on that route reopens it. The button is disabled, with the
+  reason, when the state names no plan or the plan is not in the tree.
+- **`GET /api/item?kind=<task|plan>&file=<name>`** (#023). It returns
+  `{ kind, file, mtime, truncated, text }` for a file that the snapshot
+  tree holds. It reads through the containment rules with a 512 KB cap.
+  Every other request gets 404.
+- **The board vendors `markdown-it` 14.3.0** (#023). One minified file
+  sits under `scripts/board-vendor/` with its MIT license and a `VERSION`
+  file that pins the source URL and the sha256. `scripts/selftest.sh`
+  checks the digest. The page embeds it as a second inline script with
+  its own CSP hash. Rendering runs with `html: false`. Only `http(s)`
+  links keep `href`, and they open in a new tab with
+  `rel="noopener noreferrer"`. Images render as links with their alt
+  text. Without the vendor file, the board logs one line and shows
+  bodies as plain text.
+- Snapshot nodes carry `title`, the first H1 of the file (#023).
 
 ### Changed
 - **The Agents card fits the viewport** (#022). It is at most
@@ -25,7 +49,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   re-exports `board-model.mjs` (snapshot functions) and `board-render.mjs`
   (render functions). The page HTML, CSS, and JS live in
   `scripts/board-ui/`. The CSP hashes still cover the served text.
-- The board test count grows from 138 to 160 (#022).
+- The CSP `script-src` lists two hashes: the vendor block and the page
+  script (#023).
+- The board test count grows from 138 to 192 (#022, #023).
+
+### Fixed
+- **Board page markup guards from the task 022 review** (#029). A test
+  asserts that the page sources and the vendor file cannot end their
+  `<script>` or `<style>` element early. A click on a child of the
+  `Show all` button shows all rows. A backlog status outside the known
+  set gets the chip class `s-other` only. A non-string `agent_type` in
+  `events.jsonl` renders as text and does not stop the Agents card.
 
 ## [1.3.4] - 2026-10-15
 

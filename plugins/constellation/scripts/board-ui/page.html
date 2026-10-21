@@ -14,10 +14,12 @@
   <button type="button" class="btn secondary" id="theme" aria-label="Switch to light theme">☾</button>
 </header>
 <main>
-  <section class="card"><h2>Now</h2><div id="now"></div></section>
+  <section class="card"><h2>Now</h2><div id="now"></div><div id="desc" class="md" hidden></div><div id="now-actions" class="actions" hidden></div><div id="now-errs" class="errs"></div></section>
   <section class="card" id="agents-card"><h2>Agents</h2><div id="agents"></div></section>
 </main>
 <section class="card mt16"><h2>Backlog</h2><div id="backlog"></div></section>
+<dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+@@VENDOR@@
 <script>@@SCRIPT@@</script>
 </body>
 </html>
