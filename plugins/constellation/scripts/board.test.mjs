@@ -2006,6 +2006,7 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
     setItem(k, v) { if (storageThrows) throw new Error('denied'); writes.push([k, v]); },
   };
   const document = {
+    activeElement: null,
     documentElement: { setAttribute: (k, v) => { attrs[k] = v; }, getAttribute: (k) => attrs[k] ?? null },
     getElementById: (id) => (id === 'theme' ? button : stub(id)),
     querySelectorAll: () => [],
@@ -2046,7 +2047,7 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
     els[id].handlers.click({ target: { closest } });
   };
   return {
-    attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
+    document, attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
     runTimers: () => { while (timers.length) timers.shift().fn(); },
     resolve: (url, item, nth = 0) => pending[url][nth](item),
     get hashchanges() { return hashchanges; },
@@ -3283,4 +3284,60 @@ test('page.js: a failed detail body shows body unavailable with the header and c
   assert.ok(view.includes('body unavailable (404)'), view);
   assert.ok(view.includes('class="item-head"') && view.includes('<h3>Tasks</h3>') && view.includes('data-href="#/item/task/024-y.md"'), view);
   assert.ok(!view.includes('>loading<'), 'the loading line is gone');
+});
+
+// ---------------------------------------------------------------------------
+// Task 024 suggestions: search debounce vs navigation, focus after repaint, task outside the tree
+// ---------------------------------------------------------------------------
+
+test('page.js: a click within the search debounce keeps the item route', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  page.els.q.value = 'x';
+  page.els.q.handlers.input();
+  page.clickOn('backlog-card', { href: '#/item/task/024-y.md' });
+  page.runTimers();
+  assert.equal(page.location.hash, '#/item/task/024-y.md');
+  assert.deepEqual(page.replaced, [], 'no replaceState wrote the list over the item entry');
+  // The timer also stands down when the route moves without a hashchange the page saw first.
+  page.location.current = '#/item/task/023-x.md';
+  page.els.q.handlers.input();
+  page.runTimers();
+  assert.deepEqual(page.replaced, []);
+  // Back to another list inside the debounce: the pending write would add the stale search to that list.
+  page.els.q.value = 'stale';
+  page.els.q.handlers.input();
+  page.location.hash = '#/backlog?kind=epic';
+  page.runTimers();
+  assert.deepEqual(page.replaced, [], 'a route change drops the pending search write');
+});
+
+test('page.js: a repaint returns the focus to the same chip', async () => {
+  const page = bootPage();
+  const card = page.els['backlog-card'];
+  const focused = [];
+  const chip = (name) => ({ getAttribute: (n) => ({ 'data-action': 'status', 'data-value': 'done', href: null })[n] ?? null, focus: () => focused.push(name) });
+  const old = chip('old');
+  card.contains = (el) => el === old;
+  card.querySelectorAll = () => [{ getAttribute: () => null, focus: () => focused.push('other') }, chip('new')];
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, [], 'nothing focused: no active element');
+  page.document.activeElement = old;
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, ['new']);
+  page.document.activeElement = { getAttribute: () => null, focus: () => focused.push('input') };
+  card.contains = () => true;
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(focused, ['new'], 'an element with no key is left alone');
+});
+
+test('page.js: a task outside the tree is not fetched on any render', async () => {
+  const page = bootPage();
+  const snapshot = () => pageSnapshot({ tree: buildTree([mk('task', '024-y.md', ['status: inbox'])], null) });
+  page.feed(snapshot());
+  page.feed(snapshot());
+  page.es.onerror();
+  await flush();
+  assert.deepEqual(page.fetches, []);
+  assert.ok(page.els.desc.innerHTML.includes('task file not in .constellation/tasks/'), page.els.desc.innerHTML);
 });

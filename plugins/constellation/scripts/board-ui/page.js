@@ -85,6 +85,12 @@
   function syncTaskBody(task) {
     var s = snap.state;
     if (!s || !s.task) { taskSlot.key = null; taskSlot.seq++; return; }
+    // A task outside the tree has no file to read: a fetch would answer 404 on every render and every reconnect.
+    if (!treeHolds(snap.tree, 'task', s.task)) {
+      taskSlot.key = null; taskSlot.seq++;
+      document.getElementById('desc').innerHTML = '<p class="muted">task file not in .constellation/tasks/</p>';
+      return;
+    }
     if (syncBody(taskSlot, 'task', s.task, task ? task.mtime : null, writeDesc)) document.getElementById('desc').innerHTML = '<p class="muted">loading</p>';
   }
 
@@ -136,6 +142,31 @@
   // The route decides the card: a detail view for an item route that the tree holds, else the list. The plan
   // dialog keeps the view behind it. An item route that the tree does not hold shows the list and keeps the hash.
   function renderBacklogCard() {
+    keepFocus(paintBacklogCard);
+  }
+
+  // A repaint replaces the focused chip or link. Record its stable key first, then focus the match after the repaint.
+  function keepFocus(repaint) {
+    var card = document.getElementById('backlog-card');
+    var active = document.activeElement;
+    var key = null;
+    if (active && active.getAttribute && card.contains && card.contains(active)) {
+      var action = active.getAttribute('data-action'), href = active.getAttribute('href');
+      if (action || href) key = { action: action, value: active.getAttribute('data-value'), href: href };
+    }
+    repaint();
+    if (!key) return;
+    var candidates = card.querySelectorAll('[data-action], a[href]');
+    for (var i = 0; i < candidates.length; i++) {
+      var c = candidates[i];
+      var same = key.action
+        ? c.getAttribute('data-action') === key.action && c.getAttribute('data-value') === key.value
+        : c.getAttribute('href') === key.href;
+      if (same) { c.focus(); return; }
+    }
+  }
+
+  function paintBacklogCard() {
     var listHash = parseRoute(location.hash).view === 'plan' ? (routeBefore || '#/') : location.hash;
     var shown = parseRoute(listHash);
     if (shown.view === 'item' && treeHolds(snap.tree, shown.kind, shown.file)) showItem(shown);
@@ -148,7 +179,7 @@
       itemBodyHtml = item.error
         ? '<p class="muted">body unavailable (' + esc(item.error) + ')</p>'
         : renderItemBody(item, window.markdownit, esc, snap.tree);
-      paintItem(shown);
+      keepFocus(function () { paintItem(shown); });
     };
     if (syncBody(itemSlot, shown.kind, shown.file, node.mtime, onReply)) itemBodyHtml = null;
     document.getElementById('bl-list').hidden = true;
@@ -205,6 +236,8 @@
   function onSearchInput() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(function () {
+      // A click or Back within the debounce moved the route: writing the list now would replace that entry.
+      if (parseRoute(location.hash).view !== 'overview') return;
       var route = parseBacklogRoute(location.hash);
       route.q = document.getElementById('q').value;
       writeList(route);
@@ -217,6 +250,7 @@
   }
 
   function onRoute() {
+    clearTimeout(searchTimer);
     syncSearchBox();
     if (!snap) return;
     renderBacklogCard();
