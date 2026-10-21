@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  resolveSteps, pairEvents, parseEventLines, tokenDelta,
+  resolveSteps, pairEvents, parseEventLines, tokenDelta, attributeAgents, tokensFact,
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
@@ -3381,4 +3381,109 @@ test('page.js: in the detail view the focus goes to the visible anchor, not the 
   page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
   assert.equal(page.els['bl-item'].hidden, false);
   assert.deepEqual(focused, ['visible detail']);
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: attribution and the tokens fact
+// ---------------------------------------------------------------------------
+
+const runId = (n) => `a${n.toString(16).padStart(16, '0')}`;
+// Runs in the order given, one minute apart. The list that attributeAgents gets is newest first, as in the snapshot.
+const runsOf = (types) => types.map((type, i) => ({
+  agent_id: runId(i + 1), agent_type: type, start: `2026-10-21T09:${String(i).padStart(2, '0')}:00Z`, end: null, running: false,
+})).reverse();
+const idsOf = (n) => runId(n);
+const progressOf = (track, config = planReviewOff) => resolveSteps({ track, currentStep: '', completedSteps: [] }, tracks, config);
+const GATE_TRIO = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:dx-analyst'];
+
+test('attributeAgents: planned track, two architect runs, Plan then Verify', () => {
+  const types = [
+    'constellation:software-architect', 'constellation:devops-engineer', 'constellation:software-engineer', ...GATE_TRIO,
+    'constellation:sdet', 'constellation:technical-writer', 'constellation:software-architect', 'constellation:devops-engineer',
+  ];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned')), {
+    architect: [idsOf(1)],
+    'devops-branch': [idsOf(2)],
+    engineer: [idsOf(3)],
+    'parallel-gate-1': [idsOf(4), idsOf(5), idsOf(6)],
+    'parallel-gate-2': [idsOf(7), idsOf(8)],
+    'architect-verify': [idsOf(9)],
+    'devops-pr': [idsOf(10)],
+  });
+});
+
+test('attributeAgents: planned track with pairing rounds and a fix loop', () => {
+  const types = [
+    'constellation:product-manager', 'constellation:software-architect', 'constellation:software-architect',
+    'constellation:devops-engineer', 'constellation:software-engineer', 'constellation:code-reviewer',
+    'constellation:software-engineer', 'constellation:code-reviewer', 'constellation:software-architect',
+  ];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned')), {
+    architect: [idsOf(1), idsOf(2), idsOf(3)],
+    'devops-branch': [idsOf(4)],
+    engineer: [idsOf(5), idsOf(7)],
+    'parallel-gate-1': [idsOf(6), idsOf(8)],
+    'architect-verify': [idsOf(9)],
+  });
+});
+
+test('attributeAgents: the plan-review step takes the cross-model review that runs before the engineer', () => {
+  const types = ['constellation:software-architect', 'constellation:cross-model-reviewer', 'constellation:software-engineer', 'constellation:cross-model-reviewer'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned', planReviewOn)), {
+    architect: [idsOf(1)], 'plan-review': [idsOf(2)], engineer: [idsOf(3)], 'parallel-gate-1': [idsOf(4)],
+  });
+});
+
+test('attributeAgents: tweak track', () => {
+  const types = [...GATE_TRIO, 'constellation:sdet', 'constellation:technical-writer'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('tweak')), {
+    'parallel-gate-1': [idsOf(1), idsOf(2), idsOf(3)], sdet: [idsOf(4), idsOf(5)],
+  });
+});
+
+test('attributeAgents: hotfix track', () => {
+  const types = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:sdet'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('hotfix')), {
+    'review-gate': [idsOf(1), idsOf(2)], sdet: [idsOf(3)],
+  });
+});
+
+test('attributeAgents: discovery track', () => {
+  assert.deepEqual(attributeAgents(runsOf(['constellation:product-manager', 'constellation:software-architect']), progressOf('discovery')), {
+    'product-manager': [idsOf(1)], 'architect-feasibility': [idsOf(2)],
+  });
+});
+
+test('attributeAgents: spike track and unknown types', () => {
+  const agents = [
+    ...runsOf(['constellation:software-architect', 'constellation:software-engineer', 'Explore', null, 'constellation:code-reviewer']),
+    { agent_id: '../bad', agent_type: 'constellation:software-engineer', start: '2026-10-21T09:30:00Z' },
+    { agent_id: null, agent_type: 'constellation:software-engineer', start: '2026-10-21T09:31:00Z' },
+    { agent_id: runId(99), agent_type: 'constellation:software-engineer', start: null },
+  ];
+  assert.deepEqual(attributeAgents(agents, progressOf('spike')), { architect: [idsOf(1)], engineer: [idsOf(2)] });
+  assert.deepEqual(attributeAgents(agents, null), {});
+});
+
+test('tokensFact: transcripts first, then the state delta, then none', () => {
+  const sum = { spent: 10, input: 1, cache: 2, output: 7 };
+  assert.deepEqual(tokensFact(sum, 500, '2026-10-21T09:00:00Z'), { source: 'transcripts', spent: 10, input: 1, cache: 2, output: 7, since: '2026-10-21T09:00:00Z' });
+  assert.deepEqual(tokensFact(null, 500, 'x'), { source: 'state', spent: 500 });
+  assert.deepEqual(tokensFact(null, 0, 'x'), { source: 'state', spent: 0 });
+  assert.deepEqual(tokensFact(null, null, 'x'), { source: 'none', spent: null });
+});
+
+test('pairEvents: the description of the start line reaches the agent, capped, and no other new field', () => {
+  const long = 'x'.repeat(201);
+  const { agents } = pairEvents([
+    { ts: '2026-10-21T09:00:00Z', event: 'SubagentStart', agent_id: runId(1), agent_type: 'a', description: 'Plan it', transcript_path: '/SECRET' },
+    { ts: '2026-10-21T09:01:00Z', event: 'SubagentStart', agent_id: runId(2), agent_type: 'a', description: long },
+    { ts: '2026-10-21T09:02:00Z', event: 'SubagentStart', agent_id: runId(3), agent_type: 'a', description: { x: 1 } },
+    { ts: '2026-10-21T09:03:00Z', event: 'SubagentStop', agent_id: runId(1), agent_type: 'a', agent_transcript_path: '/SECRET' },
+  ]);
+  const byId = Object.fromEntries(agents.map((a) => [a.agent_id, a]));
+  assert.equal(byId[runId(1)].description, 'Plan it');
+  assert.equal(Object.hasOwn(byId[runId(2)], 'description'), false);
+  assert.equal(Object.hasOwn(byId[runId(3)], 'description'), false);
+  assert.equal(JSON.stringify(agents).includes('SECRET'), false);
 });

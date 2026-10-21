@@ -7,6 +7,7 @@
 const LOOP_CAP = 3;
 const BURST_LIMIT = 3;
 const FEED_LIMIT = 30;
+const DESCRIPTION_CAP = 200;
 const FRONT_MATTER_OPEN_WINDOW = 10;
 const FRONT_MATTER_CLOSE_WINDOW = 40;
 export const READ_CAP_BYTES = 64 * 1024;
@@ -119,6 +120,7 @@ export function pairEvents(events) {
       if (e.event === 'SubagentStart') {
         if (a.start == null) a.start = e.ts ?? null;
         if (a.agent_type == null) a.agent_type = e.agent_type ?? null;
+        if (a.description === undefined && typeof e.description === 'string' && e.description.length <= DESCRIPTION_CAP) a.description = e.description;
         if (a.end == null) a.running = true;
       } else {
         if (a.end == null) a.end = e.ts ?? null;
@@ -149,6 +151,69 @@ export function tokenDelta(tokens) {
   const { sessionStart, lastKnownRemaining, accumulated = 0 } = tokens;
   if (typeof sessionStart !== 'number' || typeof lastKnownRemaining !== 'number') return null;
   return accumulated + (sessionStart - lastKnownRemaining);
+}
+
+/**
+ * The tokens fact. The transcript sum comes first, then the state-file delta, then nothing.
+ * sessionSum is { spent, input, cache, output } from the session reader, or null.
+ */
+export function tokensFact(sessionSum, delta, startedAt) {
+  if (sessionSum) return { source: 'transcripts', ...sessionSum, since: startedAt };
+  if (typeof delta === 'number') return { source: 'state', spent: delta };
+  return { source: 'none', spent: null };
+}
+
+// Candidate steps per agent type. The first step of a run is the first present step, in track order.
+const ENGINEER_TYPES = ['software-engineer', 'frontend-engineer', 'ui-ux-designer'];
+const GATE_STEPS = ['parallel-gate-1', 'review-gate'];
+const CANDIDATE_STEPS = new Map([
+  ['software-architect', ['architect', 'architect-feasibility', 'architect-verify']],
+  ['product-manager', ['product-manager', 'architect']],
+  ...ENGINEER_TYPES.map((type) => [type, ['engineer']]),
+  ...['code-reviewer', 'security-analyst', 'dx-analyst'].map((type) => [type, GATE_STEPS]),
+  ['cross-model-reviewer', ['plan-review', ...GATE_STEPS]],
+  ['sdet', ['parallel-gate-2', 'sdet']],
+  ['technical-writer', ['parallel-gate-2', 'sdet']],
+  ['devops-engineer', ['devops-branch', 'devops-pr']],
+]);
+const ATTRIBUTION_ID = /^[a-f0-9]{8,32}$/;
+
+function attributableRuns(agents, stepIds) {
+  const runs = agents
+    .filter((a) => typeof a.agent_id === 'string' && ATTRIBUTION_ID.test(a.agent_id) && Number.isFinite(Date.parse(a.start)))
+    .map((a) => ({ id: a.agent_id, startMs: Date.parse(a.start), type: String(a.agent_type ?? '').replace(/^constellation:/, '') }));
+  return runs
+    .map((run) => ({ ...run, present: (CANDIDATE_STEPS.get(run.type) ?? []).filter((id) => stepIds.includes(id)).sort((x, y) => stepIds.indexOf(x) - stepIds.indexOf(y)) }))
+    .filter((run) => run.present.length > 0)
+    .sort((x, y) => x.startMs - y.startMs);
+}
+
+/**
+ * Attach each agent run to the step it ran in. A run with one candidate step attaches to it. A run
+ * with several attaches to a later step only when a run of a step that lies strictly between the two
+ * started before it. This keeps pairing rounds on the first step. Returns { stepId: [agent_id, ...] },
+ * start ascending. No time window.
+ */
+export function attributeAgents(agents, progress) {
+  const stepIds = (progress?.steps ?? []).map((s) => s.id);
+  const runs = attributableRuns(Array.isArray(agents) ? agents : [], stepIds);
+  const stepOf = new Map();
+  const single = runs.filter((run) => run.present.length === 1);
+  for (const run of single) stepOf.set(run.id, run.present[0]);
+  const betweenStarted = (run, lower, upper) => single.some((other) => {
+    const at = stepIds.indexOf(stepOf.get(other.id));
+    return at > stepIds.indexOf(lower) && at < stepIds.indexOf(upper) && other.startMs < run.startMs;
+  });
+  for (const run of runs.filter((r) => r.present.length > 1)) {
+    let target = run.present[0];
+    for (let k = run.present.length - 1; k >= 1; k -= 1) {
+      if (betweenStarted(run, run.present[k - 1], run.present[k])) { target = run.present[k]; break; }
+    }
+    stepOf.set(run.id, target);
+  }
+  const out = {};
+  for (const run of runs) (out[stepOf.get(run.id)] ??= []).push(run.id);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +429,7 @@ export function mergeFeed(activity, transitions, limit = FEED_LIMIT) {
 export function emptySnapshot(projectDir) {
   return {
     projectDir, at: new Date().toISOString(), hasTracks: false, initialized: true,
-    state: null, progress: null, tokenDelta: null, agents: [], activity: [], helperStops: 0,
+    state: null, progress: null, tokenDelta: null, tokens: { source: 'none', spent: null }, attribution: {}, agents: [], activity: [], helperStops: 0,
     feed: [], tree: null, transitions: [], stale: false, errors: [],
   };
 }
