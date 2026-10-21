@@ -115,7 +115,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the spend of these helper agents. A session that starts in a
   subdirectory or a worktree of the project is refused as `other
   project`, and the fact falls back to the state file.
-- The board test count grows from 138 to 275 (#022, #023, #024, #025),
+- The board test count grows from 138 to 276 (#022, #023, #024, #025),
   plus 26 session-reader tests in `board-session.test.mjs` (#025).
 
 ### Fixed
