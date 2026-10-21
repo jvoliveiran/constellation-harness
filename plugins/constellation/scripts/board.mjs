@@ -165,7 +165,7 @@ export const BODY_CAP_BYTES = 512 * 1024;
 let bodyBuffer = null;
 // Allocated on the first /api/item request, then reused: the server is single-threaded and the read is synchronous.
 const getBodyBuffer = () => (bodyBuffer ??= Buffer.alloc(BODY_CAP_BYTES));
-const ITEM_DIRS = { task: 'tasksDir', plan: 'plansDir' };
+const ITEM_DIRS = { epic: 'epicsDir', feature: 'featuresDir', task: 'tasksDir', plan: 'plansDir' };
 
 /**
  * Read one work-item body for /api/item: at most BODY_CAP_BYTES through openContained. The caller

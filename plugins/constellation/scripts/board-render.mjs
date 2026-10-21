@@ -161,11 +161,14 @@ export function renderItemBody(item, markdownit, esc) {
 
 /**
  * True when file matches the name rule of spec §4.4 and the snapshot tree holds it as the given
- * kind. Task 023 knows task and plan; 024 adds epic and feature. A null tree holds nothing.
+ * kind: task, plan, epic, or feature. A null tree holds nothing.
  */
 export function treeHolds(tree, kind, file) {
   if (!tree || typeof file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(file)) return false;
-  if (kind === 'task') return tree.tasks.some(function (t) { return t.file === file; });
+  var match = function (n) { return n.file === file; };
+  if (kind === 'task') return tree.tasks.some(match);
+  if (kind === 'epic') return tree.epics.some(match);
+  if (kind === 'feature') return tree.orphanFeatures.some(match) || tree.epics.some(function (e) { return e.features.some(match); });
   if (kind === 'plan') return tree.tasks.some(function (t) { return !!t.plan && t.plan.file === file; }) || tree.orphanPlans.some(function (p) { return p.file === file; });
   return false;
 }

@@ -2495,3 +2495,61 @@ test('page.js: the close button closes the dialog and restores the route', async
   assert.equal(page.els.dialog.open, false);
   assert.equal(page.location.hash, '#/other');
 });
+
+// ---------------------------------------------------------------------------
+// Task 024: the model carries dates and related links; /api/item serves epics and features
+// ---------------------------------------------------------------------------
+
+test('toNode: a node carries created, edited, and related; group nodes carry mtime and the dates', () => {
+  const dated = ['date-created: 14-10-2026', 'last-edit: 21-10-2026'];
+  const node = mk('task', '001-a.md', ['status: inbox', 'related: a.md, b.md ,, c.md', ...dated]);
+  assert.deepEqual([node.created, node.edited], ['14-10-2026', '21-10-2026']);
+  assert.deepEqual(node.related, ['a.md', 'b.md', 'c.md']);
+  const bare = mk('task', '002-b.md', ['status: inbox']);
+  assert.deepEqual([bare.created, bare.edited, bare.related], [null, null, []]);
+  const tree = buildTree([
+    mk('epic', 'E01-a.md', ['status: active', ...dated], '2026-10-01T00:00:00.000Z'),
+    mk('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md', ...dated], '2026-10-02T00:00:00.000Z'),
+    mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md', ...dated], '2026-10-03T00:00:00.000Z'),
+  ], null);
+  const expected = (mtime) => ({ mtime, created: '14-10-2026', edited: '21-10-2026' });
+  const pick = ({ mtime, created, edited }) => ({ mtime, created, edited });
+  assert.deepEqual(pick(tree.epics[0]), expected('2026-10-01T00:00:00.000Z'));
+  assert.deepEqual(pick(tree.epics[0].features[0]), expected('2026-10-02T00:00:00.000Z'));
+  assert.deepEqual(pick(tree.orphanPlans[0]), expected('2026-10-03T00:00:00.000Z'));
+});
+
+test('treeHolds: epics and features by kind, with the name rule', () => {
+  // The tree holds the bad name, so only the name rule can refuse it.
+  const tree = buildTree([
+    mk('epic', 'E01-a.md', ['status: active']),
+    mk('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md']),
+    mk('feature', 'F002-loose.md', ['status: active']),
+    mk('feature', '../F001.md', ['status: active', 'epic: E01-a.md']),
+  ], null);
+  assert.equal(tree.epics[0].features.some((f) => f.file === '../F001.md'), true, 'the bad name is in the tree');
+  assert.equal(treeHolds(tree, 'epic', 'E01-a.md'), true);
+  assert.equal(treeHolds(tree, 'feature', 'E01-a.md'), false, 'an epic is not a feature');
+  assert.equal(treeHolds(tree, 'feature', 'F001-a.md'), true, 'a feature under an epic');
+  assert.equal(treeHolds(tree, 'feature', 'F002-loose.md'), true, 'an orphan feature');
+  assert.equal(treeHolds(tree, 'epic', 'F001-a.md'), false, 'a feature is not an epic');
+  assert.equal(treeHolds(tree, 'feature', '../F001.md'), false);
+  assert.equal(treeHolds(tree, 'feature', 'F999-x.md'), false);
+});
+
+test('serve: /api/item serves epic and feature bodies and refuses names outside the tree', async () => {
+  const dir = tmpProject();
+  writeItem(dir, 'epics', 'E01-a.md', ['status: active']);
+  writeItem(dir, 'features', 'F001-a.md', ['status: active', 'epic: E01-a.md']);
+  await withItemServer(dir, async (get) => {
+    for (const [kind, sub, file] of [['epic', 'epics', 'E01-a.md'], ['feature', 'features', 'F001-a.md']]) {
+      const r = await get(itemUrl(kind, file));
+      assert.equal(r.status, 200, kind);
+      const body = JSON.parse(r.body);
+      assert.deepEqual([body.kind, body.file], [kind, file]);
+      assert.equal(body.text, fs.readFileSync(path.join(dir, '.constellation', sub, file), 'utf8'));
+    }
+    assert.equal((await get(itemUrl('feature', 'F999-x.md'))).status, 404);
+    assert.equal((await get(itemUrl('epic', 'F001-a.md'))).status, 404, 'a feature file is not an epic');
+  });
+});

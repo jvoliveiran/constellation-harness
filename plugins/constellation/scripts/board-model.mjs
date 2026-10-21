@@ -225,6 +225,10 @@ export function toNode(kind, file, text, mtime, truncated = false) {
     links,
     title: extractTitle(text),
     mtime,
+    created: fields['date-created'] || null,
+    edited: fields['last-edit'] || null,
+    // Raw names: the page checks each one against the tree before it builds a link.
+    related: (fields.related || '').split(',').map((name) => name.trim()).filter(Boolean),
     flags: malformed ? ['malformed'] : warnings.length ? ['lenient'] : [],
     warnings,
   };
@@ -288,7 +292,10 @@ function toTaskNode(node, state) {
 // Unknown fields alone are lenient noise: the row keeps its badge, Needs attention stays for real problems.
 const needsAttention = (n) => n.flags.includes('malformed') || n.warnings.some((w) => !w.startsWith('unknown field: '));
 const summaryOf = ({ kind, file, flags, warnings }) => ({ kind, file, flags, warnings });
-const groupNode = (node, extra) => ({ file: node.file, id: node.id, name: node.name, title: node.title, status: node.status, flags: node.flags, warnings: node.warnings, ...extra });
+const groupNode = (node, extra) => ({
+  file: node.file, id: node.id, name: node.name, title: node.title, status: node.status,
+  mtime: node.mtime, created: node.created, edited: node.edited, flags: node.flags, warnings: node.warnings, ...extra,
+});
 
 /** Assemble the epics → features → tasks tree plus counts and the attention list. */
 export function buildTree(nodes, state) {
