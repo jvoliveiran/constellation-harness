@@ -3316,15 +3316,17 @@ test('page.js: a repaint returns the focus to the same chip', async () => {
   const page = bootPage();
   const card = page.els['backlog-card'];
   const focused = [];
-  const chip = (name) => ({ getAttribute: (n) => ({ 'data-action': 'status', 'data-value': 'done', href: null })[n] ?? null, focus: () => focused.push(name) });
+  const options = [];
+  const chip = (name) => ({ getAttribute: (n) => ({ 'data-action': 'status', 'data-value': 'done', href: null })[n] ?? null, focus: (o) => { focused.push(name); options.push(o); } });
   const old = chip('old');
   card.contains = (el) => el === old;
-  card.querySelectorAll = () => [{ getAttribute: () => null, focus: () => focused.push('other') }, chip('new')];
+  page.document.getElementById('bl-list').querySelectorAll = () => [{ getAttribute: () => null, focus: () => focused.push('other') }, chip('new')];
   page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
   assert.deepEqual(focused, [], 'nothing focused: no active element');
   page.document.activeElement = old;
   page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
   assert.deepEqual(focused, ['new']);
+  assert.equal(JSON.stringify(options), '[{"preventScroll":true}]', 'a repaint must not scroll the page'); // JSON: the object comes from the vm realm
   page.document.activeElement = { getAttribute: () => null, focus: () => focused.push('input') };
   card.contains = () => true;
   page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
@@ -3340,4 +3342,22 @@ test('page.js: a task outside the tree is not fetched on any render', async () =
   await flush();
   assert.deepEqual(page.fetches, []);
   assert.ok(page.els.desc.innerHTML.includes('task file not in .constellation/tasks/'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ tree: null }));
+  assert.ok(page.els.desc.innerHTML.includes('backlog unavailable') && !page.els.desc.innerHTML.includes('not in .constellation'), page.els.desc.innerHTML);
+  assert.deepEqual(page.fetches, []);
+});
+
+test('page.js: in the detail view the focus goes to the visible anchor, not the hidden list one', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md' });
+  const href = '#/item/task/024-y.md';
+  const focused = [];
+  const anchor = (name) => ({ getAttribute: (n) => (n === 'href' ? href : null), focus: () => focused.push(name) });
+  const old = anchor('old');
+  page.els['backlog-card'].contains = (el) => el === old;
+  page.document.getElementById('bl-list').querySelectorAll = () => [anchor('hidden list')];
+  page.document.getElementById('bl-item').querySelectorAll = () => [anchor('visible detail')];
+  page.document.activeElement = old;
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.deepEqual(focused, ['visible detail']);
 });

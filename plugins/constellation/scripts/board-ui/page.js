@@ -88,7 +88,9 @@
     // A task outside the tree has no file to read: a fetch would answer 404 on every render and every reconnect.
     if (!treeHolds(snap.tree, 'task', s.task)) {
       taskSlot.key = null; taskSlot.seq++;
-      document.getElementById('desc').innerHTML = '<p class="muted">task file not in .constellation/tasks/</p>';
+      document.getElementById('desc').innerHTML = snap.tree
+        ? '<p class="muted">task file not in .constellation/tasks/</p>'
+        : '<p class="muted">backlog unavailable</p>';
       return;
     }
     if (syncBody(taskSlot, 'task', s.task, task ? task.mtime : null, writeDesc)) document.getElementById('desc').innerHTML = '<p class="muted">loading</p>';
@@ -156,13 +158,16 @@
     }
     repaint();
     if (!key) return;
-    var candidates = card.querySelectorAll('[data-action], a[href]');
+    // The hidden list keeps its old anchors, so only the visible container can hold the match. An action
+    // with no data-value matches the first element of that action.
+    var visible = document.getElementById(document.getElementById('bl-item').hidden ? 'bl-list' : 'bl-item');
+    var candidates = visible.querySelectorAll('[data-action], a[href]');
     for (var i = 0; i < candidates.length; i++) {
       var c = candidates[i];
       var same = key.action
         ? c.getAttribute('data-action') === key.action && c.getAttribute('data-value') === key.value
         : c.getAttribute('href') === key.href;
-      if (same) { c.focus(); return; }
+      if (same) { c.focus({ preventScroll: true }); return; }
     }
   }
 
