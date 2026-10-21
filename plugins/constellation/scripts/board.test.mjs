@@ -1987,14 +1987,16 @@ test('renderAgents: a running row carries data-since and the run class', () => {
 const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${name} = ${fn.toString()};`).join('\n');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null } = {}) => {
+// deferred: fetch returns a promise that the test settles with page.resolve(url, item, nth). Timers wait for page.runTimers().
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
   const els = {};
   const stub = (id) => els[id] ??= {
-    id, innerHTML: '', hidden: false, handlers: {}, open: false, showModals: 0,
+    id, innerHTML: '', value: '', hidden: false, handlers: {}, open: false, showModals: 0, scrolls: [],
     addEventListener(t, fn) { this.handlers[t] = fn; }, getAttribute: () => null, querySelectorAll: () => [],
+    scrollIntoView(options) { this.scrolls.push(options); },
     showModal() { this.open = true; this.showModals += 1; },
     close() { if (!this.open) return; this.open = false; this.handlers.close?.(); },
   };
@@ -2009,28 +2011,46 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
     querySelectorAll: () => [],
   };
   const windowHandlers = {};
+  let hashchanges = 0;
   const location = {
     current: hash,
     get hash() { return this.current; },
-    set hash(value) { if (value !== this.current) { this.current = value; windowHandlers.hashchange?.(); } },
+    set hash(value) { if (value !== this.current) { this.current = value; hashchanges += 1; windowHandlers.hashchange?.(); } },
   };
   const replaced = [];
   const history = { replaceState: (state, title, url) => { location.current = url; replaced.push(url); } };
   const fetches = [];
+  const pending = {};
+  const respond = (item) => (item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
   const fetchStub = (url) => {
     fetches.push(url);
-    const item = reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` };
-    return Promise.resolve(item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
+    if (deferred) return new Promise((resolve) => { (pending[url] ??= []).push((item) => resolve(respond(item))); });
+    return Promise.resolve(respond(reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` }));
   };
+  const timers = [];
+  let timerId = 0;
+  const setTimeoutStub = (fn) => { timers.push({ id: (timerId += 1), fn }); return timerId; };
+  const clearTimeoutStub = (id) => { const at = timers.findIndex((t) => t.id === id); if (at >= 0) timers.splice(at, 1); };
   const sources = [];
   const sandbox = {
     document, localStorage, console, location, history, fetch: fetchStub,
     window: { matchMedia: () => ({ matches: os === 'light' }), addEventListener: (t, fn) => { windowHandlers[t] = fn; }, markdownit: stubFactory() },
-    EventSource: function () { sources.push(this); }, setInterval: () => 0, Date,
+    EventSource: function () { sources.push(this); }, setInterval: () => 0, setTimeout: setTimeoutStub, clearTimeout: clearTimeoutStub, Date,
   };
   vm.runInNewContext(`${renderPrelude}\n${uiText('page.js')}`, sandbox);
   const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
-  return { attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click() };
+  // A click whose target answers closest() for one data-action selector, or for tr[data-href].
+  const clickOn = (id, { action, value, file, href } = {}) => {
+    const element = { getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href })[name] ?? null };
+    const closest = (selector) => ((action && selector === `[data-action="${action}"]`) || (href && selector === 'tr[data-href]') ? element : null);
+    els[id].handlers.click({ target: { closest } });
+  };
+  return {
+    attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
+    runTimers: () => { while (timers.length) timers.shift().fn(); },
+    resolve: (url, item, nth = 0) => pending[url][nth](item),
+    get hashchanges() { return hashchanges; },
+  };
 };
 
 test('page.js: with no stored choice the OS theme sets the toggle and data-theme stays unset', () => {
@@ -2589,7 +2609,7 @@ test('serve: /api/item serves epic and feature bodies and refuses names outside 
 // ---------------------------------------------------------------------------
 
 const DEFAULT_LIST_ROUTE = { kind: 'task', status: ['inbox', 'refined', 'in-progress', 'parked', 'other'], type: null, q: '', attention: false };
-const mkTitled = (kind, file, lines, title) => toNode(kind, file, ['---', ...lines, '---', '', ...(title ? [`# ${title}`] : [])].join('\n'), MTIME);
+const mkTitled = (kind, file, lines, title, mtime = MTIME) => toNode(kind, file, ['---', ...lines, '---', '', ...(title ? [`# ${title}`] : [])].join('\n'), mtime);
 /** Two features (one under an epic), five tasks (one in flight, one with a broken link, one with no H1), one plan. */
 const rowsTree = () => buildTree([
   mkTitled('epic', 'E01-board.md', ['status: active'], 'Board UI'),
@@ -3027,4 +3047,238 @@ test('renderNowActions: Open task is enabled only when the tree holds the in-fli
   const none = renderNowActions({ state: { ...nowState, task: undefined }, tree }, esc);
   assert.ok(none.includes('disabled title="no task in the workflow state">Open task</button>'), none);
   assert.ok(none.includes('data-action="view-plan"'), 'View plan is unchanged');
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: the page runtime (fetch slots, routes, list edits, detail views)
+// ---------------------------------------------------------------------------
+
+/** One epic, one feature F001-a.md with the in-flight task 023-x.md and 024-y.md, one plan for 023-x.md. */
+const itemPageTree = (statusOfY = 'inbox', { mtimeOfY = MTIME, extra = [] } = {}) => buildTree([
+  mkTitled('epic', 'E01-a.md', ['status: active'], 'Epic A'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md'], 'Feature A'),
+  mkTitled('task', '023-x.md', ['status: in-progress', 'feature: F001-a.md'], 'Task X'),
+  mkTitled('task', '024-y.md', [`status: ${statusOfY}`, 'feature: F001-a.md'], 'Task Y', mtimeOfY),
+  mkTitled('plan', '023-x.md', ['status: approved', 'task: 023-x.md'], 'Plan X'),
+  ...extra,
+], null);
+const taskUrl = (file) => `/api/item?kind=task&file=${file}`;
+const okItem = (kind, file, text) => ({ kind, file, mtime: MTIME, truncated: false, text });
+
+test('page.js: a failed task body is fetched again on the next snapshot and on reconnect', async () => {
+  let failing = true;
+  const page = bootPage({ reply: (url) => (failing ? { error: 500 } : okItem('task', '023-x.md', 'good body')) });
+  const taskFetches = () => page.fetches.filter((u) => u === taskUrl('023-x.md')).length;
+  page.feed(pageSnapshot());
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('task body unavailable (500)'), page.els.desc.innerHTML);
+  assert.equal(taskFetches(), 1);
+  failing = false;
+  page.feed(pageSnapshot());
+  await flush();
+  assert.equal(taskFetches(), 2, 'the next snapshot fetches the failed body again');
+  assert.ok(page.els.desc.innerHTML.includes('good body'), page.els.desc.innerHTML);
+  page.es.onopen();
+  await flush();
+  assert.equal(taskFetches(), 2, 'a good body is not fetched again on reconnect');
+  failing = true;
+  page.feed(pageSnapshot({ tree: pageTree('2026-10-19T12:00:00.000Z') }));
+  await flush();
+  assert.equal(taskFetches(), 3);
+  page.es.onopen();
+  await flush();
+  assert.equal(taskFetches(), 4, 'a reconnect fetches a failed body again');
+});
+
+test('page.js: a new in-flight task shows loading until its body arrives', async () => {
+  const page = bootPage({ deferred: true });
+  const tree = itemPageTree();
+  const stateFor = (task) => ({ ...nowState, task, plan: undefined });
+  page.feed(pageSnapshot({ state: stateFor('023-x.md'), tree }));
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'old body'));
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(old body)'), page.els.desc.innerHTML);
+  page.feed(pageSnapshot({ state: stateFor('024-y.md'), tree }));
+  assert.ok(page.els.desc.innerHTML.includes('<p class="muted">loading</p>'), page.els.desc.innerHTML);
+  assert.ok(!page.els.desc.innerHTML.includes('old body'), 'the old body is gone before the reply');
+  page.resolve(taskUrl('024-y.md'), okItem('task', '024-y.md', 'new body'));
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(new body)'), page.els.desc.innerHTML);
+  // An mtime change of the same task keeps the body on screen until the reply, so the region does not flash.
+  page.feed(pageSnapshot({ state: stateFor('024-y.md'), tree: itemPageTree('inbox', { mtimeOfY: '2026-10-19T12:00:00.000Z' }) }));
+  assert.equal(page.fetches.filter((u) => u === taskUrl('024-y.md')).length, 2, 'the mtime change fetches again');
+  assert.ok(page.els.desc.innerHTML.includes('R(new body)'), 'the old body stays on an mtime change');
+});
+
+test('page.js: an older task body reply after a newer one is ignored', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(pageSnapshot({ tree: pageTree(MTIME) }));
+  page.feed(pageSnapshot({ tree: pageTree('2026-10-19T12:00:00.000Z') }));
+  assert.equal(page.fetches.length, 2);
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'second'), 1);
+  await flush();
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'first'), 0);
+  await flush();
+  assert.ok(page.els.desc.innerHTML.includes('R(second)') && !page.els.desc.innerHTML.includes('first'), page.els.desc.innerHTML);
+});
+
+test('page.js: an older plan reply after a newer one is ignored', async () => {
+  const page = bootPage({ hash: '#/plan/023-x.md', deferred: true });
+  const tree = itemPageTree('inbox', { extra: [mkTitled('plan', '024-y.md', ['status: draft', 'task: 024-y.md'], 'Plan Y')] });
+  page.feed(pageSnapshot({ state: null, tree }));
+  page.location.hash = '#/plan/024-y.md';
+  const planUrl = (file) => `/api/item?kind=plan&file=${file}`;
+  assert.deepEqual(page.fetches, [planUrl('023-x.md'), planUrl('024-y.md')]);
+  page.resolve(planUrl('024-y.md'), okItem('plan', '024-y.md', 'plan b'));
+  await flush();
+  page.resolve(planUrl('023-x.md'), okItem('plan', '023-x.md', 'plan a'));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('R(plan b)') && !page.els.dialog.innerHTML.includes('plan a'), page.els.dialog.innerHTML);
+});
+
+test('page.js: an older detail body reply after a newer one is ignored', async () => {
+  const page = bootPage({ hash: '#/item/task/023-x.md', deferred: true });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  page.location.hash = '#/item/task/024-y.md';
+  page.resolve(taskUrl('024-y.md'), okItem('task', '024-y.md', 'body y'));
+  await flush();
+  page.resolve(taskUrl('023-x.md'), okItem('task', '023-x.md', 'body x'));
+  await flush();
+  assert.ok(page.els['bl-item'].innerHTML.includes('R(body y)') && !page.els['bl-item'].innerHTML.includes('body x'), page.els['bl-item'].innerHTML);
+});
+
+test('page.js: a feature route shows the detail view and a new snapshot updates its children', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree('inbox') }));
+  await flush();
+  assert.equal(page.els['bl-list'].hidden, true);
+  assert.equal(page.els['bl-item'].hidden, false);
+  const view = () => page.els['bl-item'].innerHTML;
+  assert.ok(view().includes('<h3>Tasks</h3>') && view().includes('data-href="#/item/task/024-y.md"'), view());
+  assert.ok(view().includes('class="chip s-inbox">inbox</span>'), view());
+  assert.ok(view().includes('R(body of /api/item?kind=feature&file=F001-a.md)'), 'the body is the fetched feature');
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree('refined') }));
+  await flush();
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.ok(view().includes('class="chip s-refined">refined</span>') && !view().includes('class="chip s-inbox">inbox</span>'), view());
+  assert.equal(page.fetches.length, 1, 'a snapshot does not fetch the body again');
+});
+
+test('page.js: an item route outside the tree shows the list and keeps the hash', async () => {
+  const page = bootPage({ hash: '#/item/feature/F999-x.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  assert.equal(page.els['bl-item'].hidden, true);
+  assert.equal(page.els['bl-list'].hidden, false);
+  assert.ok(page.els.backlog.innerHTML.includes('<table'), page.els.backlog.innerHTML);
+  assert.equal(page.location.hash, '#/item/feature/F999-x.md');
+  assert.deepEqual(page.fetches, []);
+});
+
+/** Two tasks: 'Board search' (done) and 'Other' (inbox). */
+const filterPageTree = () => buildTree([
+  mkTitled('task', '001-board.md', ['status: done', 'type: fix'], 'Board search'),
+  mkTitled('task', '002-other.md', ['status: inbox', 'type: feature'], 'Other'),
+], null);
+const rowFiles = (html) => [...html.matchAll(/data-href="#\/item\/task\/([^"]+)"/g)].map((m) => m[1]);
+const FULL_STATUS_HASH = '#/backlog?status=inbox,refined,in-progress,parked,other,done';
+
+test('page.js: a status chip click replaces the hash and shows done rows', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md'], 'done is hidden by default');
+  page.clickOn('backlog-card', { action: 'status', value: 'done' });
+  assert.equal(page.replaced.at(-1), FULL_STATUS_HASH);
+  assert.equal(page.hashchanges, 0, 'a filter edit adds no hashchange and no history entry');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md', '001-board.md'], 'the done row shows, after the inbox row');
+  page.clickOn('backlog-card', { action: 'type', value: 'fix' });
+  assert.equal(page.replaced.at(-1), `${FULL_STATUS_HASH}&type=feature,refactor,debt,spike,discovery`);
+  page.clickOn('backlog-card', { action: 'kind', value: 'feature' });
+  assert.ok(page.replaced.at(-1).includes('kind=feature'), page.replaced.at(-1));
+  assert.ok(page.els['bl-chips'].innerHTML.includes('data-value="feature" aria-pressed="true"'), 'the Kind control follows the route');
+});
+
+test('page.js: a reload on a filter hash applies the filters and fills the search', async () => {
+  const page = bootPage({ hash: `${FULL_STATUS_HASH}&q=board` });
+  assert.equal(page.els.q.value, 'board', 'the boot copies q into the search box');
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md']);
+  page.location.hash = '#/backlog?q=other';
+  assert.equal(page.els.q.value, 'other', 'a hashchange copies q too');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md']);
+});
+
+test('page.js: typing in the search filters the rows after 100 ms and writes q', async () => {
+  const page = bootPage({ hash: FULL_STATUS_HASH });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  assert.equal(rowFiles(page.els.backlog.innerHTML).length, 2);
+  page.els.q.value = 'BOARD';
+  page.els.q.handlers.input();
+  assert.equal(rowFiles(page.els.backlog.innerHTML).length, 2, 'the rows wait for the debounce');
+  page.runTimers();
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md']);
+  assert.equal(page.replaced.at(-1), `${FULL_STATUS_HASH}&q=BOARD`);
+  assert.equal(page.els.q.value, 'BOARD', 'the box keeps what the user typed');
+});
+
+test('page.js: Reset returns the default filters and empties the search', async () => {
+  const page = bootPage({ hash: `${FULL_STATUS_HASH}&q=board` });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+  page.clickOn('backlog-card', { action: 'reset' });
+  assert.equal(page.replaced.at(-1), '#/');
+  assert.equal(page.els.q.value, '');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-other.md']);
+});
+
+test('page.js: the attention banner turns the toggle on and leaves only attention rows', async () => {
+  const tree = buildTree([
+    mkTitled('task', '001-fine.md', ['status: inbox'], 'Fine'),
+    mkTitled('task', '002-gone.md', ['status: done', 'feature: F999-gone.md'], 'Gone'),
+  ], null);
+  const page = bootPage();
+  page.feed(pageSnapshot({ state: null, tree }));
+  assert.ok(page.els['bl-banner'].innerHTML.includes('1 item needs attention'), page.els['bl-banner'].innerHTML);
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-fine.md']);
+  page.clickOn('backlog-card', { action: 'show-attention' });
+  assert.ok(page.replaced.at(-1).includes('attn=1'), page.replaced.at(-1));
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['002-gone.md'], 'the done row with a warning shows');
+});
+
+test('page.js: Open task opens the task detail view and scrolls to the backlog', async () => {
+  const page = bootPage();
+  page.feed(pageSnapshot({ tree: itemPageTree() }));
+  await flush();
+  assert.ok(page.els['now-actions'].innerHTML.includes('data-action="open-task"'), page.els['now-actions'].innerHTML);
+  assert.equal(page.els['bl-item'].hidden, true, 'the list shows first');
+  page.clickOn('now-actions', { action: 'open-task', file: '023-x.md' });
+  await flush();
+  assert.equal(page.location.hash, '#/item/task/023-x.md');
+  assert.equal(page.els['bl-item'].hidden, false);
+  assert.equal(page.els['bl-list'].hidden, true);
+  assert.ok(page.els['bl-item'].innerHTML.includes('Task X'), page.els['bl-item'].innerHTML);
+  assert.equal(page.els['backlog-card'].scrolls.length, 1);
+});
+
+test('page.js: View plan from a task detail view returns to that view on close', async () => {
+  const page = bootPage({ hash: '#/item/task/023-x.md' });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  assert.ok(page.els['bl-item'].innerHTML.includes('data-action="view-plan" data-file="023-x.md"'), page.els['bl-item'].innerHTML);
+  page.clickOn('backlog-card', { action: 'view-plan', file: '023-x.md' });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  assert.equal(page.els['bl-item'].hidden, false, 'the detail view stays behind the dialog');
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/item/task/023-x.md');
+  assert.equal(page.els['bl-item'].hidden, false);
+});
+
+test('page.js: a failed detail body shows body unavailable with the header and children', async () => {
+  const page = bootPage({ hash: '#/item/feature/F001-a.md', reply: () => ({ error: 404 }) });
+  page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
+  await flush();
+  const view = page.els['bl-item'].innerHTML;
+  assert.ok(view.includes('body unavailable (404)'), view);
+  assert.ok(view.includes('class="item-head"') && view.includes('<h3>Tasks</h3>') && view.includes('data-href="#/item/task/024-y.md"'), view);
+  assert.ok(!view.includes('>loading<'), 'the loading line is gone');
 });

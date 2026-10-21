@@ -3,9 +3,12 @@
   var snap = null;
   var showAllAgents = false;
   var connected = false, lostAt = null;
-  // The task body and the plan dialog each remember what they show. A reply writes the DOM only when it is still the newest request.
-  var taskBody = { file: null, mtime: null };
-  var taskSeq = 0;
+  // The task body, the detail body, and the plan dialog each remember what they show. A reply writes the DOM only when it is still the newest request.
+  function newSlot() { return { key: null, mtime: null, failed: false, seq: 0 }; }
+  var taskSlot = newSlot(), itemSlot = newSlot();
+  var itemBodyHtml = null;          // the rendered body of the open detail view; null while it loads
+  var lastListHash = '#/';          // the Backlog target of the breadcrumb: the last list the page showed
+  var searchTimer = null;
   var dialogFile = null, dialogSeq = 0, routeBefore = null;
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
@@ -56,20 +59,33 @@
       .catch(function () { return { error: 'network' }; });
   }
 
-  // The body is fetched once per task file and mtime, so the region keeps its scroll position between snapshots.
+  // Fetch a body once per file and mtime. A failed reply marks the slot, so the next render (a snapshot,
+  // or es.onopen after a reconnect) fetches again. Only the newest reply writes. Returns true when the file changed.
+  function syncBody(slot, kind, file, mtime, write) {
+    var key = kind + '/' + file;
+    if (slot.key === key && slot.mtime === mtime && !slot.failed) return false;
+    var fileChanged = slot.key !== key;
+    slot.key = key; slot.mtime = mtime; slot.failed = false;
+    var seq = ++slot.seq;
+    loadItem(kind, file).then(function (item) {
+      if (seq !== slot.seq) return;
+      if (item.error) slot.failed = true;
+      write(item);
+    });
+    return fileChanged;
+  }
+
+  function writeDesc(item) {
+    document.getElementById('desc').innerHTML = item.error
+      ? '<p class="muted">task body unavailable (' + esc(item.error) + ')</p>'
+      : renderItemBody(item, window.markdownit, esc, snap.tree);
+  }
+
+  // A new in-flight task shows a muted loading line, not the old body. An mtime change keeps the old body until the reply.
   function syncTaskBody(task) {
     var s = snap.state;
-    if (!s || !s.task) { taskBody = { file: null, mtime: null }; taskSeq++; return; }
-    var mtime = task ? task.mtime : null;
-    if (taskBody.file === s.task && taskBody.mtime === mtime) return;
-    taskBody = { file: s.task, mtime: mtime };
-    var seq = ++taskSeq;
-    loadItem('task', s.task).then(function (item) {
-      if (seq !== taskSeq) return;
-      document.getElementById('desc').innerHTML = item.error
-        ? '<p class="muted">task body unavailable (' + esc(item.error) + ')</p>'
-        : renderItemBody(item, window.markdownit, esc);
-    });
+    if (!s || !s.task) { taskSlot.key = null; taskSlot.seq++; return; }
+    if (syncBody(taskSlot, 'task', s.task, task ? task.mtime : null, writeDesc)) document.getElementById('desc').innerHTML = '<p class="muted">loading</p>';
   }
 
   // The plan of a route, from the tree: the plan of a task, or a plan with no task.
@@ -86,7 +102,7 @@
     var seq = ++dialogSeq;
     loadItem('plan', file).then(function (item) {
       if (seq !== dialogSeq) return;
-      dialog.innerHTML = renderPlanDialog({ plan: planView(file), item: item, markdownit: window.markdownit }, esc);
+      dialog.innerHTML = renderPlanDialog({ plan: planView(file), item: item, markdownit: window.markdownit, tree: snap.tree }, esc);
       if (!dialog.open) dialog.showModal();
     });
   }
@@ -117,8 +133,94 @@
     }
   }
 
+  // The route decides the card: a detail view for an item route that the tree holds, else the list. The plan
+  // dialog keeps the view behind it. An item route that the tree does not hold shows the list and keeps the hash.
   function renderBacklogCard() {
-    document.getElementById('backlog').innerHTML = renderBacklog({ tree: snap.tree, route: parseBacklogRoute(location.hash) }, esc);
+    var listHash = parseRoute(location.hash).view === 'plan' ? (routeBefore || '#/') : location.hash;
+    var shown = parseRoute(listHash);
+    if (shown.view === 'item' && treeHolds(snap.tree, shown.kind, shown.file)) showItem(shown);
+    else showList(listHash, shown);
+  }
+
+  function showItem(shown) {
+    var node = findItem(snap.tree, shown.kind, shown.file).node;
+    var onReply = function (item) {
+      itemBodyHtml = item.error
+        ? '<p class="muted">body unavailable (' + esc(item.error) + ')</p>'
+        : renderItemBody(item, window.markdownit, esc, snap.tree);
+      paintItem(shown);
+    };
+    if (syncBody(itemSlot, shown.kind, shown.file, node.mtime, onReply)) itemBodyHtml = null;
+    document.getElementById('bl-list').hidden = true;
+    document.getElementById('bl-item').hidden = false;
+    paintItem(shown);
+  }
+
+  // The reply paints the view directly: renderBacklogCard would sync again and refetch a failed body at once.
+  function paintItem(shown) {
+    document.getElementById('bl-item').innerHTML = renderItemView({ kind: shown.kind, file: shown.file, tree: snap.tree, body: itemBodyHtml, backHash: lastListHash }, esc);
+  }
+
+  function showList(listHash, shown) {
+    itemSlot.key = null; itemSlot.seq++;
+    document.getElementById('bl-item').hidden = true;
+    document.getElementById('bl-list').hidden = false;
+    // A hash that names an item outside the tree must not become the Backlog target of a later breadcrumb.
+    if (shown.view === 'overview') lastListHash = listHash || '#/';
+    var route = parseBacklogRoute(listHash);
+    document.getElementById('bl-banner').innerHTML = renderAttention(snap.tree, esc);
+    document.getElementById('bl-chips').innerHTML = renderToolbar({ route: route, tree: snap.tree }, esc);
+    document.getElementById('backlog').innerHTML = renderBacklog({ tree: snap.tree, route: route }, esc);
+  }
+
+  // A list edit replaces the history entry, so Back leaves the list, not the last chip. replaceState fires no hashchange.
+  function writeList(route) {
+    history.replaceState(null, '', formatBacklogRoute(route));
+    renderBacklogCard();
+  }
+
+  var LIST_ACTIONS = ['status', 'type', 'kind', 'attention', 'show-attention'];
+
+  function onBacklogClick(ev) {
+    var target = ev.target;
+    if (!target || !target.closest) return;
+    for (var i = 0; i < LIST_ACTIONS.length; i++) {
+      var chip = target.closest('[data-action="' + LIST_ACTIONS[i] + '"]');
+      if (chip) { writeList(toggleBacklogRoute(parseBacklogRoute(location.hash), LIST_ACTIONS[i], chip.getAttribute('data-value'))); return; }
+    }
+    if (target.closest('[data-action="reset"]')) { document.getElementById('q').value = ''; writeList(parseBacklogRoute('')); return; }
+    var plan = target.closest('[data-action="view-plan"]');
+    if (plan) { openPlanRoute(plan.getAttribute('data-file')); return; }
+    if (target.closest('a[href]')) return; // the browser follows the anchor and pushes the history entry
+    var row = target.closest('tr[data-href]');
+    var href = row ? row.getAttribute('data-href') : null;
+    if (href && parseRoute(href).view === 'item') location.hash = href;
+  }
+
+  function openPlanRoute(file) {
+    routeBefore = location.hash || '#/';
+    location.hash = '#/plan/' + file;
+  }
+
+  function onSearchInput() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      var route = parseBacklogRoute(location.hash);
+      route.q = document.getElementById('q').value;
+      writeList(route);
+    }, 100);
+  }
+
+  // The search box follows the hash on a list route: a reload, Back, or a pasted link fills it. Typing writes with replaceState, which fires no hashchange.
+  function syncSearchBox() {
+    if (parseRoute(location.hash).view === 'overview') document.getElementById('q').value = parseBacklogRoute(location.hash).q;
+  }
+
+  function onRoute() {
+    syncSearchBox();
+    if (!snap) return;
+    renderBacklogCard();
+    syncRoute();
   }
 
   function renderAgentsCard() {
@@ -176,16 +278,25 @@
     if (ev.target && ev.target.closest && ev.target.closest('[data-action="show-all"]')) { showAllAgents = true; render(); }
   });
   document.getElementById('now-actions').addEventListener('click', function (ev) {
-    var button = ev.target && ev.target.closest && ev.target.closest('[data-action="view-plan"]');
-    if (!button) return;
-    routeBefore = location.hash || '#/';
-    location.hash = '#/plan/' + button.getAttribute('data-file');
+    var target = ev.target;
+    if (!target || !target.closest) return;
+    var plan = target.closest('[data-action="view-plan"]');
+    if (plan) { openPlanRoute(plan.getAttribute('data-file')); return; }
+    var task = target.closest('[data-action="open-task"]');
+    if (!task) return;
+    location.hash = '#/item/task/' + task.getAttribute('data-file');
+    // At 1280 px the backlog card sits under the Now card, so the view opens out of sight without the scroll.
+    var card = document.getElementById('backlog-card');
+    if (card.scrollIntoView) card.scrollIntoView({ block: 'start' });
   });
+  document.getElementById('backlog-card').addEventListener('click', onBacklogClick);
+  document.getElementById('q').addEventListener('input', onSearchInput);
   document.getElementById('dialog').addEventListener('click', function (ev) {
     if (ev.target && ev.target.closest && ev.target.closest('[data-action="close-dialog"]')) document.getElementById('dialog').close();
   });
   document.getElementById('dialog').addEventListener('close', onDialogClose);
-  window.addEventListener('hashchange', function () { if (snap) syncRoute(); });
+  window.addEventListener('hashchange', onRoute);
+  syncSearchBox();
 
   var es = new EventSource('/events');
   es.onopen = function () { connected = true; lostAt = null; render(); };
