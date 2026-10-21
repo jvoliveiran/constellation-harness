@@ -17,7 +17,7 @@ import {
 import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
-  renderTable, renderToolbar, renderAttention,
+  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import {
@@ -2128,21 +2128,23 @@ test('renderItemBody: a truncated item ends with the muted line', () => {
   assert.ok(!renderItemBody({ text: 'x', truncated: false }, null, esc).includes('truncated'));
 });
 
-test('renderMarkdown with the vendored library: raw HTML is text, unsafe and relative links lose href, http links open in a new tab', () => {
+test('renderMarkdown with the vendored library: raw HTML is text, relative links outside the tree lose href, http links open in a new tab', () => {
   const md = loadVendor();
+  // The tree holds 014-x.md, so [b](014-x.md) opens the task view; anything else relative loses its href.
+  const tree = buildTree([mk('task', '014-x.md', ['status: inbox'])], null);
   const html = renderMarkdown([
     '<img src=x onerror=alert(1)>', '', '[a](javascript:alert(1))', '', '[b](014-x.md)', '',
     '[c](https://example.com)', '', '[d](#top)',
-  ].join('\n'), md, esc);
+  ].join('\n'), md, esc, tree);
   assert.ok(html.includes('&lt;img'), html);
   assert.ok(!html.includes('<img'), html);
   // markdown-it 14 refuses the javascript: target outright: the source stays as plain text, with no anchor.
   assert.ok(html.includes('<p>[a](javascript:alert(1))</p>'), html);
   assert.ok(!/<a[^>]*>a<\/a>/.test(html), html);
-  assert.ok(html.includes('<a>b</a>'), html);
+  assert.ok(html.includes('<a href="#/item/task/014-x.md">b</a>'), html);
   assert.ok(html.includes('<a href="https://example.com" rel="noopener noreferrer" target="_blank">c</a>'), html);
   assert.ok(html.includes('<a>d</a>'), html);
-  assert.ok(!/href="(javascript|014|#)/.test(html), html);
+  assert.ok(!/href="(javascript|014|#top)/.test(html), html);
 });
 
 test('renderMarkdown with the vendored library: images render as links with their alt text', () => {
@@ -2466,6 +2468,9 @@ const ISOLATION_ARGS = {
   renderTable: () => [backlogRows(rowsTree(), 'task'), 'task', esc],
   renderToolbar: () => [{ route: parseBacklogRoute(''), tree: rowsTree() }, esc],
   renderAttention: () => [rowsTree(), esc],
+  internalHref: () => ['../tasks/001-one.md', detailTree()],
+  findItem: () => [detailTree(), 'task', '001-one.md'],
+  renderItemView: () => [{ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>b</p>', backHash: '#/' }, esc],
 };
 
 test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
@@ -2904,4 +2909,122 @@ test('page.css: the in-flight row has an accent border and the tree styles are g
   assert.ok(ruleBodies(css, '.tbl tr.inflight td:first-child').join(' ').includes('var(--accent)'));
   const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
   for (const gone of [/\.badge\b/, /\.warn-line\b/, /\.grp\b/, /details summary/]) assert.ok(!gone.test(plain), `${gone} is still in page.css`);
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: detail views, internal links, and the Open task button
+// ---------------------------------------------------------------------------
+
+/** One epic, two features, five tasks (001 has a plan and related links, 005 has no feature), one orphan plan. */
+const detailTree = () => buildTree([
+  mkTitled('epic', 'E01-a.md', ['status: active', 'date-created: 01-10-2026', 'last-edit: 02-10-2026'], 'Epic A'),
+  mkTitled('feature', 'F001-a.md', ['status: active', 'epic: E01-a.md', 'date-created: 14-10-2026', 'last-edit: 21-10-2026'], 'Feature A'),
+  mkTitled('feature', 'F002-b.md', ['status: active', 'epic: E01-a.md'], 'Feature B'),
+  mkTitled('task', '001-one.md', ['status: inbox', 'type: fix', 'feature: F001-a.md', 'related: 002-two.md, zzz.md'], 'One'),
+  mkTitled('task', '002-two.md', ['status: done', 'feature: F001-a.md'], 'Two'),
+  mkTitled('task', '003-three.md', ['status: inbox', 'feature: F002-b.md'], 'Three'),
+  mkTitled('task', '004-four.md', ['status: refined', 'feature: F002-b.md'], 'Four'),
+  mkTitled('task', '005-solo.md', ['status: inbox'], 'Solo'),
+  mk('plan', '001-one.md', ['status: approved', 'task: 001-one.md']),
+  mk('plan', '050-x.md', ['status: draft', 'task: 050-x.md']),
+], null);
+const itemView = (extra) => ({ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>the body</p>', backHash: '#/', ...extra });
+const tableRowCount = (html) => html.split('data-href=').length - 1;
+
+test('renderItemView: a feature shows breadcrumb, header, body, and its Tasks table', () => {
+  const html = renderItemView(itemView({ backHash: '#/backlog?status=done' }), esc);
+  const crumbs = /<nav class="crumbs">([\s\S]*?)<\/nav>/.exec(html)[1];
+  assert.equal(crumbs, '<a href="#/backlog?status=done">Backlog</a> › <a href="#/item/epic/E01-a.md">E01 Epic A</a> › <span>F001 Feature A</span>');
+  assert.ok(html.includes('<span class="item-title">F001 Feature A</span>') && html.includes('<span class="chip s-other">active</span>'), html);
+  assert.ok(html.includes('created 14-10-2026') && html.includes('edited 21-10-2026'), html);
+  assert.ok(html.includes('<div id="item-body" class="md"><p>the body</p></div>'), html);
+  assert.equal(html.split('<table').length - 1, 1);
+  assert.ok(html.includes('<h3>Tasks</h3>'));
+  const table = html.slice(html.indexOf('<table'));
+  assert.ok(table.includes('data-href="#/item/task/001-one.md"') && table.includes('data-href="#/item/task/002-two.md"'), 'the done task shows');
+  assert.equal(tableRowCount(table), 2, 'the tasks of this feature only');
+});
+
+test('renderItemView: an epic shows a Features table and a Tasks table of every task under them', () => {
+  const html = renderItemView(itemView({ kind: 'epic', file: 'E01-a.md' }), esc);
+  assert.equal(html.split('<table').length - 1, 2);
+  const [, features, tasks] = html.split(/<h3>(?:Features|Tasks)<\/h3>/);
+  assert.equal(tableRowCount(features), 2);
+  assert.ok(features.includes('data-href="#/item/feature/F001-a.md"') && features.includes('data-href="#/item/feature/F002-b.md"'));
+  assert.equal(tableRowCount(tasks), 4);
+  for (const file of ['001-one.md', '002-two.md', '003-three.md', '004-four.md']) assert.ok(tasks.includes(`data-href="#/item/task/${file}"`), file);
+  assert.ok(!tasks.includes('005-solo.md'), 'a standalone task is not under the epic');
+  assert.ok(html.includes('<nav class="crumbs"><a href="#/">Backlog</a> › <span>E01 Epic A</span></nav>'), 'an epic has no parent level');
+});
+
+test('renderItemView: a task shows type and plan chips, View plan, and related chips', () => {
+  const html = renderItemView(itemView({ kind: 'task', file: '001-one.md' }), esc);
+  assert.ok(html.includes('<span class="chip">fix</span>'), 'the type chip');
+  assert.ok(html.includes('<span class="chip p-approved">plan approved</span>'), 'the plan chip');
+  assert.ok(html.includes('<button type="button" class="btn primary" data-action="view-plan" data-file="001-one.md">View plan</button>'), html);
+  assert.ok(html.includes('<a class="chip" href="#/item/task/002-two.md">002-two.md</a>'), 'a related task in the tree links');
+  assert.ok(html.includes('<span class="chip" title="not in .constellation/tasks/">zzz.md</span>'), 'a related name outside the tree is inert');
+  assert.ok(!html.includes('href="#/item/task/zzz.md"'));
+  assert.ok(html.includes('<a href="#/item/epic/E01-a.md">E01 Epic A</a> › <a href="#/item/feature/F001-a.md">F001 Feature A</a> › <span>001 One</span>'), 'the task breadcrumb');
+  assert.ok(!html.includes('<table'), 'a task has no child table');
+  const bare = renderItemView(itemView({ kind: 'task', file: '002-two.md' }), esc);
+  assert.ok(bare.includes('disabled title="no plan for this task">View plan</button>') && !bare.includes('data-action="view-plan"'), bare);
+  assert.ok(!bare.includes('class="related"'), 'no related chips for an empty list');
+  const solo = renderItemView(itemView({ kind: 'task', file: '005-solo.md' }), esc);
+  assert.ok(solo.includes('<nav class="crumbs"><a href="#/">Backlog</a> › <span>005 Solo</span></nav>'), solo);
+});
+
+test('renderItemView: a loading or failed body keeps the header and the children', () => {
+  const loading = renderItemView(itemView({ body: null }), esc);
+  assert.ok(loading.includes('<div id="item-body" class="md"><p class="muted">loading</p></div>'), loading);
+  const failed = renderItemView(itemView({ body: '<p class="muted">body unavailable (404)</p>' }), esc);
+  assert.ok(failed.includes('body unavailable (404)'), failed);
+  for (const html of [loading, failed]) {
+    assert.ok(html.includes('class="item-head"') && html.includes('<table'), 'the header and the table stay');
+  }
+  assert.ok(renderItemView(itemView({ file: 'F999-x.md' }), esc).includes('Item not found'));
+});
+
+test('internalHref: names, directories, and kinds resolve through the tree', () => {
+  const tree = detailTree();
+  const task = '#/item/task/001-one.md';
+  for (const href of ['001-one.md', '../tasks/001-one.md', './001-one.md#h', '../tasks/001-one.md?x=1', '.constellation/tasks/001-one.md']) {
+    assert.equal(internalHref(href, tree), task, href);
+  }
+  assert.equal(internalHref('../plans/001-one.md', tree), '#/plan/001-one.md', 'the plans directory fixes the kind');
+  assert.equal(internalHref('../features/F001-a.md', tree), '#/item/feature/F001-a.md');
+  assert.equal(internalHref('../epics/E01-a.md', tree), '#/item/epic/E01-a.md');
+  assert.equal(internalHref('F001-a.md', tree), '#/item/feature/F001-a.md', 'a bare name tries every kind');
+  assert.equal(internalHref('050-x.md', tree), '#/plan/050-x.md', 'an orphan plan by bare name');
+  assert.equal(internalHref('../tasks/F001-a.md', tree), null, 'a feature file is not a task');
+  for (const href of ['zzz.md', 'https://x/001-one.md', 'mailto:a', '../tasks/../x.md', '../tasks/../001-one.md', '#top', '', null, 'a/.md', '../tasks/x.txt']) {
+    assert.equal(internalHref(href, tree), null, String(href));
+  }
+  assert.equal(internalHref('001-one.md', null), null);
+});
+
+test('renderMarkdown with the vendored library and a tree: internal links get a hash and no target', () => {
+  const md = loadVendor();
+  const tree = detailTree();
+  const html = renderMarkdown('[t](../tasks/001-one.md)\n\n[p](../plans/001-one.md)\n\n[z](zzz.md)\n\n[r](https://example.com)', md, esc, tree);
+  assert.ok(html.includes('<a href="#/item/task/001-one.md">t</a>'), html);
+  assert.ok(html.includes('<a href="#/plan/001-one.md">p</a>'), html);
+  assert.ok(html.includes('<a>z</a>'), html);
+  assert.ok(html.includes('target="_blank">r</a>'), 'a remote link still opens in a new tab');
+  assert.ok(!/href="#\/[^"]*"[^>]*target/.test(html), 'an internal link stays on the page');
+  const dialog = renderPlanDialog({ plan: { file: '001-one.md', status: 'approved', title: 'P', taskId: '001' }, item: { text: '[t](001-one.md)' }, markdownit: md, tree }, esc);
+  assert.ok(dialog.includes('<a href="#/item/task/001-one.md">t</a>'), 'the plan dialog rewrites links too');
+  assert.ok(renderItemBody({ text: '[t](001-one.md)' }, md, esc, tree).includes('href="#/item/task/001-one.md"'));
+});
+
+test('renderNowActions: Open task is enabled only when the tree holds the in-flight task', () => {
+  const tree = buildTree([mk('task', '023-x.md', ['status: in-progress']), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md'])], null);
+  const ok = renderNowActions({ state: nowState, tree }, esc);
+  assert.ok(ok.includes('<button type="button" class="btn secondary" data-action="open-task" data-file="023-x.md">Open task</button>'), ok);
+  const missing = renderNowActions({ state: nowState, tree: buildTree([mk('task', '024-y.md', ['status: in-progress'])], null) }, esc);
+  assert.ok(missing.includes('disabled title="task 023-x.md is not in .constellation/tasks/">Open task</button>'), missing);
+  assert.ok(!missing.includes('data-action="open-task"'));
+  const none = renderNowActions({ state: { ...nowState, task: undefined }, tree }, esc);
+  assert.ok(none.includes('disabled title="no task in the workflow state">Open task</button>'), none);
+  assert.ok(none.includes('data-action="view-plan"'), 'View plan is unchanged');
 });

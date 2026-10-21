@@ -172,10 +172,12 @@ export function renderAgents(view, esc) {
 /**
  * Render a work-item body as HTML: strip the front matter, drop the first H1 (the header shows
  * it), then render with markdown-it under the spec §7 options and renderer rules. markdownit is
- * the library factory (window.markdownit); null renders the text in a <pre>. The page receives
- * this function through toString(), so the body uses no module-scope symbol and no import.
+ * the library factory (window.markdownit); null renders the text in a <pre>. tree is the snapshot
+ * tree: a link to a work item that it holds opens inside the board (internalHref). The page
+ * receives this function through toString(), so the body uses no module-scope symbol and no
+ * import; internalHref is its top-level neighbor on the page.
  */
-export function renderMarkdown(text, markdownit, esc) {
+export function renderMarkdown(text, markdownit, esc, tree) {
   var body = String(text == null ? '' : text).replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^# .*(\r?\n|$)/m, '');
   if (!markdownit) return '<pre class="md-raw">' + esc(body) + '</pre>';
   var md = markdownit({ html: false, linkify: false, typographer: false, breaks: false });
@@ -183,7 +185,9 @@ export function renderMarkdown(text, markdownit, esc) {
   md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
     var token = tokens[idx];
     var href = token.attrGet('href');
-    if (isRemote(href)) { token.attrSet('rel', 'noopener noreferrer'); token.attrSet('target', '_blank'); }
+    var internal = internalHref(href, tree);
+    if (internal) token.attrSet('href', internal);
+    else if (isRemote(href)) { token.attrSet('rel', 'noopener noreferrer'); token.attrSet('target', '_blank'); }
     else if (token.attrIndex('href') >= 0) token.attrs.splice(token.attrIndex('href'), 1);
     return self.renderToken(tokens, idx, options);
   };
@@ -202,8 +206,8 @@ export function renderMarkdown(text, markdownit, esc) {
  * The body of one /api/item response: the rendered markdown, then the muted truncation line when
  * the read hit the cap. The page defines renderMarkdown at top level, next to this function.
  */
-export function renderItemBody(item, markdownit, esc) {
-  return renderMarkdown(item.text, markdownit, esc) + (item.truncated ? '<p class="muted">truncated at 512 KB</p>' : '');
+export function renderItemBody(item, markdownit, esc, tree) {
+  return renderMarkdown(item.text, markdownit, esc, tree) + (item.truncated ? '<p class="muted">truncated at 512 KB</p>' : '');
 }
 
 /**
@@ -218,6 +222,54 @@ export function treeHolds(tree, kind, file) {
   if (kind === 'feature') return tree.orphanFeatures.some(match) || tree.epics.some(function (e) { return e.features.some(match); });
   if (kind === 'plan') return tree.tasks.some(function (t) { return !!t.plan && t.plan.file === file; }) || tree.orphanPlans.some(function (p) { return p.file === file; });
   return false;
+}
+
+/**
+ * The hash that opens a body link inside the board, or null. A name that the tree holds as a task,
+ * feature, or epic gives `#/item/<kind>/<name>`; a plan gives `#/plan/<name>`. A directory part
+ * (tasks, features, epics, plans) fixes the kind; a bare name tries task, feature, epic, then plan.
+ * A scheme, a missing tree, a name outside the name rule, or a dot segment after the leading ones
+ * gives null. The fragment and the query drop out. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import; treeHolds is its top-level
+ * neighbor on the page.
+ */
+export function internalHref(href, tree) {
+  var DIRECTORIES = { tasks: 'task', features: 'feature', epics: 'epic', plans: 'plan' };
+  if (!tree || !href || String(href).indexOf(':') >= 0) return null;
+  var parts = String(href).split('#')[0].split('?')[0].split('/');
+  while (parts.length > 1 && (parts[0] === '.' || parts[0] === '..')) parts.shift();
+  var name = parts[parts.length - 1];
+  var directory = parts.length > 1 ? parts[parts.length - 2] : '';
+  if (parts.slice(0, -1).some(function (part) { return part === '.' || part === '..'; })) return null;
+  var mapped = Object.prototype.hasOwnProperty.call(DIRECTORIES, directory) ? DIRECTORIES[directory] : null;
+  var kinds = mapped ? [mapped] : ['task', 'feature', 'epic', 'plan'];
+  var kind = kinds.filter(function (k) { return treeHolds(tree, k, name); })[0];
+  if (!kind) return null;
+  return kind === 'plan' ? '#/plan/' + name : '#/item/' + kind + '/' + name;
+}
+
+/**
+ * Find a work item in the tree: { node, feature, epic } or null. For a task, feature and epic are
+ * its parents through the tree structure; for a feature, epic; for an epic both are null. The
+ * kinds are task, feature, and epic; treeHolds decides, so a name outside the rule gives null. The
+ * page receives this function through toString(); treeHolds is its top-level neighbor.
+ */
+export function findItem(tree, kind, file) {
+  if (kind !== 'task' && kind !== 'feature' && kind !== 'epic') return null;
+  if (!treeHolds(tree, kind, file)) return null;
+  var match = function (n) { return n.file === file; };
+  if (kind === 'task') {
+    var found = { node: tree.tasks.filter(match)[0], feature: null, epic: null };
+    tree.epics.forEach(function (e) {
+      e.features.forEach(function (f) { if (f.tasks.indexOf(file) >= 0) { found.feature = f; found.epic = e; } });
+    });
+    tree.orphanFeatures.forEach(function (f) { if (f.tasks.indexOf(file) >= 0) found.feature = f; });
+    return found;
+  }
+  if (kind === 'epic') return { node: tree.epics.filter(match)[0], feature: null, epic: null };
+  var owner = tree.epics.filter(function (e) { return e.features.some(match); })[0] || null;
+  var features = owner ? owner.features : tree.orphanFeatures;
+  return { node: features.filter(match)[0], feature: null, epic: owner };
 }
 
 /**
@@ -448,23 +500,94 @@ export function renderNow(view, esc) {
 }
 
 /**
- * Render the Now card actions: the View plan button, or '' when no workflow runs. The button is
- * disabled, with the reason in its title, when the state names no plan or the tree does not hold
- * it. view = { state, tree }. The page receives this function through toString(), so the body
- * uses no module-scope symbol and no import; treeHolds is its top-level neighbor on the page.
+ * Render the Now card actions: the View plan button and the Open task button, or '' when no
+ * workflow runs. Each button is disabled, with the reason in its title, when the state names no
+ * plan or task or the tree does not hold it. view = { state, tree }. The page receives this
+ * function through toString(), so the body uses no module-scope symbol and no import; treeHolds
+ * is its top-level neighbor on the page.
  */
 export function renderNowActions(view, esc) {
   var s = view.state;
   if (!s) return '';
-  var base = '<button type="button" class="btn primary" ';
-  if (!s.plan) return base + 'disabled title="no plan in the workflow state">View plan</button>';
-  if (!treeHolds(view.tree, 'plan', s.plan)) return base + 'disabled title="' + esc('plan ' + s.plan + ' is not in .constellation/plans/') + '">View plan</button>';
-  return base + 'data-action="view-plan" data-file="' + esc(s.plan) + '">View plan</button>';
+  var planButton = '<button type="button" class="btn primary" ';
+  var taskButton = '<button type="button" class="btn secondary" ';
+  var viewPlan = !s.plan
+    ? planButton + 'disabled title="no plan in the workflow state">View plan</button>'
+    : !treeHolds(view.tree, 'plan', s.plan)
+      ? planButton + 'disabled title="' + esc('plan ' + s.plan + ' is not in .constellation/plans/') + '">View plan</button>'
+      : planButton + 'data-action="view-plan" data-file="' + esc(s.plan) + '">View plan</button>';
+  var openTask = !s.task
+    ? taskButton + 'disabled title="no task in the workflow state">Open task</button>'
+    : !treeHolds(view.tree, 'task', s.task)
+      ? taskButton + 'disabled title="' + esc('task ' + s.task + ' is not in .constellation/tasks/') + '">Open task</button>'
+      : taskButton + 'data-action="open-task" data-file="' + esc(s.task) + '">Open task</button>';
+  return viewPlan + openTask;
+}
+
+/**
+ * Render the detail view of an epic, a feature, or a task: the breadcrumb, the header, for a task
+ * the View plan button and the related chips, the body, and the child tables (the tasks of a
+ * feature; the features and the tasks of an epic). view = { kind, file, tree, body, backHash }.
+ * body is the HTML that the page built, or null while it loads. A name that the tree does not
+ * hold gives a short empty state. The page receives this function through toString(), so the body
+ * uses no module-scope symbol and no import; findItem, treeHolds, chipClass, backlogRows,
+ * sortRows, and renderTable are its top-level neighbors on the page.
+ */
+export function renderItemView(view, esc) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  var tree = view.tree;
+  var found = findItem(tree, view.kind, view.file);
+  if (!found) return '<div class="empty">Item not found</div>';
+  var node = found.node;
+  function label(n) { return (n.id ? n.id + ' ' : '') + (n.title || String(n.name).replace(/-/g, ' ')); }
+  function levelLink(n, kind) { return '<a href="#/item/' + kind + '/' + esc(n.file) + '">' + esc(label(n)) + '</a>'; }
+  function crumbs() {
+    var levels = ['<a href="' + esc(view.backHash || '#/') + '">Backlog</a>'];
+    if (found.epic) levels.push(levelLink(found.epic, 'epic'));
+    if (found.feature) levels.push(levelLink(found.feature, 'feature'));
+    levels.push('<span>' + esc(label(node)) + '</span>');
+    return '<nav class="crumbs">' + levels.join(' › ') + '</nav>';
+  }
+  function head() {
+    var isTask = view.kind === 'task';
+    var html = '<div class="item-head"><span class="item-title">' + esc(label(node)) + '</span> '
+      + '<span class="chip ' + chipClass('s-', TASK_GROUPS, isTask ? node.group : node.status) + '">' + esc(node.status || '—') + '</span>';
+    if (isTask && node.type) html += ' <span class="chip">' + esc(node.type) + '</span>';
+    if (isTask && node.plan) html += ' <span class="chip ' + chipClass('p-', ['draft', 'approved'], node.plan.status) + '">plan ' + esc(node.plan.status || '—') + '</span>';
+    if (node.created) html += ' <span class="muted">created ' + esc(node.created) + '</span>';
+    if (node.edited) html += ' <span class="muted">edited ' + esc(node.edited) + '</span>';
+    if (node.flags.length) html += '<ul class="warns">' + node.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
+    return html + '</div>';
+  }
+  function taskActions() {
+    var button = node.plan
+      ? '<button type="button" class="btn primary" data-action="view-plan" data-file="' + esc(node.plan.file) + '">View plan</button>'
+      : '<button type="button" class="btn primary" disabled title="no plan for this task">View plan</button>';
+    var related = (node.related || []).map(function (name) {
+      return treeHolds(tree, 'task', name)
+        ? '<a class="chip" href="#/item/task/' + esc(name) + '">' + esc(name) + '</a>'
+        : '<span class="chip" title="not in .constellation/tasks/">' + esc(name) + '</span>';
+    });
+    return '<div class="actions">' + button + '</div>' + (related.length ? '<div class="related">' + related.join('') + '</div>' : '');
+  }
+  function childTable(heading, childKind, files) {
+    var rows = sortRows(backlogRows(tree, childKind).filter(function (r) { return files.indexOf(r.file) >= 0; }));
+    return '<h3>' + heading + '</h3>' + (rows.length ? renderTable(rows, childKind, esc) : '<p class="muted">No ' + heading.toLowerCase() + '</p>');
+  }
+  function children() {
+    if (view.kind === 'feature') return childTable('Tasks', 'task', node.tasks);
+    if (view.kind !== 'epic') return '';
+    var taskFiles = [];
+    node.features.forEach(function (f) { taskFiles = taskFiles.concat(f.tasks); });
+    return childTable('Features', 'feature', node.features.map(function (f) { return f.file; })) + childTable('Tasks', 'task', taskFiles);
+  }
+  var body = view.body == null ? '<p class="muted">loading</p>' : view.body;
+  return crumbs() + head() + (view.kind === 'task' ? taskActions() : '') + '<div id="item-body" class="md">' + body + '</div>' + children();
 }
 
 /**
  * Render the inner HTML of the plan dialog: the header (title, file, status chip, task id, close
- * button) and the body. view = { plan: { file, status, title, taskId }, item, markdownit }. item is
+ * button) and the body. view = { plan: { file, status, title, taskId }, item, markdownit, tree }. item is
  * a /api/item reply or { error }. The status class maps through a fixed allow-list. The page
  * receives this function through toString(); renderItemBody is its top-level neighbor.
  */
@@ -477,6 +600,6 @@ export function renderPlanDialog(view, esc) {
     + '<button type="button" class="btn secondary" data-action="close-dialog" aria-label="Close">✕</button></div>';
   var body = !item || item.error
     ? '<p class="muted">plan unavailable (' + esc(item && item.error ? item.error : 'no reply') + ')</p>'
-    : renderItemBody(item, view.markdownit, esc);
+    : renderItemBody(item, view.markdownit, esc, view.tree);
   return head + '<div class="dlg-body md">' + body + '</div>';
 }
