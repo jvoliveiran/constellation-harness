@@ -20,6 +20,7 @@ import {
   renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
+import { createSessionReader } from './board-session.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
@@ -3486,4 +3487,141 @@ test('pairEvents: the description of the start line reaches the agent, capped, a
   assert.equal(Object.hasOwn(byId[runId(2)], 'description'), false);
   assert.equal(Object.hasOwn(byId[runId(3)], 'description'), false);
   assert.equal(JSON.stringify(agents).includes('SECRET'), false);
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: GET /api/agent. Every transcript is synthetic, under a temp root.
+// ---------------------------------------------------------------------------
+
+const AG_SID = '11111111-2222-4333-8444-555555555555';
+const AG_OUT_SID = '22222222-3333-4444-8555-666666666666';
+const AG = { done: 'a1111111111111111', running: 'a2222222222222222', outside: 'a3333333333333333', foreign: 'a4444444444444444' };
+const AG_STATE = { track: 'planned', currentStep: 'engineer', completedSteps: ['architect'], startedAt: '2026-10-21T09:00:00Z' };
+const agUsage = (i, c, r, o) => ({ input_tokens: i, cache_creation_input_tokens: c, cache_read_input_tokens: r, output_tokens: o });
+const agJsonl = (objs) => `${objs.map((o) => JSON.stringify(o)).join('\n')}\n`;
+
+function agentWorld() {
+  const tmp = fs.realpathSync(mkTmp('board-agent-'));
+  const root = path.join(tmp, 'projects');
+  const slug = path.join(root, '-p');
+  const sub = path.join(slug, AG_SID, 'subagents');
+  fs.mkdirSync(sub, { recursive: true });
+  const main = path.join(slug, `${AG_SID}.jsonl`);
+  fs.writeFileSync(main, agJsonl([{ type: 'assistant', timestamp: '2026-10-21T10:00:00Z', message: { id: 'mm', usage: agUsage(1, 0, 0, 1), content: [] } }]));
+  fs.writeFileSync(path.join(sub, `agent-${AG.done}.jsonl`), agJsonl([
+    { type: 'user', timestamp: '2026-10-21T09:05:01Z', message: { role: 'user', content: 'AGENT-PROMPT-SECRET' } },
+    { type: 'assistant', timestamp: '2026-10-21T09:05:02Z', message: { id: 'x1', model: 'opus', usage: agUsage(1, 1, 1, 1), content: [{ type: 'tool_use', name: 'Bash', input: { command: 'TOOL-SECRET' } }] } },
+    { type: 'assistant', timestamp: '2026-10-21T09:05:50Z', message: { id: 'x2', model: 'opus', usage: agUsage(10, 20, 30, 40), content: [{ type: 'text', text: 'TEXT-NOT-THE-REPORT' }, { type: 'tool_use', name: 'SubagentHandback', input: { message: '# Report A1\n\nbody' } }] } },
+  ]));
+  fs.writeFileSync(path.join(sub, `agent-${AG.done}.meta.json`), JSON.stringify({ agentType: 'x', description: 'Arch run', model: 'opus' }));
+  const foreignDir = path.join(slug, AG_OUT_SID, 'subagents');
+  fs.mkdirSync(foreignDir, { recursive: true });
+  const foreignFile = path.join(foreignDir, `agent-${AG.foreign}.jsonl`);
+  fs.writeFileSync(foreignFile, agJsonl([{ type: 'assistant', timestamp: '2026-10-21T09:07:00Z', message: { id: 'f1', usage: agUsage(1, 1, 1, 1), content: [{ type: 'text', text: 'FOREIGN-SECRET' }] } }]));
+  const outside = path.join(tmp, 'outside');
+  fs.mkdirSync(outside);
+  const outsideMain = path.join(outside, `${AG_OUT_SID}.jsonl`);
+  fs.writeFileSync(outsideMain, '');
+  const line = (ts, event, sid, mainPath, id, extra = {}) => ({ ts, event, session_id: sid, transcript_path: mainPath, agent_id: id, agent_type: 'constellation:software-architect', ...extra });
+  const events = [
+    { ts: '2026-10-21T09:01:00Z', event: 'PostToolUse', session_id: AG_SID, transcript_path: main, file: '.constellation/state/current-workflow.json' },
+    line('2026-10-21T09:05:00Z', 'SubagentStart', AG_SID, main, AG.done),
+    line('2026-10-21T09:06:00Z', 'SubagentStop', AG_SID, main, AG.done, { agent_transcript_path: path.join(sub, `agent-${AG.done}.jsonl`) }),
+    line('2026-10-21T09:07:00Z', 'SubagentStart', AG_SID, main, AG.running),
+    line('2026-10-21T09:08:00Z', 'SubagentStart', AG_OUT_SID, outsideMain, AG.outside),
+    line('2026-10-21T09:09:00Z', 'SubagentStop', AG_OUT_SID, outsideMain, AG.outside, { agent_transcript_path: path.join(outside, 'x', `agent-${AG.outside}.jsonl`) }),
+    line('2026-10-21T09:10:00Z', 'SubagentStart', AG_SID, main, AG.foreign),
+    line('2026-10-21T09:11:00Z', 'SubagentStop', AG_SID, main, AG.foreign, { agent_transcript_path: foreignFile }),
+  ];
+  const project = tmpProject();
+  fs.writeFileSync(path.join(project, '.constellation', 'state', 'current-workflow.json'), JSON.stringify(AG_STATE));
+  fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const reader = createSessionReader({ root });
+  const snap = loadSnapshot(project, null, reader);
+  return { tmp, reader, snap };
+}
+
+async function withAgentServer(fn) {
+  const w = agentWorld();
+  const server = serve(() => w.snap, () => {}, () => null, (agent) => w.reader.agentReply(agent));
+  const port = await listenOnFreePort(server);
+  try { await fn((url, host = `127.0.0.1:${port}`) => httpRequest(port, { host, url }), w); } finally { await closeServer(server); }
+}
+const agentUrl = (id) => `/api/agent?id=${encodeURIComponent(id)}`;
+
+test('serve: /api/agent returns 200 with the report of a fixture transcript', async () => {
+  await withAgentServer(async (get) => {
+    const r = await get(agentUrl(AG.done));
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-type'], /^application\/json/);
+    const body = JSON.parse(r.body);
+    assert.equal(body.report, '# Report A1\n\nbody');
+    assert.deepEqual(body.usage, { spent: 4 + 100, input: 11, cache: 52, output: 41 });
+    assert.deepEqual([body.start, body.end, body.durationSec], ['2026-10-21T09:05:00Z', '2026-10-21T09:06:00Z', 60]);
+    assert.deepEqual([body.id, body.agent_type, body.description, body.model, body.truncated, body.error], [AG.done, 'constellation:software-architect', 'Arch run', 'opus', false, null]);
+  });
+});
+
+test('serve: /api/agent with a refused path returns report null and the reason', async () => {
+  await withAgentServer(async (get, w) => {
+    const r = await get(agentUrl(AG.outside));
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.deepEqual([body.report, body.error, body.usage], [null, 'refused: outside root', null]);
+    assert.equal(r.body.includes(w.tmp), false);
+  });
+});
+
+test('serve: /api/agent replies with the spec keys only, no path, no prompt, no tool input', async () => {
+  await withAgentServer(async (get, w) => {
+    for (const id of [AG.done, AG.outside, AG.foreign]) {
+      const r = await get(agentUrl(id));
+      assert.deepEqual(Object.keys(JSON.parse(r.body)), ['id', 'agent_type', 'description', 'model', 'start', 'end', 'durationSec', 'usage', 'report', 'truncated', 'error']);
+      for (const secret of [w.tmp, 'AGENT-PROMPT-SECRET', 'TOOL-SECRET', 'TEXT-NOT-THE-REPORT', 'FOREIGN-SECRET']) assert.equal(r.body.includes(secret), false, secret);
+      assert.equal(r.headers['cache-control'], 'no-store');
+      assert.equal(r.headers['x-content-type-options'], 'nosniff');
+      assert.equal(r.headers['referrer-policy'], 'no-referrer');
+    }
+  });
+});
+
+test('serve: /api/agent with a foreign session folder reads nothing', async () => {
+  await withAgentServer(async (get, w) => {
+    const before = w.reader.bytesRead;
+    const body = JSON.parse((await get(agentUrl(AG.foreign))).body);
+    assert.deepEqual([body.report, body.error], [null, 'refused: foreign session']);
+    assert.equal(w.reader.bytesRead, before);
+  });
+});
+
+test('serve: /api/agent refuses a bad id, an unknown id, and a running agent with 404', async () => {
+  await withAgentServer(async (get, w) => {
+    const before = w.reader.bytesRead;
+    for (const id of ['../x', 'ABCDEF12', 'abc', 'c999999999999999c', AG.running, '']) {
+      const r = await get(agentUrl(id));
+      assert.equal(r.status, 404, id);
+      assert.equal(r.body, 'not found', id);
+    }
+    assert.equal((await get('/api/agent')).status, 404);
+    assert.equal(w.reader.bytesRead, before);
+  });
+});
+
+test('serve: foreign Host on /api/agent returns 403', async () => {
+  await withAgentServer(async (get) => {
+    const r = await get(agentUrl(AG.done), 'attacker.example:1234');
+    assert.equal(r.status, 403);
+    assert.equal(r.body, '');
+  });
+});
+
+test('serve: /api/agent without a reader answers with the missing reason and an empty report', async () => {
+  const w = agentWorld();
+  const server = serve(() => w.snap, () => {});
+  const port = await listenOnFreePort(server);
+  try {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: agentUrl(AG.done) });
+    const body = JSON.parse(r.body);
+    assert.deepEqual([r.status, body.report, body.error, body.id], [200, null, 'missing', AG.done]);
+  } finally { await closeServer(server); }
 });

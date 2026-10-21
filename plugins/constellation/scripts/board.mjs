@@ -434,7 +434,34 @@ function signature(p, root) {
 // HTTP
 // ---------------------------------------------------------------------------
 
-export function serve(getSnapshot, subscribe, readItemBody = () => null) {
+const AGENT_ID_PATTERN = /^[a-f0-9]{8,32}$/;
+const textOrNull = (v) => (typeof v === 'string' ? v : null);
+
+function usageBody(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  return { spent: usage.spent, input: usage.input, cache: usage.cache, output: usage.output };
+}
+
+/** The /api/agent reply, built from a fixed key list: never a spread of the reader result. */
+function agentReplyBody(agent, raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const report = textOrNull(r.report);
+  return {
+    id: agent.agent_id,
+    agent_type: textOrNull(agent.agent_type),
+    description: textOrNull(r.description) ?? textOrNull(agent.description),
+    model: textOrNull(r.model),
+    start: textOrNull(agent.start),
+    end: textOrNull(agent.end),
+    durationSec: typeof agent.durationSec === 'number' ? agent.durationSec : null,
+    usage: usageBody(r.usage),
+    report,
+    truncated: r.truncated === true,
+    error: textOrNull(r.error) ?? (report === null ? 'missing' : null),
+  };
+}
+
+export function serve(getSnapshot, subscribe, readItemBody = () => null, readAgent = () => null) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
@@ -466,6 +493,15 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null) {
       if (!item) { res.writeHead(404, { 'content-type': 'text/plain' }).end('not found'); return; }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(item));
+      return;
+    }
+    if (url.pathname === '/api/agent') {
+      const id = url.searchParams.get('id') ?? '';
+      // The snapshot is the allow-list: an unknown, running, or malformed id never reaches the reader.
+      const agent = AGENT_ID_PATTERN.test(id) ? getSnapshot().agents.find((a) => a.agent_id === id && !a.running) : null;
+      if (!agent) { res.writeHead(404, { 'content-type': 'text/plain' }).end('not found'); return; }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(agentReplyBody(agent, readAgent(agent))));
       return;
     }
     if (url.pathname === '/events') {
@@ -723,7 +759,8 @@ function runServer({ projectDir, port, quiet }) {
     else if (reader.changed()) refresh();
   }, SESSION_POLL_MS);
 
-  const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file));
+  const readAgent = (agent) => (snapshot?.state ? reader.agentReply(agent) : { error: 'no workflow in flight' });
+  const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file), readAgent);
   server.on('listening', () => {
     getSnapshot();
     stopWatch = watch(projectDir, refresh);
