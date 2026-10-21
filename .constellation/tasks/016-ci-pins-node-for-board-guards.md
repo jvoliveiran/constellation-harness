@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: done
+commit: 647b6d2053413fb5977510a3d3c59892aea71425
 type: fix
 source: security-analyst
 related: 015-board-test-helpers-and-cap-constant.md
