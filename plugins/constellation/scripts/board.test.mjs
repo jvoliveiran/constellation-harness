@@ -17,6 +17,7 @@ import {
 import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
+  renderTable, renderToolbar, renderAttention,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import {
@@ -543,46 +544,55 @@ const rendererTree = () => buildTree([
   mk('plan', '001-open.md', ['status: draft', 'task: 001-open.md']),
 ], { task: '001-open.md', currentStep: 'engineer' });
 
+const ALL_STATUSES = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+/** A list route with every status chip on; `extra` overrides. */
+const listRoute = (extra = {}) => ({ kind: 'task', status: ALL_STATUSES, type: null, q: '', attention: false, ...extra });
+/** The `<tr>` of one row, from its data-href. */
+const rowHtml = (html, file, kind = 'task') => {
+  const at = html.indexOf(`data-href="#/item/${kind}/${file}"`);
+  assert.ok(at >= 0, `no row for ${file}`);
+  return html.slice(html.lastIndexOf('<tr', at), html.indexOf('</tr>', at));
+};
+
 test('renderBacklog: every task file appears, including malformed and other', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  for (const f of ['001-open.md', '002-done.md', '003-done.md', '004-odd.md', '005-broken.md']) assert.ok(html.includes(`data-file="${f}"`), f);
+  const html = renderBacklog({ tree: rendererTree(), route: listRoute() }, esc);
+  for (const f of ['001-open.md', '002-done.md', '003-done.md', '004-odd.md', '005-broken.md']) assert.ok(html.includes(`data-href="#/item/task/${f}"`), f);
   assert.ok(html.includes('▶ engineer'));
-  assert.ok(html.includes('📝'));
-  assert.equal(renderBacklog(null, esc), '<div class="empty">No work items</div>');
+  assert.ok(rowHtml(html, '001-open.md').includes('class="chip p-draft"'), 'the plan chip');
+  assert.equal(renderBacklog({ tree: null, route: listRoute() }, esc), '<div class="empty">No work items</div>');
 });
 
 test('renderBacklog: file names are escaped', () => {
   const tree = buildTree([mk('task', '<img src=x onerror=alert(1)>.md', ['status: inbox'])], null);
-  const html = renderBacklog(tree, esc);
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
   assert.ok(html.includes('&lt;img'));
   assert.ok(!html.includes('<img'));
 });
 
-test('renderBacklog: Needs attention lists malformed and lenient items with warnings', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(attn.includes('Needs attention'));
-  assert.ok(attn.includes('005-broken.md') && attn.includes('status missing'));
-  assert.ok(attn.includes('004-odd.md') && attn.includes('unknown status: in-progres'));
-  assert.ok(!html.includes('<details><summary>Needs'));
+test('renderAttention and the table: attention items are counted and their rows carry the warnings in title', () => {
+  const tree = rendererTree();
+  assert.ok(renderAttention(tree, esc).includes('2 items need attention'), renderAttention(tree, esc));
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
+  const broken = rowHtml(html, '005-broken.md');
+  assert.ok(broken.includes('title="status missing"') && broken.includes('class="dot"'), broken);
+  const odd = rowHtml(html, '004-odd.md');
+  assert.ok(odd.includes('title="unknown status: in-progres"') && odd.includes('class="dot"'), odd);
+  assert.ok(!rowHtml(html, '001-open.md').includes('title='), 'a clean row has no title');
 });
 
-test('renderBacklog: an unknown-field-only row keeps its badge and one warning line per field outside Needs attention', () => {
+test('renderBacklog: an unknown-field-only row keeps its dot and one title with both warnings outside the banner count', () => {
   const tree = buildTree([mk('task', '001-odd.md', ['status: inbox', 'category: x', 'effort: s']), mk('task', '002-broken.md', ['type: fix'])], null);
-  const html = renderBacklog(tree, esc);
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(attn.includes('002-broken.md') && !attn.includes('001-odd.md'));
-  // The row ends where the next task row starts. Its warning lines sit inside that slice.
-  const row = html.slice(html.indexOf('data-file="001-odd.md"')).split('<div class="task"')[0];
-  assert.ok(row.includes('<span class="badge warn">lenient</span>'));
-  assert.equal(row.split('class="warn-line"').length - 1, 2);
-  assert.ok(row.includes('<div class="warn-line">unknown field: category</div>'));
-  assert.ok(row.includes('<div class="warn-line">unknown field: effort</div>'));
+  assert.deepEqual(tree.attention.map((a) => a.file), ['002-broken.md']);
+  assert.ok(renderAttention(tree, esc).includes('1 item needs attention'));
+  const row = rowHtml(renderBacklog({ tree, route: listRoute() }, esc), '001-odd.md');
+  assert.ok(row.includes('<span class="dot" aria-label="needs attention"></span>'), row);
+  assert.ok(row.includes('title="unknown field: category; unknown field: effort"'), row);
+  assert.ok(!row.includes('badge') && !row.includes('warn-line'), 'the tree markup is gone');
 });
 
 test('renderBacklog: warning text built from front-matter keys and links is escaped', () => {
   const tree = buildTree([mk('task', '001-x.md', ['status: inbox', '<img src=x onerror=alert(1)>: y', 'feature: F9"><svg onload=alert(2)>.md'])], null);
-  const html = renderBacklog(tree, esc);
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
   assert.ok(html.includes('unknown field: &lt;img src=x onerror=alert(1)&gt;'));
   assert.ok(html.includes('missing link: F9&quot;&gt;&lt;svg onload=alert(2)&gt;.md'));
   assert.ok(!html.includes('<img'));
@@ -590,31 +600,29 @@ test('renderBacklog: warning text built from front-matter keys and links is esca
   assert.ok(html.includes('title="unknown field: &lt;img'), 'the title attribute holds the escaped text');
 });
 
-test('renderBacklog: a task row shows its own warnings right under it', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  // The same warning text also sits in Needs attention, so look only at the task row and what follows it.
-  const afterRow = html.slice(html.indexOf('data-file="004-odd.md"'));
-  const rowAndWarnings = afterRow.slice(0, afterRow.indexOf('<div class="task"', 1) < 0 ? undefined : afterRow.indexOf('<div class="task"', 1));
-  assert.ok(rowAndWarnings.includes('<div class="warn-line">unknown status: in-progres</div>'));
-  assert.ok(rowAndWarnings.includes('<span class="badge warn">lenient</span>'));
+test('renderBacklog: a task row shows its own warnings in its title', () => {
+  const row = rowHtml(renderBacklog({ tree: rendererTree(), route: listRoute() }, esc), '004-odd.md');
+  assert.ok(row.includes('title="unknown status: in-progres"'), row);
+  assert.ok(row.includes('<span class="dot"'), row);
 });
 
-test('renderBacklog: done and dropped collapse in details with counts', () => {
-  const html = renderBacklog(rendererTree(), esc);
-  assert.ok(html.includes('<details data-group="F001-a.md:done"><summary>2 done</summary>'));
-  const attn = html.slice(html.indexOf('class="attn"'), html.indexOf('class="grp"'));
-  assert.ok(!attn.includes('<details'));
-  assert.ok(!html.slice(0, html.indexOf('<details')).includes('002-done.md'));
+test('renderBacklog: done and dropped rows hide by default and show with their chip', () => {
+  const tree = rendererTree();
+  const hidden = renderBacklog({ tree, route: parseBacklogRoute('#/') }, esc);
+  assert.ok(!hidden.includes('002-done.md') && !hidden.includes('003-done.md'));
+  assert.ok(hidden.includes('001-open.md'));
+  const shown = renderBacklog({ tree, route: listRoute() }, esc);
+  assert.ok(shown.includes('002-done.md') && shown.includes('003-done.md'));
+  assert.ok(!shown.includes('<details'), 'no collapsed group');
 });
 
-test('renderBacklog: parked and dropped tasks stay visible, dropped inside a collapsed group', () => {
+test('renderBacklog: parked shows by default, dropped shows with its chip', () => {
   const tree = buildTree(['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'].map((status, i) => mk('task', `00${i}-${status}.md`, [`status: ${status}`])), null);
-  const html = renderBacklog(tree, esc);
-  for (const status of ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped']) assert.ok(html.includes(`-${status}.md"`), status);
-  const collapsed = html.slice(html.indexOf('<details data-group="standalone:dropped">'));
-  assert.ok(collapsed.includes('<summary>1 dropped</summary>'));
-  assert.ok(collapsed.includes('data-file="005-dropped.md"'));
-  assert.ok(!html.slice(0, html.indexOf('<details')).includes('005-dropped.md'));
+  const hidden = renderBacklog({ tree, route: parseBacklogRoute('#/') }, esc);
+  for (const status of ['inbox', 'refined', 'in-progress', 'parked']) assert.ok(hidden.includes(`-${status}.md"`), status);
+  for (const status of ['done', 'dropped']) assert.ok(!hidden.includes(`-${status}.md"`), status);
+  const shown = renderBacklog({ tree, route: listRoute() }, esc);
+  for (const status of ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped']) assert.ok(shown.includes(`-${status}.md"`), status);
 });
 
 test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
@@ -624,28 +632,33 @@ test('renderBacklog: names in epic, feature, and plan rows are escaped', () => {
     mk('feature', `F001-${evil}.md`, ['status: active', `epic: E01-${evil}.md`]),
     mk('plan', `050-${evil}.md`, ['status: draft', `task: 050-${evil}.md`]),
   ], null);
-  const html = renderBacklog(tree, esc);
-  assert.ok(html.includes('&lt;script&gt;'));
-  assert.ok(!html.includes('<script'));
+  for (const kind of ['epic', 'feature', 'task']) {
+    const html = renderBacklog({ tree, route: listRoute({ kind }) }, esc);
+    assert.ok(html.includes('&lt;script&gt;'), kind);
+    assert.ok(!html.includes('<script'), kind);
+  }
+  const orphans = renderBacklog({ tree, route: listRoute({ kind: 'epic' }) }, esc);
+  assert.ok(orphans.includes('1 plan without task') && orphans.includes('<code>050-&lt;script&gt;'), orphans);
 });
 
-test('renderBacklog: a plan status that names an Object prototype key renders the default glyph', () => {
+test('renderBacklog: a plan status that names an Object prototype key renders the p-other chip', () => {
   const tree = buildTree([
     mk('task', '001-open.md', ['status: refined']),
     mk('plan', '001-open.md', ['status: constructor', 'task: 001-open.md']),
     mk('plan', '050-x.md', ['status: __proto__', 'task: 050-x.md']),
   ], null);
-  const html = renderBacklog(tree, esc);
-  assert.equal(html.split('📝').length - 1, 2, 'both plan rows show the default glyph');
+  const html = renderBacklog({ tree, route: listRoute() }, esc);
+  assert.ok(rowHtml(html, '001-open.md').includes('class="chip p-other"'), 'the task plan shows the default chip');
   assert.ok(!html.includes('function'), 'function source text reached the HTML');
   assert.ok(!html.includes('[object Object]'), 'a prototype object reached the HTML');
+  assert.ok(!html.includes('p-constructor') && !html.includes('p-__proto__'));
 });
 
 test('renderBacklog: source runs with no module scope', () => {
   // An export may call another export, so the context holds the whole prelude and nothing else.
   const isolated = vm.runInNewContext(`${renderPrelude}\n;renderBacklog`, {});
-  const tree = rendererTree();
-  assert.equal(isolated(tree, esc), renderBacklog(tree, esc));
+  const view = { tree: rendererTree(), route: listRoute() };
+  assert.equal(isolated(view, esc), renderBacklog(view, esc));
 });
 
 test('feedText: tool_name with HTML is escaped', () => {
@@ -1715,7 +1728,7 @@ test('board-render.mjs: every export is a function that runs with no module scop
     assert.equal(typeof isolated, 'function', `${name} does not compile alone`);
   }
   const isolatedBacklog = new Function(`return ${render.renderBacklog.toString()}`)();
-  assert.equal(isolatedBacklog(null, esc), render.renderBacklog(null, esc));
+  assert.equal(isolatedBacklog({ tree: null }, esc), render.renderBacklog({ tree: null }, esc));
   const isolatedAgents = new Function(`return ${render.renderAgents.toString()}`)();
   const view = { agents: agentsFixture(1, 25), showAll: false, hhmm: stubHhmm, fmtDur: stubFmtDur };
   assert.equal(isolatedAgents(view, esc), render.renderAgents(view, esc));
@@ -2391,7 +2404,7 @@ test('page.js: a click on a child of Show all shows every row', async () => {
 });
 
 test('renderBacklog: a status outside the allow-list gets the class s-other only', () => {
-  const html = (status) => renderBacklog(buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), esc);
+  const html = (status) => renderBacklog({ tree: buildTree([mk('feature', 'F001-a.md', [`status: ${status}`])], null), route: listRoute({ kind: 'feature' }) }, esc);
   const odd = html('done in-progress');
   assert.ok(odd.includes('<span class="chip s-other">done in-progress</span>'), odd);
   assert.ok(html('done').includes('<span class="chip s-done">done</span>'));
@@ -2433,7 +2446,7 @@ test('chipClass: the allow-list picks the class, anything else is other', () => 
 /** One thunk per export: the arguments that the isolation test passes to it. */
 const ISOLATION_ARGS = {
   chipClass: () => ['s-', ['inbox', 'done'], 'done'],
-  renderBacklog: () => [rendererTree(), esc],
+  renderBacklog: () => [{ tree: rendererTree(), route: listRoute() }, esc],
   feedText: () => [{ kind: 'transition', file: 'a.md', from: null, to: 'inbox' }, esc],
   renderAgents: () => [agentsView(agentsFixture(1, 25)), esc],
   renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc],
@@ -2450,6 +2463,9 @@ const ISOLATION_ARGS = {
   backlogRows: () => [rowsTree(), 'task'],
   filterRows: () => [backlogRows(rowsTree(), 'task'), parseBacklogRoute(''), rowsTree().attention],
   sortRows: () => [backlogRows(rowsTree(), 'task')],
+  renderTable: () => [backlogRows(rowsTree(), 'task'), 'task', esc],
+  renderToolbar: () => [{ route: parseBacklogRoute(''), tree: rowsTree() }, esc],
+  renderAttention: () => [rowsTree(), esc],
 };
 
 test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
@@ -2718,4 +2734,174 @@ test('sortRows: status group order, then id descending, numeric aware', () => {
   ]);
   assert.deepEqual(input.map((r) => r.tag), before, 'the input array is unchanged');
   assert.notEqual(sorted, input);
+});
+
+// ---------------------------------------------------------------------------
+// Task 024: the table, the toolbar, and the banner
+// ---------------------------------------------------------------------------
+
+const SIX_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
+const TASK_TYPES = ['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'];
+const table40Id = (k) => String(101 + k);
+const table40File = (k) => `${table40Id(k)}-task-${table40Id(k)}.md`;
+const FEATURE_FILES = ['F001-alpha.md', 'F002-beta.md', 'F003-gamma.md', 'F004-delta.md', 'F005-epsilon.md'];
+/** 3 epics, 5 features (F005 has no epic), 40 tasks over all seven groups, 2 flagged, task 105 in flight, 2 orphan plans. */
+const table40 = () => {
+  const nodes = [
+    mkTitled('epic', 'E01-board.md', ['status: active'], 'Board UI'),
+    mkTitled('epic', 'E02-core.md', ['status: active'], 'Harness core'),
+    mkTitled('epic', 'E03-docs.md', ['status: active'], 'Docs'),
+  ];
+  const featureEpic = ['E01-board.md', 'E01-board.md', 'E02-core.md', 'E03-docs.md', null];
+  ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].forEach((name, i) => {
+    nodes.push(mkTitled('feature', FEATURE_FILES[i], ['status: active', ...(featureEpic[i] ? [`epic: ${featureEpic[i]}`] : [])], `${name} feature`));
+  });
+  for (let k = 0; k < 40; k += 1) {
+    // k 0 has an unknown status and k 1 has none: the two flagged tasks, both in the group other.
+    const status = k === 0 ? ['status: weird'] : k === 1 ? [] : [`status: ${SIX_GROUPS[(k - 2) % 6]}`];
+    const feature = k % 6 === 5 ? [] : [`feature: ${FEATURE_FILES[k % 6]}`];
+    nodes.push(mkTitled('task', table40File(k), [...status, `type: ${TASK_TYPES[k % 6]}`, ...feature, 'last-edit: 21-10-2026'], `Task ${table40Id(k)} about the board`));
+  }
+  nodes.push(mkTitled('plan', table40File(4), ['status: approved', `task: ${table40File(4)}`], 'Plan 105'));
+  nodes.push(mkTitled('plan', '900-gone.md', ['status: draft', 'task: 900-gone.md'], 'Orphan one'));
+  nodes.push(mkTitled('plan', '901-loose.md', ['status: approved'], 'Orphan two'));
+  return buildTree(nodes, { task: table40File(4), currentStep: 'engineer' });
+};
+const headerCells = (html) => [...html.matchAll(/<th class="col-(\w+)">([^<]*)<\/th>/g)].map((m) => [m[1], m[2]]);
+const cellOf = (row, key) => new RegExp(`<td class="col-${key}">([\\s\\S]*?)</td>`).exec(row)?.[1];
+
+test('renderTable: the task table has the eight columns, links, chips, dashes, and the in-flight row', () => {
+  const tree = table40();
+  const html = renderTable(backlogRows(tree, 'task'), 'task', esc);
+  assert.deepEqual(headerCells(html), [['id', 'ID'], ['title', 'Title'], ['type', 'Type'], ['status', 'Status'], ['feature', 'Feature'], ['epic', 'Epic'], ['plan', 'Plan'], ['updated', 'Updated']]);
+  assert.equal(html.split('data-href=').length - 1, 40);
+  const linked = rowHtml(html, table40File(6)); // k 6: feature F001 under E01
+  assert.equal(cellOf(linked, 'feature'), '<a href="#/item/feature/F001-alpha.md">F001 Alpha feature</a>');
+  assert.equal(cellOf(linked, 'epic'), '<a href="#/item/epic/E01-board.md">E01 Board UI</a>');
+  assert.equal(cellOf(linked, 'title'), `<a href="#/item/task/${table40File(6)}">Task 107 about the board</a>`);
+  const orphanFeature = rowHtml(html, table40File(4)); // k 4: feature F005, no epic
+  assert.equal(cellOf(orphanFeature, 'epic'), '—');
+  const standalone = rowHtml(html, table40File(5)); // k 5: no feature link
+  assert.deepEqual([cellOf(standalone, 'feature'), cellOf(standalone, 'epic'), cellOf(standalone, 'plan')], ['—', '—', '—']);
+  const inflight = rowHtml(html, table40File(4));
+  assert.ok(inflight.startsWith('<tr class="inflight" data-href='), inflight);
+  assert.ok(inflight.indexOf('class="chip s-') < inflight.indexOf('▶ engineer'), 'the step comes after the status chip');
+  assert.equal(cellOf(inflight, 'plan'), '<span class="chip p-approved">approved</span>');
+  assert.equal(html.split('class="inflight"').length - 1, 1);
+  const flagged = rowHtml(html, table40File(0));
+  assert.ok(flagged.includes('<span class="dot" aria-label="needs attention"></span>') && flagged.includes('title="unknown status: weird"'), flagged);
+  assert.ok(rowHtml(html, table40File(1)).includes('title="status missing"'));
+  assert.ok(!rowHtml(html, table40File(2)).includes('title='), 'a clean row has no title');
+  assert.equal(cellOf(rowHtml(html, table40File(2)), 'updated'), '21-10-2026');
+});
+
+test('renderTable: the feature and epic tables have their columns and counts', () => {
+  const tree = rowsTree();
+  const features = renderTable(backlogRows(tree, 'feature'), 'feature', esc);
+  assert.deepEqual(headerCells(features).map((c) => c[1]), ['ID', 'Title', 'Status', 'Epic', 'Tasks', 'Updated']);
+  const tasksCell = cellOf(rowHtml(features, 'F001-a.md', 'feature'), 'tasks');
+  assert.equal(tasksCell, '<span class="chip s-inbox">inbox 1</span> <span class="chip s-done">done 1</span>');
+  assert.ok(!tasksCell.includes('refined'), 'no chip for an absent group');
+  assert.equal(cellOf(rowHtml(features, 'F002-loose.md', 'feature'), 'epic'), '—');
+  assert.equal(cellOf(rowHtml(features, 'F001-a.md', 'feature'), 'epic'), '<a href="#/item/epic/E01-board.md">E01 Board UI</a>');
+  const epics = renderTable(backlogRows(tree, 'epic'), 'epic', esc);
+  assert.deepEqual(headerCells(epics).map((c) => c[1]), ['ID', 'Title', 'Status', 'Features', 'Tasks', 'Updated']);
+  const epic = rowHtml(epics, 'E01-board.md', 'epic');
+  assert.deepEqual([cellOf(epic, 'features'), cellOf(epic, 'tasks')], ['1', '2']);
+});
+
+const pressedOf = (html, action, value) => new RegExp(`data-action="${action}" data-value="${value}" aria-pressed="(true|false)"`).exec(html)?.[1];
+
+test('renderToolbar: status chips show tree.counts, pressed by route, and hide for features', () => {
+  const tree = buildTree([mk('task', '001-a.md', ['status: inbox'])], null);
+  tree.counts.done = 3; // the rows hold no done task, so only tree.counts can say 3
+  const html = renderToolbar({ route: parseBacklogRoute('#/'), tree }, esc);
+  assert.ok(html.includes('>done 3</button>') && html.includes('>inbox 1</button>'), html);
+  assert.equal(pressedOf(html, 'status', 'done'), 'false');
+  assert.equal(pressedOf(html, 'status', 'inbox'), 'true');
+  assert.equal(html.split('data-action="type"').length - 1, 6);
+  assert.deepEqual(['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'].map((t) => pressedOf(html, 'type', t)), Array(6).fill('true'));
+  assert.equal(html.split('data-action="kind"').length - 1, 3);
+  assert.equal(pressedOf(html, 'kind', 'task'), 'true');
+  assert.ok(html.includes('data-action="attention"') && html.includes('data-action="reset"'));
+  const typed = renderToolbar({ route: parseBacklogRoute('#/backlog?type=fix'), tree }, esc);
+  assert.deepEqual([pressedOf(typed, 'type', 'fix'), pressedOf(typed, 'type', 'debt')], ['true', 'false']);
+  const features = renderToolbar({ route: parseBacklogRoute('#/backlog?kind=feature'), tree }, esc);
+  assert.ok(!features.includes('data-action="status"') && !features.includes('data-action="type"'), features);
+  assert.ok(features.includes('data-action="attention"') && features.includes('data-action="reset"'));
+  assert.equal(pressedOf(features, 'kind', 'feature'), 'true');
+});
+
+test('renderBacklog: no match shows Reset, orphan plans show one line, the banner counts attention', () => {
+  const none = renderBacklog({ tree: rowsTree(), route: listRoute({ q: 'zzz' }) }, esc);
+  assert.ok(none.includes('No items match') && none.includes('data-action="reset"') && !none.includes('<table'), none);
+  const plans = (...files) => buildTree([mk('task', '001-a.md', ['status: inbox']), ...files.map((f) => mk('plan', f, ['status: draft', `task: ${f}`]))], null);
+  const two = renderBacklog({ tree: plans('050-a.md', '051-b.md'), route: listRoute() }, esc);
+  assert.ok(two.includes('2 plans without task') && two.includes('<code>050-a.md</code>') && two.includes('<code>051-b.md</code>'), two);
+  const one = renderBacklog({ tree: plans('050-a.md'), route: listRoute() }, esc);
+  assert.ok(one.includes('1 plan without task: <code>050-a.md</code>') && !one.includes('1 plans'), one);
+  assert.ok(!renderBacklog({ tree: plans(), route: listRoute() }, esc).includes('without task'));
+  const broken = (n) => buildTree(Array.from({ length: n }, (_, i) => mk('task', `00${i}-b.md`, ['type: fix'])), null);
+  const one1 = renderAttention(broken(1), esc);
+  assert.ok(one1.includes('1 item needs attention') && one1.includes('data-action="show-attention"'), one1);
+  assert.ok(renderAttention(broken(2), esc).includes('2 items need attention'));
+  assert.equal(renderAttention(plans(), esc), '');
+  assert.equal(renderAttention(null, esc), '');
+  assert.equal(renderBacklog({ tree: null, route: listRoute() }, esc), '<div class="empty">No work items</div>');
+});
+
+test('renderToolbar: the row count reads shown of total for the current kind', () => {
+  const tree = table40();
+  const count = (route) => />(\d+ of \d+)<\/span>/.exec(renderToolbar({ route, tree }, esc))?.[1];
+  const visible = 40 - tree.counts.done - tree.counts.dropped;
+  assert.ok(visible > 0 && visible < 40);
+  assert.equal(count(parseBacklogRoute('#/')), `${visible} of 40`);
+  assert.equal(count(listRoute()), '40 of 40');
+  assert.equal(count(listRoute({ q: 'zzz' })), '0 of 40');
+  assert.equal(count(listRoute({ kind: 'feature' })), '5 of 5');
+  assert.equal(count(listRoute({ kind: 'feature', q: 'epsilon' })), '1 of 5');
+  assert.equal(count(listRoute({ kind: 'epic' })), '3 of 3');
+  assert.ok(renderToolbar({ route: listRoute(), tree }, esc).includes('class="muted count" aria-live="polite"'));
+  assert.ok(!renderToolbar({ route: listRoute(), tree: null }, esc).includes('class="muted count"'), 'a null tree gives no count');
+});
+
+test('filterRows, sortRows, and renderTable handle 500 tasks in under 100 ms', () => {
+  const nodes = Array.from({ length: 500 }, (_, i) => mkTitled('task', `${String(1000 + i)}-t.md`, [`status: ${SIX_GROUPS[i % 6]}`, `type: ${TASK_TYPES[i % 6]}`], `Task ${i}`));
+  const rows = backlogRows(buildTree(nodes, null), 'task');
+  assert.equal(rows.length, 500);
+  const start = process.hrtime.bigint();
+  const html = renderTable(sortRows(filterRows(rows, listRoute(), [])), 'task', esc);
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ms < 100, `${ms} ms`);
+  assert.equal(html.split('data-href=').length - 1, 500);
+});
+
+/** The block of the first @media rule that starts with the prelude, braces matched. */
+const mediaBlock = (css, prelude) => {
+  const start = css.indexOf(prelude);
+  assert.ok(start >= 0, `no ${prelude} block`);
+  let depth = 0;
+  for (let i = css.indexOf('{', start); i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1;
+    if (css[i] === '}' && (depth -= 1) === 0) return css.slice(start, i + 1);
+  }
+  throw new Error(`${prelude} block does not end`);
+};
+
+test('page.css: the phone width hides the Epic, Plan, and Updated columns and the table stays inside its card', () => {
+  const css = uiText('page.css');
+  const phone = mediaBlock(css, '@media (max-width: 640px)');
+  for (const column of ['.col-epic', '.col-plan', '.col-updated']) {
+    assert.ok(ruleBodies(phone, column).some((body) => body.includes('display: none')), `${column} stays at 640 px`);
+  }
+  const table = ruleBodies(css, '.tbl').join(' ');
+  assert.ok(table.includes('table-layout: fixed') && table.includes('width: 100%'), table);
+  assert.ok(ruleBodies(css, '.tbl td').join(' ').includes('overflow-wrap: anywhere'), 'a long cell does not wrap');
+});
+
+test('page.css: the in-flight row has an accent border and the tree styles are gone', () => {
+  const css = uiText('page.css');
+  assert.ok(ruleBodies(css, '.tbl tr.inflight td:first-child').join(' ').includes('var(--accent)'));
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const gone of [/\.badge\b/, /\.warn-line\b/, /\.grp\b/, /details summary/]) assert.ok(!gone.test(plain), `${gone} is still in page.css`);
 });

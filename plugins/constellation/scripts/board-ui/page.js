@@ -118,11 +118,7 @@
   }
 
   function renderBacklogCard() {
-    var open = [];
-    document.querySelectorAll('#backlog details[open]').forEach(function (d) { open.push(d.getAttribute('data-group')); });
-    var backlog = document.getElementById('backlog');
-    backlog.innerHTML = renderBacklog(snap.tree, esc);
-    backlog.querySelectorAll('details').forEach(function (d) { if (open.indexOf(d.getAttribute('data-group')) >= 0) d.setAttribute('open', ''); });
+    document.getElementById('backlog').innerHTML = renderBacklog({ tree: snap.tree, route: parseBacklogRoute(location.hash) }, esc);
   }
 
   function renderAgentsCard() {

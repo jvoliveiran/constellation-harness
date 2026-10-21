@@ -15,72 +15,119 @@ export function chipClass(prefix, allowed, value) {
 }
 
 /**
- * Render the backlog tree as an HTML string. The page receives this function through
- * toString(), so the body uses no module-scope symbol and no import.
+ * Render rows as a table: a `div.tbl-wrap` that holds a `table.tbl`. kind picks the columns: task
+ * (ID, Title, Type, Status, Feature, Epic, Plan, Updated), feature (ID, Title, Status, Epic, Tasks,
+ * Updated), or epic (ID, Title, Status, Features, Tasks, Updated). Every `tr` carries data-href
+ * with the detail route; the Title cell is a link, so the keyboard reaches the row. A flagged row
+ * shows a dot and the warnings in its title; the in-flight row has the class `inflight`. Every
+ * text goes through esc. The page receives this function through toString(), so the body uses no
+ * module-scope symbol and no import; chipClass is its top-level neighbor on the page.
  */
-export function renderBacklog(tree, esc) {
-  var GLYPHS = { inbox: '📥', refined: '📋', 'in-progress': '🔨', parked: '🅿️', done: '✅', dropped: '🚫', other: '❓' };
-  var PLAN_GLYPHS = { draft: '📝', approved: '👍' };
-  function glyph(map, key, fallback) { return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback; }
-  var OPEN_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other'];
-  var COLLAPSED_GROUPS = ['done', 'dropped'];
-  var byFile = {};
+export function renderTable(rows, kind, esc) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  var COLUMNS = {
+    task: [['id', 'ID'], ['title', 'Title'], ['type', 'Type'], ['status', 'Status'], ['feature', 'Feature'], ['epic', 'Epic'], ['plan', 'Plan'], ['updated', 'Updated']],
+    feature: [['id', 'ID'], ['title', 'Title'], ['status', 'Status'], ['epic', 'Epic'], ['tasks', 'Tasks'], ['updated', 'Updated']],
+    epic: [['id', 'ID'], ['title', 'Title'], ['status', 'Status'], ['features', 'Features'], ['tasks', 'Tasks'], ['updated', 'Updated']],
+  };
+  var columns = kind === 'feature' ? COLUMNS.feature : kind === 'epic' ? COLUMNS.epic : COLUMNS.task;
+  var DASH = '—';
+  function parentLink(parent, parentKind) {
+    return parent ? '<a href="#/item/' + parentKind + '/' + esc(parent.file) + '">' + esc((parent.id ? parent.id + ' ' : '') + parent.title) + '</a>' : DASH;
+  }
+  function groupChips(counts) {
+    var chips = TASK_GROUPS.filter(function (g) { return counts && counts[g] > 0; }).map(function (g) {
+      return '<span class="chip ' + chipClass('s-', TASK_GROUPS, g) + '">' + esc(g + ' ' + counts[g]) + '</span>';
+    });
+    return chips.length ? chips.join(' ') : DASH;
+  }
+  function cell(key, row) {
+    if (key === 'id') return (row.flags.length ? '<span class="dot" aria-label="needs attention"></span>' : '') + esc(row.id || DASH);
+    if (key === 'title') return '<a href="#/item/' + esc(row.kind) + '/' + esc(row.file) + '">' + esc(row.title) + '</a>';
+    if (key === 'type') return esc(row.type || DASH);
+    if (key === 'status') {
+      return '<span class="chip ' + chipClass('s-', TASK_GROUPS, row.group) + '">' + esc(row.status || DASH) + '</span>'
+        + (row.inFlight ? ' <span class="run">▶ ' + esc(row.currentStep || '') + '</span>' : '');
+    }
+    if (key === 'feature') return parentLink(row.feature, 'feature');
+    if (key === 'epic') return parentLink(row.epic, 'epic');
+    if (key === 'plan') return row.plan ? '<span class="chip ' + chipClass('p-', ['draft', 'approved'], row.plan.status) + '">' + esc(row.plan.status || DASH) + '</span>' : DASH;
+    if (key === 'features') return esc(row.featureCount);
+    if (key === 'tasks') return kind === 'epic' ? esc(row.taskCount) : groupChips(row.taskCounts);
+    return esc(row.edited || DASH);
+  }
+  function tableRow(row) {
+    var open = '<tr' + (row.inFlight ? ' class="inflight"' : '') + ' data-href="#/item/' + esc(row.kind) + '/' + esc(row.file) + '"'
+      + (row.flags.length ? ' title="' + esc(row.warnings.join('; ')) + '"' : '') + '>';
+    return open + columns.map(function (c) { return '<td class="col-' + c[0] + '">' + cell(c[0], row) + '</td>'; }).join('') + '</tr>';
+  }
+  var head = '<tr>' + columns.map(function (c) { return '<th class="col-' + c[0] + '">' + c[1] + '</th>'; }).join('') + '</tr>';
+  return '<div class="tbl-wrap"><table class="tbl"><thead>' + head + '</thead><tbody>' + rows.map(tableRow).join('') + '</tbody></table></div>';
+}
+
+/**
+ * Render the toolbar chips as an HTML string: the Kind control, the row count (`<shown> of <total>`
+ * for the current kind), for tasks the seven Status chips with their tree.counts and the six Type
+ * chips, the Attention toggle, and Reset. view = { route, tree }. The count needs a tree. The page
+ * receives this function through toString(); backlogRows, filterRows, and chipClass are its
+ * top-level neighbors on the page.
+ */
+export function renderToolbar(view, esc) {
+  var TASK_GROUPS = ['inbox', 'refined', 'in-progress', 'parked', 'other', 'done', 'dropped'];
+  var TYPES = ['feature', 'fix', 'refactor', 'debt', 'spike', 'discovery'];
+  var KINDS = [['task', 'Tasks'], ['feature', 'Features'], ['epic', 'Epics']];
+  var route = view.route, tree = view.tree;
+  var counts = tree ? tree.counts : {};
+  function pressed(on) { return ' aria-pressed="' + (on ? 'true' : 'false') + '"'; }
+  function toggle(action, value, classes, text, on) {
+    return '<button type="button" class="' + classes + '" data-action="' + action + '" data-value="' + esc(value) + '"' + pressed(on) + '>' + esc(text) + '</button>';
+  }
+  var html = KINDS.map(function (k) { return toggle('kind', k[0], 'seg', k[1], route.kind === k[0]); }).join('');
+  if (tree) {
+    var rows = backlogRows(tree, route.kind);
+    html += '<span class="muted count" aria-live="polite">' + filterRows(rows, route, tree.attention).length + ' of ' + rows.length + '</span>';
+  }
+  if (route.kind === 'task') {
+    html += TASK_GROUPS.map(function (g) {
+      return toggle('status', g, 'chip ' + chipClass('s-', TASK_GROUPS, g) + ' toggle', g + ' ' + (counts[g] || 0), route.status.indexOf(g) >= 0);
+    }).join('');
+    html += TYPES.map(function (t) { return toggle('type', t, 'chip toggle', t, route.type === null || route.type.indexOf(t) >= 0); }).join('');
+  }
+  html += toggle('attention', 'attention', 'chip warn toggle', 'Attention', route.attention);
+  return html + '<button type="button" class="link" data-action="reset">Reset</button>';
+}
+
+/**
+ * Render the attention banner: `1 item needs attention` or `2 items need attention` with a Show
+ * button, from tree.attention. An empty list, or no tree, gives ''. The page receives this function
+ * through toString(), so the body uses no module-scope symbol and no import.
+ */
+export function renderAttention(tree, esc) {
+  var count = tree && tree.attention ? tree.attention.length : 0;
+  if (!count) return '';
+  return '<div class="attn">' + count + (count === 1 ? ' item needs attention' : ' items need attention')
+    + ' <button type="button" class="btn secondary" data-action="show-attention">Show</button></div>';
+}
+
+/**
+ * Render the backlog list as an HTML string: the table of the current kind after the filters and
+ * the sort, or the empty state, then one line for the plans that have no task. view = { tree,
+ * route }; route is the parseBacklogRoute result. The page receives this function through
+ * toString(), so the body uses no module-scope symbol and no import; backlogRows, filterRows,
+ * sortRows, and renderTable are its top-level neighbors on the page.
+ */
+export function renderBacklog(view, esc) {
+  var tree = view.tree;
   var hasNodes = !!tree && (tree.tasks.length + tree.epics.length + tree.orphanFeatures.length + tree.orphanPlans.length) > 0;
   if (!hasNodes) return '<div class="empty">No work items</div>';
-  tree.tasks.forEach(function (t) { byFile[t.file] = t; });
-
-  function badge(node) {
-    return node.flags.length ? ' <span class="badge warn">' + esc(node.flags[0]) + '</span>' : '';
-  }
-  function warnLines(node) {
-    return node.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
-  }
-  function taskRow(t) {
-    var plan = t.plan ? ' <span title="plan ' + esc(t.plan.status) + '">' + glyph(PLAN_GLYPHS, t.plan.status, '📝') + '</span>' : '';
-    var step = t.inFlight ? ' <span class="run">▶ ' + esc(t.currentStep || '') + '</span>' : '';
-    return '<div class="task" data-file="' + esc(t.file) + '" title="' + esc(t.warnings.join('; ')) + '">'
-      + glyph(GLYPHS, t.group, GLYPHS.other) + ' ' + esc(t.id || '') + ' ' + esc(t.name)
-      + (t.type ? ' <code>' + esc(t.type) + '</code>' : '') + plan + step + badge(t) + '</div>' + warnLines(t);
-  }
-  function taskGroups(files, groupKey) {
-    var items = files.map(function (f) { return byFile[f]; }).filter(Boolean);
-    var html = OPEN_GROUPS.map(function (g) {
-      return items.filter(function (t) { return t.group === g; }).map(taskRow).join('');
-    }).join('');
-    COLLAPSED_GROUPS.forEach(function (g) {
-      var list = items.filter(function (t) { return t.group === g; });
-      if (!list.length) return;
-      html += '<details data-group="' + esc(groupKey + ':' + g) + '"><summary>' + list.length + ' ' + g + '</summary>' + list.map(taskRow).join('') + '</details>';
-    });
-    return html;
-  }
-  var STATUS_CLASSES = ['inbox', 'refined', 'in-progress', 'parked', 'done', 'dropped'];
-  function header(node) {
-    return '<div class="gh">' + esc(node.id || '') + ' ' + esc(node.name) + ' <span class="chip ' + chipClass('s-', STATUS_CLASSES, node.status) + '">' + esc(node.status || '') + '</span>' + badge(node) + '</div>' + warnLines(node);
-  }
-  function featureGroup(f) {
-    return '<div class="grp">' + header(f) + taskGroups(f.tasks, f.file) + '</div>';
-  }
-  function plainGroup(title, body) {
-    return '<div class="grp"><div class="gh">' + esc(title) + '</div>' + body + '</div>';
-  }
-
-  var html = '';
-  if (tree.attention.length) {
-    html += '<div class="attn"><div class="gh">Needs attention</div>' + tree.attention.map(function (a) {
-      return '<div class="task">' + esc(a.kind) + ' <code>' + esc(a.file) + '</code> <span class="badge warn">' + esc(a.flags[0]) + '</span></div>'
-        + a.warnings.map(function (w) { return '<div class="warn-line">' + esc(w) + '</div>'; }).join('');
-    }).join('') + '</div>';
-  }
-  tree.epics.forEach(function (e) {
-    html += '<div class="epic">' + header(e) + e.features.map(featureGroup).join('') + '</div>';
-  });
-  if (tree.orphanFeatures.length) html += plainGroup('(no epic)', tree.orphanFeatures.map(featureGroup).join(''));
-  if (tree.standaloneTasks.length) html += plainGroup('(standalone tasks)', taskGroups(tree.standaloneTasks, 'standalone'));
-  if (tree.orphanPlans.length) {
-    html += plainGroup('(plans without task)', tree.orphanPlans.map(function (p) {
-      return '<div class="task">' + glyph(PLAN_GLYPHS, p.status, '📝') + ' <code>' + esc(p.file) + '</code>' + badge(p) + '</div>' + warnLines(p);
-    }).join(''));
+  var rows = sortRows(filterRows(backlogRows(tree, view.route.kind), view.route, tree.attention));
+  var html = rows.length
+    ? renderTable(rows, view.route.kind, esc)
+    : '<div class="empty">No items match <button type="button" class="link" data-action="reset">Reset</button></div>';
+  var plans = tree.orphanPlans;
+  if (plans.length) {
+    html += '<p class="muted orphans">' + plans.length + (plans.length === 1 ? ' plan' : ' plans') + ' without task: '
+      + plans.map(function (p) { return '<code>' + esc(p.file) + '</code>'; }).join(', ') + '</p>';
   }
   return html;
 }
