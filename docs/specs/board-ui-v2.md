@@ -287,8 +287,8 @@ returns to the previous route.
 ### 6.5 Agent and step dialogs (phase 025)
 
 `#/agent/<id>`: header with the agent type, description, model, start
-time, duration, and tokens. Body: the final report as rendered markdown. A
-`Copy` button copies the raw text. When the transcript is not available,
+time, duration, and tokens. Body: the final report as rendered markdown.
+The `Copy` button moves to task 037. When the transcript is not available,
 the body says `Transcript not available` and gives the reason from
 `/api/agent`.
 
@@ -340,6 +340,12 @@ and `transcript` (`true` when the log carried a usable path).
 
 The hook test gains one case per field. The event tail stays at 256 KB.
 
+Claude Code 2.1.285 sends no `description` and no `agent_transcript_path`
+on SubagentStart. The board takes the description from the `.meta.json`
+file of the agent. It derives the agent path from the main transcript
+path, the session id, and the agent id (§8.3). A logged `description`
+wins over the meta file when a later Claude Code sends it.
+
 ### 8.2 Routes
 
 `GET /api/item?kind=<kind>&file=<name>`
@@ -373,10 +379,23 @@ Source of truth: the Claude Code transcripts under
 `<session_id>.jsonl`. A subagent transcript is
 `<session_id>/subagents/agent-<agent_id>.jsonl` with a sibling
 `.meta.json` that holds `agentType`, `description`, and `model`. The hook
-input gives both paths, so the board never derives the slug.
+input gives the main path. The board derives the agent path from it.
 
 Containment under a second root:
 
+- Project folder: a main transcript must sit directly in
+  `<SESSION_ROOT>/<projectSlug>/`. `projectSlug` is `realpath(projectDir)`
+  with each character that is not a letter or a digit replaced by `-`.
+  Other folders give the reason `other project`. Paths such as `/a/b-c`,
+  `/a/b/c`, and `/a/b.c` map to one slug, so the gate treats them as one
+  project. Known limit: a session that starts in a subdirectory or a
+  worktree, or a slug that Claude Code shortens, is refused as `other
+  project`, and the tokens fact falls back to the state file.
+- Derived agent path: the only allowed agent path is
+  `dirname(main)/<session_id>/subagents/agent-<agent_id>.jsonl`. A
+  SubagentStop `agent_transcript_path` must equal it. Else the agent is
+  refused with `agent id mismatch` or `foreign session`. The meta file
+  passes the same gate.
 - `SESSION_ROOT = realpath(~/.claude/projects)`. Every path from the event
   log must resolve under it, through `containedReal` with that root.
 - The main transcript name must be `<uuid>.jsonl`. An agent transcript
@@ -395,12 +414,18 @@ Token sum:
 
 - Count lines with `type: "assistant"` and `message.usage`, with
   `timestamp >= state.startedAt`.
-- Lines repeat the same `usage` for every content block of one turn.
-  Dedupe by `message.id`.
+- Lines repeat `usage` for every content block of one turn, and
+  `output_tokens` grows on later lines. Dedupe by `message.id` and keep the
+  last line of an id.
+- Workflow sessions only: a session counts when, at or after
+  `startedAt`, its log shows a SubagentStart or SubagentStop with an
+  `agent_type`, or a write to `current-workflow.json`. Stop lines alone do
+  not qualify. A parallel session of the same project stays out of the
+  sum.
 - `spent = input_tokens + cache_creation_input_tokens +
   cache_read_input_tokens + output_tokens`. Keep the four parts for the
   tooltip.
-- Sum the main transcript of every session seen in the log since
+- Sum the main transcript of every workflow session since
   `startedAt`, plus every agent transcript of those sessions.
 - Per agent: the same sum over its own transcript.
 
@@ -423,22 +448,35 @@ The `tokens spent` fact shows, in this order:
    latest reminder, which is the cause of problem 3.
 3. `—`.
 
-Step attribution is a pure function `attributeAgents(agents, progress)`:
+Step attribution is a pure function `attributeAgents(agents, progress)`. It
+returns `{ [stepId]: [agent_id, ...] }`, start ascending. Only agents with a
+valid `agent_id` and a start time count. The type is `agent_type` without
+`constellation:`.
 
-| Agent type | Step ids, in run order |
-|------------|------------------------|
-| software-architect | architect, architect-verify |
-| software-engineer, frontend-engineer | engineer |
-| code-reviewer, security-analyst, dx-analyst, cross-model-reviewer | parallel-gate-1, review-gate |
+| Agent type | Candidate steps, in track order |
+|------------|---------------------------------|
+| software-architect | architect, architect-feasibility, architect-verify |
+| product-manager | product-manager, architect |
+| software-engineer, frontend-engineer, ui-ux-designer | engineer |
+| code-reviewer, security-analyst, dx-analyst | parallel-gate-1, review-gate |
+| cross-model-reviewer | plan-review, parallel-gate-1, review-gate |
 | sdet, technical-writer | parallel-gate-2, sdet |
 | devops-engineer | devops-branch, devops-pr |
-| product-manager | product-manager |
-| ui-ux-designer | engineer |
 
-The function keeps only step ids present in `progress.steps`. When a type
-maps to two present steps, runs attach in start order: the first run to
-the first step, later runs to the second. Fix-loop reruns of a gate attach
-to the gate. The function is deterministic and has no time window logic.
+Algorithm:
+
+1. `present` is the candidate steps that `progress.steps` holds, in track
+   order. When none is present, the run is not attributed.
+2. When one step is present, the run attaches to it (pass 1).
+3. When two or more are present (pass 2), walk them from the last to the
+   second. The run attaches to `s[k]` when a pass-1 run, attributed to a
+   step strictly between `s[k-1]` and `s[k]`, started before it. Else the
+   run attaches to `s[0]`.
+4. The function has no time window. Ties in start time keep the event
+   order.
+
+A wrong guess shows a report under a neighbor step. It never hides a
+report, because the agent row still opens it.
 
 ## 9. Pause and resume (phase 026)
 
