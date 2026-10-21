@@ -35,6 +35,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   text. Without the vendor file, the board logs one line and shows
   bodies as plain text.
 - Snapshot nodes carry `title`, the first H1 of the file (#023).
+- **The backlog is a table with search and filters** (#024). Columns are
+  ID, Title, Type, Status, Feature, Epic, Plan, and Updated. The search
+  matches the id, title, file, type, status, feature title, and epic
+  title. Status chips show the count per status. Done and dropped start
+  off. Type chips and a Kind control (Tasks, Features, Epics) narrow the
+  list. A count next to the Kind control reads `<shown> of <total>`. A
+  banner counts the items that need attention and filters to them. The
+  filters and the search live in the URL hash, so a reload keeps them. At
+  phone width, the Epic, Plan, and Updated columns hide.
+- **Epic, feature, and task detail views** (#024). A click on a row, a
+  Feature cell, or an Epic cell opens `#/item/<kind>/<file>`. The view
+  shows a breadcrumb, the header, the rendered body, and the children:
+  the tasks of a feature, or the features and tasks of an epic. A task
+  view shows its plan with View plan, and its `related:` tasks as links.
+  Browser Back returns to the filtered table.
+- **Links between work items open inside the board** (#024). A body link
+  to a task, feature, epic, or plan that the tree holds opens its view or
+  the plan dialog. Any other relative link stays without `href`.
+- **Open task in the Now panel** (#024). It opens the detail view of the
+  in-flight task. It is disabled, with the reason, when no task is in
+  flight.
+- `GET /api/item` also serves the kinds `epic` and `feature` (#024).
+- Snapshot nodes carry `created`, `edited`, and `related`. Epic, feature,
+  and plan nodes carry `mtime` (#024).
 
 ### Changed
 - **The Agents card fits the viewport** (#022). It is at most
@@ -51,7 +75,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `scripts/board-ui/`. The CSP hashes still cover the served text.
 - The CSP `script-src` lists two hashes: the vendor block and the page
   script (#023).
-- The board test count grows from 138 to 192 (#022, #023).
+- The backlog tree is gone (#024). Its facts move to the table: the
+  in-flight `▶ <step>` marker, the warnings in the row title, and one line
+  for plans without a task.
+- Every response carries `referrer-policy: no-referrer` (#030).
+- The board test count grows from 138 to 242 (#022, #023, #024).
 
 ### Fixed
 - **Board page markup guards from the task 022 review** (#029). A test
@@ -60,6 +88,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Show all` button shows all rows. A backlog status outside the known
   set gets the chip class `s-other` only. A non-string `agent_type` in
   `events.jsonl` renders as text and does not stop the Agents card.
+- **Board page robustness from the task 023 review** (#030). A failed
+  body fetch retries on the next snapshot or reconnect. A new in-flight
+  task shows `loading` in place of the old body. An older fetch reply
+  never replaces a newer one. A test runs every render export in an
+  isolated context.
+- **One title rule and one chip-class picker** (#031). A parity test
+  holds the title rule of the model and of the renderer together. One
+  `chipClass` helper picks every status chip class.
+- **Board search and keyboard focus from the task 024 review** (#024). The
+  search timer yields to navigation. Keyboard focus survives repaints and
+  does not scroll the page. The board does not fetch a task that the tree
+  does not hold.
 
 ## [1.3.4] - 2026-10-15
 
