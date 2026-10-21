@@ -3290,6 +3290,27 @@ test('page.js: a failed detail body shows body unavailable with the header and c
 // Task 024 suggestions: search debounce vs navigation, focus after repaint, task outside the tree
 // ---------------------------------------------------------------------------
 
+test('page.js: Back from a detail view opened on a filtered table returns the same filters, search, and rows', async () => {
+  const filtered = `${FULL_STATUS_HASH}&q=board`;
+  const page = bootPage({ hash: filtered });
+  page.feed(pageSnapshot({ state: null, tree: filterPageTree() }));
+
+  page.clickOn('backlog-card', { href: '#/item/task/001-board.md' });
+  await flush();
+  assert.equal(page.hashchanges, 1, 'the row click pushes one history entry');
+  assert.equal(page.els['bl-item'].hidden, false, 'the detail view is open');
+  assert.deepEqual(page.replaced, [], 'nothing overwrote the filtered list entry');
+
+  page.els.q.value = '';
+  page.location.hash = filtered; // The browser Back button restores the earlier entry and fires hashchange.
+  await flush();
+
+  assert.equal(page.els['bl-item'].hidden, true, 'the detail view closes');
+  assert.equal(page.els['bl-list'].hidden, false, 'the table returns');
+  assert.equal(page.els.q.value, 'board', 'the search box refills from the hash');
+  assert.deepEqual(rowFiles(page.els.backlog.innerHTML), ['001-board.md'], 'the filters still apply: done shown, search board');
+});
+
 test('page.js: a click within the search debounce keeps the item route', async () => {
   const page = bootPage();
   page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
