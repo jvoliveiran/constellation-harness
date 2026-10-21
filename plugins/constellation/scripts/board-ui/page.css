@@ -125,7 +125,7 @@
   .tbl tbody tr:hover { background: var(--surface-2); }
   .tbl tr.inflight td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   .tbl a { color: var(--text); } .tbl td.col-feature a, .tbl td.col-epic a { color: var(--accent); }
-  .col-id { width: 64px; } .col-type { width: 76px; } .col-status { width: 120px; } .col-plan { width: 84px; } .col-updated { width: 96px; }
+  .col-id { width: 64px; } .col-type { width: 76px; } .col-status { width: 120px; } .col-plan { width: 96px; } .col-updated { width: 96px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-right: 4px; }
   .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 10px; } .crumbs a { color: var(--accent); }
   .item-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
@@ -133,8 +133,10 @@
   .related { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   #bl-item h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 8px; }
 
+  /* At phone width the fixed columns leave the Title about 30 px, so Type hides with Epic, Plan, and Updated and ID and Status narrow. */
   @media (max-width: 640px) {
-    .col-epic, .col-plan, .col-updated { display: none; }
+    .col-epic, .col-plan, .col-updated, .col-type { display: none; }
+    .col-id { width: 44px; } .col-status { width: 96px; }
   }
 
   @media (min-width: 1100px) {

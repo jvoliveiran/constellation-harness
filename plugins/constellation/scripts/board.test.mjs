@@ -2916,9 +2916,11 @@ const mediaBlock = (css, prelude) => {
 test('page.css: the phone width hides the Epic, Plan, and Updated columns and the table stays inside its card', () => {
   const css = uiText('page.css');
   const phone = mediaBlock(css, '@media (max-width: 640px)');
-  for (const column of ['.col-epic', '.col-plan', '.col-updated']) {
+  // Type hides too: with Type, Status, and ID at their desktop widths the Title keeps about 30 px at 390 px.
+  for (const column of ['.col-epic', '.col-plan', '.col-updated', '.col-type']) {
     assert.ok(ruleBodies(phone, column).some((body) => body.includes('display: none')), `${column} stays at 640 px`);
   }
+  assert.ok(ruleBodies(phone, '.col-status').join(' ').includes('width: 96px'), 'Status narrows on a phone');
   const table = ruleBodies(css, '.tbl').join(' ');
   assert.ok(table.includes('table-layout: fixed') && table.includes('width: 100%'), table);
   assert.ok(ruleBodies(css, '.tbl td').join(' ').includes('overflow-wrap: anywhere'), 'a long cell does not wrap');
