@@ -2350,7 +2350,7 @@ const pageTree = (...extra) => buildTree([
   mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
 ], null);
 const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
-  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null,
+  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null, tokens: { source: 'none', spent: null }, attribution: {},
   progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
 });
 
@@ -3741,4 +3741,136 @@ test('page.css: agent rows and done steps have button rules with a visible focus
   assert.ok(ruleBodies(css, 'button.step:focus-visible').length > 0);
   assert.ok(ruleBodies(css, 'button.step').some((b) => b.includes('cursor: pointer')));
   assert.ok(ruleBodies(css, '.ablock').length > 0 && ruleBodies(css, '.dlg-body').some((b) => b.includes('overflow: auto')));
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: page runtime (agent and step dialogs, shared dialog state, live repaint)
+// ---------------------------------------------------------------------------
+
+const PA = { a: AGENT_ID_A, b: runId(2), running: runId(3) };
+const pageAgentList = () => [
+  { agent_id: PA.running, agent_type: 'constellation:software-engineer', start: '2026-10-21T09:20:00Z', end: null, running: true, durationSec: null, transcript: true, description: null, model: null },
+  { agent_id: PA.b, agent_type: 'constellation:software-architect', start: '2026-10-21T09:10:00Z', end: '2026-10-21T09:11:00Z', running: false, durationSec: 60, transcript: true, description: 'STEP-B', model: 'opus' },
+  { agent_id: PA.a, agent_type: 'constellation:software-architect', start: '2026-10-21T09:05:00Z', end: '2026-10-21T09:06:00Z', running: false, durationSec: 60, transcript: true, description: 'AGENT-A', model: 'opus' },
+];
+const agentSnapshot = (attribution = { architect: [PA.a, PA.b] }) => ({ ...pageSnapshot(), agents: pageAgentList(), attribution });
+const apiReplyFor = (url) => {
+  const agent = pageAgentList().find((a) => url.endsWith(`id=${a.agent_id}`));
+  return { ...agent, id: agent.agent_id, usage: { spent: 5, input: 1, cache: 1, output: 3 }, report: `# R ${agent.description}`, truncated: false, error: null };
+};
+const pageApi = (url) => (url.startsWith('/api/agent') ? apiReplyFor(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` });
+
+test('page: a click on a finished agent row opens #/agent/<id> and renders the reply', async () => {
+  const page = bootPage({ reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  assert.equal(page.location.hash, `#/agent/${PA.a}`);
+  await flush();
+  assert.deepEqual(page.fetches.filter((u) => u.startsWith('/api/agent')), [`/api/agent?id=${PA.a}`]);
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(page.els.dialog.innerHTML.includes('id="dialog-title"') && page.els.dialog.innerHTML.includes('R(# R AGENT-A)'), page.els.dialog.innerHTML);
+  page.feed(agentSnapshot());
+  await flush();
+  assert.equal(page.fetches.filter((u) => u.startsWith('/api/agent')).length, 1, 'a new snapshot does not refetch');
+  const running = bootPage({ hash: `#/agent/${PA.running}`, reply: pageApi });
+  running.feed(agentSnapshot());
+  await flush();
+  assert.equal(running.els.dialog.showModals, 0, 'a running agent opens no dialog');
+  assert.deepEqual(running.fetches.filter((u) => u.startsWith('/api/agent')), []);
+});
+
+test('page: a failed agent fetch keeps the header facts and says that the transcript is not available', async () => {
+  const page = bootPage({ reply: (url) => (url.startsWith('/api/agent') ? { error: 500 } : pageApi(url)) });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('Transcript not available (500)') && page.els.dialog.innerHTML.includes('AGENT-A'), page.els.dialog.innerHTML);
+});
+
+test('page: closing an agent dialog returns to the route before it', async () => {
+  const page = bootPage({ hash: '#/backlog?kind=feature', reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/backlog?kind=feature');
+  assert.equal(page.replaced.at(-1), '#/backlog?kind=feature');
+  const plan = bootPage({ reply: pageApi });
+  plan.feed(agentSnapshot());
+  plan.clickOn('now-actions', { action: 'view-plan', file: '023-x.md' });
+  await flush();
+  plan.els.dialog.close();
+  assert.equal(plan.location.hash, '#/', 'the plan dialog still returns to its route');
+});
+
+test('page: a done step opens #/step/<id> and fetches each attributed agent', async () => {
+  const page = bootPage({ reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  assert.equal(page.location.hash, '#/step/architect');
+  await flush();
+  assert.deepEqual(page.fetches.filter((u) => u.startsWith('/api/agent')).sort(), [`/api/agent?id=${PA.a}`, `/api/agent?id=${PA.b}`].sort());
+  const html = page.els.dialog.innerHTML;
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(html.indexOf('AGENT-A') < html.indexOf('STEP-B'), html);
+  assert.ok(html.includes('📐') || html.includes('Plan') || html.includes('Architect'), html);
+  const pending = bootPage({ hash: '#/step/lint-gate', reply: pageApi });
+  pending.feed(agentSnapshot({ architect: [PA.a], 'lint-gate': [PA.b] }));
+  await flush();
+  assert.equal(pending.els.dialog.showModals, 0);
+  assert.deepEqual(pending.fetches.filter((u) => u.startsWith('/api/agent')), []);
+});
+
+test('page: a reply for an earlier dialog after a later one opened is dropped', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(agentSnapshot({ architect: [PA.b] }));
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  await flush();
+  page.resolve(`/api/agent?id=${PA.b}`, apiReplyFor(`/api/agent?id=${PA.b}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('STEP-B'), page.els.dialog.innerHTML);
+  page.resolve(`/api/agent?id=${PA.a}`, apiReplyFor(`/api/agent?id=${PA.a}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('STEP-B') && !page.els.dialog.innerHTML.includes('AGENT-A'), page.els.dialog.innerHTML);
+});
+
+test('page: a snapshot repaint keeps the focus on a step button and an agent row, and the agents scroll offset', async () => {
+  const page = bootPage({ reply: pageApi });
+  const focused = [];
+  const control = (name, action, value) => ({
+    name, getAttribute: (n) => ({ 'data-action': action, 'data-value': value })[n] ?? null, focus: (options) => focused.push([name, options.preventScroll]),
+  });
+  const oldStep = control('old step', 'open-step', 'architect');
+  const oldRow = control('old row', 'open-agent', PA.a);
+  page.els.now.contains = (el) => el === oldStep;
+  page.els.now.querySelectorAll = () => [control('other step', 'open-step', 'x'), control('new step', 'open-step', 'architect')];
+  page.els.agents.contains = (el) => el === oldRow;
+  page.els.agents.querySelectorAll = () => [control('new row', 'open-agent', PA.a)];
+  Object.defineProperty(page.els.agents, 'innerHTML', { get() { return this.html ?? ''; }, set(v) { this.html = v; this.scrollTop = 0; } });
+  page.els.agents.scrollTop = 120;
+  page.document.activeElement = oldStep;
+  page.feed(agentSnapshot());
+  assert.deepEqual(focused, [['new step', true]]);
+  assert.equal(page.els.agents.scrollTop, 120);
+  page.document.activeElement = oldRow;
+  page.feed(agentSnapshot());
+  assert.deepEqual(focused.at(-1), ['new row', true]);
+  assert.equal(page.els.agents.scrollTop, 120);
+});
+
+test('page: a late step reply after a later agent dialog opened is dropped', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(agentSnapshot({ architect: [PA.b] }));
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  await flush();
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  page.resolve(`/api/agent?id=${PA.a}`, apiReplyFor(`/api/agent?id=${PA.a}`));
+  await flush();
+  page.resolve(`/api/agent?id=${PA.b}`, apiReplyFor(`/api/agent?id=${PA.b}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('AGENT-A') && !page.els.dialog.innerHTML.includes('STEP-B'), page.els.dialog.innerHTML);
 });

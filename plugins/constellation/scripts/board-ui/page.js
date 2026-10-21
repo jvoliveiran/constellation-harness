@@ -9,7 +9,7 @@
   var itemBodyHtml = null;          // the rendered body of the open detail view; null while it loads
   var lastListHash = '#/';          // the Backlog target of the breadcrumb: the last list the page showed
   var searchTimer = null;
-  var dialogFile = null, dialogSeq = 0, routeBefore = null;
+  var dialogKey = null, dialogSeq = 0, routeBefore = null;   // dialogKey: plan:<file>, agent:<id>, or step:<id>
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); };
   var hhmm = function (iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d) ? '—' : d.toTimeString().slice(0, 8); };
   var fmtDur = function (sec) { if (sec == null) return ''; if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; };
@@ -41,13 +41,15 @@
     var s = snap.state;
     var tasks = snap.tree ? snap.tree.tasks : [];
     var task = s && s.task ? tasks.filter(function (t) { return t.file === s.task; })[0] || null : null;
-    document.getElementById('now').innerHTML = renderNow({
-      state: s, progress: snap.progress, task: task, tokenDelta: snap.tokenDelta, projectDir: snap.projectDir,
-      hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok, since: since,
-    }, esc);
+    keepFocus(document.getElementById('now'), function () {
+      document.getElementById('now').innerHTML = renderNow({
+        state: s, progress: snap.progress, task: task, tokens: snap.tokens, attribution: snap.attribution, projectDir: snap.projectDir,
+        hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok, since: since,
+      }, esc);
+    });
     document.getElementById('now-errs').innerHTML = snap.errors && snap.errors.length ? snap.errors.map(esc).join('<br>') : '';
     var actions = document.getElementById('now-actions');
-    actions.innerHTML = renderNowActions({ state: s, tree: snap.tree }, esc);
+    keepFocus(actions, function () { actions.innerHTML = renderNowActions({ state: s, tree: snap.tree }, esc); });
     actions.hidden = !s;
     document.getElementById('desc').hidden = !(s && s.task);
     syncTaskBody(task);
@@ -106,7 +108,7 @@
   }
 
   function openPlan(file, dialog) {
-    dialogFile = file;
+    dialogKey = 'plan:' + file;
     var seq = ++dialogSeq;
     loadItem('plan', file).then(function (item) {
       if (seq !== dialogSeq) return;
@@ -115,16 +117,89 @@
     });
   }
 
-  // The route decides the dialog. A plan route that the tree does not hold shows the overview and keeps the hash.
+  function loadAgent(id) {
+    return fetch('/api/agent?id=' + id)
+      .then(function (r) { return r.ok ? r.json() : { error: r.status }; })
+      .catch(function () { return { error: 'network' }; });
+  }
+
+  function finishedAgent(id) {
+    return (snap.agents || []).filter(function (a) { return a.agent_id === id && !a.running; })[0] || null;
+  }
+
+  // A failed fetch has no report: keep the facts that the snapshot holds, so the header still names the run.
+  function replyWithFacts(agent, reply) {
+    if (reply && reply.id) return reply;
+    return {
+      id: agent.agent_id, agent_type: agent.agent_type, description: agent.description, model: agent.model, start: agent.start,
+      end: agent.end, durationSec: agent.durationSec, usage: null, report: null, truncated: false, error: reply ? reply.error : 'network',
+    };
+  }
+
+  function dialogView(extra) {
+    var view = { markdownit: window.markdownit, tree: snap.tree, hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok };
+    for (var key in extra) view[key] = extra[key];
+    return view;
+  }
+
+  function openAgent(agent, dialog) {
+    dialogKey = 'agent:' + agent.agent_id;
+    var seq = ++dialogSeq;
+    loadAgent(agent.agent_id).then(function (reply) {
+      if (seq !== dialogSeq) return;
+      dialog.innerHTML = renderAgentDialog(dialogView({ reply: replyWithFacts(agent, reply) }), esc);
+      if (!dialog.open) dialog.showModal();
+    });
+  }
+
+  // The agents of a done step, from the attribution of the snapshot. Empty when the step is not done.
+  function stepAgents(id) {
+    var steps = snap.progress ? snap.progress.steps : [];
+    var step = steps.filter(function (st) { return st.id === id && st.state === 'done'; })[0];
+    var ids = step && snap.attribution && Object.prototype.hasOwnProperty.call(snap.attribution, id) ? snap.attribution[id] : [];
+    return { step: step || null, agents: ids.map(finishedAgent).filter(Boolean) };
+  }
+
+  function openStep(id, found, dialog) {
+    dialogKey = 'step:' + id;
+    var seq = ++dialogSeq;
+    Promise.all(found.agents.map(function (agent) {
+      return loadAgent(agent.agent_id).then(function (reply) { return replyWithFacts(agent, reply); });
+    })).then(function (replies) {
+      if (seq !== dialogSeq) return;
+      dialog.innerHTML = renderStepDialog(dialogView({ step: { id: id, emoji: found.step.emoji, label: found.step.label }, replies: replies }), esc);
+      if (!dialog.open) dialog.showModal();
+    });
+  }
+
+  function isDialogView(view) { return view === 'plan' || view === 'agent' || view === 'step'; }
+
+  // The route before the first dialog is where Esc returns. A dialog opened from a dialog keeps it.
+  function openDialogRoute(hash) {
+    if (!isDialogView(parseRoute(location.hash).view)) routeBefore = location.hash || '#/';
+    location.hash = hash;
+  }
+
+  // The route decides the dialog. A plan, agent, or step route that the snapshot does not hold shows the overview and keeps the hash.
   function syncRoute() {
     var route = parseRoute(location.hash);
     var dialog = document.getElementById('dialog');
     if (route.view === 'plan' && treeHolds(snap.tree, 'plan', route.file)) {
-      if (dialogFile !== route.file) openPlan(route.file, dialog);
+      if (dialogKey !== 'plan:' + route.file) openPlan(route.file, dialog);
+      return;
+    }
+    var agent = route.view === 'agent' ? finishedAgent(route.id) : null;
+    if (agent) {
+      if (dialogKey !== 'agent:' + route.id) openAgent(agent, dialog);
+      return;
+    }
+    var found = route.view === 'step' ? stepAgents(route.id) : null;
+    if (found && found.agents.length) {
+      if (dialogKey !== 'step:' + route.id) openStep(route.id, found, dialog);
       return;
     }
     dialogSeq++;
-    dialogFile = null;
+    dialogKey = null;
     if (dialog.open) dialog.close();
   }
 
@@ -133,8 +208,8 @@
   // This handler then replaces the hash, so the route never names a plan that the tree does not hold
   // and the plan does not reopen by itself when its file returns.
   function onDialogClose() {
-    dialogFile = null;
-    if (parseRoute(location.hash).view === 'plan') {
+    dialogKey = null;
+    if (isDialogView(parseRoute(location.hash).view)) {
       history.replaceState(null, '', routeBefore || '#/');
       routeBefore = null;
       if (snap) syncRoute();
@@ -144,35 +219,38 @@
   // The route decides the card: a detail view for an item route that the tree holds, else the list. The plan
   // dialog keeps the view behind it. An item route that the tree does not hold shows the list and keeps the hash.
   function renderBacklogCard() {
-    keepFocus(paintBacklogCard);
+    keepFocus(document.getElementById('backlog-card'), paintBacklogCard, visibleBacklogPane);
   }
 
-  // A repaint replaces the focused chip or link. Record its stable key first, then focus the match after the repaint.
-  function keepFocus(repaint) {
-    var card = document.getElementById('backlog-card');
+  // The hidden list keeps its old anchors, so only the visible pane can hold the match.
+  function visibleBacklogPane() {
+    return document.getElementById(document.getElementById('bl-item').hidden ? 'bl-list' : 'bl-item');
+  }
+
+  // A repaint replaces the focused chip, link, or button. Record its stable key first, then focus the match after
+  // the repaint. container holds the focus; scope() names the element that holds the match (default: container).
+  // An action with no data-value matches the first element of that action.
+  function keepFocus(container, repaint, scope) {
     var active = document.activeElement;
     var key = null;
-    if (active && active.getAttribute && card.contains && card.contains(active)) {
+    if (active && active.getAttribute && container.contains && container.contains(active)) {
       var action = active.getAttribute('data-action'), href = active.getAttribute('href');
-      if (action || href) key = { action: action, value: active.getAttribute('data-value'), href: href };
+      if (action || href) key = { action: action, value: active.getAttribute('data-value'), file: active.getAttribute('data-file'), href: href };
     }
     repaint();
     if (!key) return;
-    // The hidden list keeps its old anchors, so only the visible container can hold the match. An action
-    // with no data-value matches the first element of that action.
-    var visible = document.getElementById(document.getElementById('bl-item').hidden ? 'bl-list' : 'bl-item');
-    var candidates = visible.querySelectorAll('[data-action], a[href]');
+    var candidates = (scope ? scope() : container).querySelectorAll('[data-action], a[href]');
     for (var i = 0; i < candidates.length; i++) {
       var c = candidates[i];
       var same = key.action
-        ? c.getAttribute('data-action') === key.action && c.getAttribute('data-value') === key.value
+        ? c.getAttribute('data-action') === key.action && c.getAttribute('data-value') === key.value && c.getAttribute('data-file') === key.file
         : c.getAttribute('href') === key.href;
       if (same) { c.focus({ preventScroll: true }); return; }
     }
   }
 
   function paintBacklogCard() {
-    var listHash = parseRoute(location.hash).view === 'plan' ? (routeBefore || '#/') : location.hash;
+    var listHash = isDialogView(parseRoute(location.hash).view) ? (routeBefore || '#/') : location.hash;
     var shown = parseRoute(listHash);
     if (shown.view === 'item' && treeHolds(snap.tree, shown.kind, shown.file)) showItem(shown);
     else showList(listHash, shown);
@@ -184,7 +262,7 @@
       itemBodyHtml = item.error
         ? '<p class="muted">body unavailable (' + esc(item.error) + ')</p>'
         : renderItemBody(item, window.markdownit, esc, snap.tree);
-      keepFocus(function () { paintItem(shown); });
+      keepFocus(document.getElementById('backlog-card'), function () { paintItem(shown); }, visibleBacklogPane);
     };
     if (syncBody(itemSlot, shown.kind, shown.file, node.mtime, onReply)) itemBodyHtml = null;
     document.getElementById('bl-list').hidden = true;
@@ -226,16 +304,11 @@
     }
     if (target.closest('[data-action="reset"]')) { document.getElementById('q').value = ''; writeList(parseBacklogRoute('')); return; }
     var plan = target.closest('[data-action="view-plan"]');
-    if (plan) { openPlanRoute(plan.getAttribute('data-file')); return; }
+    if (plan) { openDialogRoute('#/plan/' + plan.getAttribute('data-file')); return; }
     if (target.closest('a[href]')) return; // the browser follows the anchor and pushes the history entry
     var row = target.closest('tr[data-href]');
     var href = row ? row.getAttribute('data-href') : null;
     if (href && parseRoute(href).view === 'item') location.hash = href;
-  }
-
-  function openPlanRoute(file) {
-    routeBefore = location.hash || '#/';
-    location.hash = '#/plan/' + file;
   }
 
   function onSearchInput() {
@@ -270,7 +343,10 @@
     } else {
       html = renderAgents({ agents: snap.agents, showAll: showAllAgents, hhmm: hhmm, fmtDur: fmtDur }, esc) + renderActivity(activity);
     }
-    document.getElementById('agents').innerHTML = html;
+    var box = document.getElementById('agents');
+    var top = box.scrollTop;
+    keepFocus(box, function () { box.innerHTML = html; });
+    box.scrollTop = top;
   }
 
   function renderActivity(activity) {
@@ -314,13 +390,21 @@
   document.getElementById('theme').addEventListener('click', toggleTheme);
   document.getElementById('agents').addEventListener('click', function (ev) {
     // closest: a click on a child of the button still counts.
-    if (ev.target && ev.target.closest && ev.target.closest('[data-action="show-all"]')) { showAllAgents = true; render(); }
+    var target = ev.target;
+    if (!target || !target.closest) return;
+    if (target.closest('[data-action="show-all"]')) { showAllAgents = true; render(); return; }
+    var open = target.closest('[data-action="open-agent"]');
+    if (open) openDialogRoute('#/agent/' + open.getAttribute('data-value'));
+  });
+  document.getElementById('now').addEventListener('click', function (ev) {
+    var open = ev.target && ev.target.closest ? ev.target.closest('[data-action="open-step"]') : null;
+    if (open) openDialogRoute('#/step/' + open.getAttribute('data-value'));
   });
   document.getElementById('now-actions').addEventListener('click', function (ev) {
     var target = ev.target;
     if (!target || !target.closest) return;
     var plan = target.closest('[data-action="view-plan"]');
-    if (plan) { openPlanRoute(plan.getAttribute('data-file')); return; }
+    if (plan) { openDialogRoute('#/plan/' + plan.getAttribute('data-file')); return; }
     var task = target.closest('[data-action="open-task"]');
     if (!task) return;
     location.hash = '#/item/task/' + task.getAttribute('data-file');
