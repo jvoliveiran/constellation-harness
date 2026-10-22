@@ -207,6 +207,7 @@ say "10. git guard destructive-discard checked"
 #     needs jq (it self-skips otherwise); the board tests need Node 20+. Without Node 20+ they
 #     are skipped locally, but FAIL when CI=true so a missing Node cannot pass silently.
 bash "$ROOT/plugins/constellation/scripts/log-event.test.sh" >/dev/null 2>&1 || fail "log-event.sh tests"
+bash "$ROOT/plugins/constellation/scripts/pause-guard.test.sh" >/dev/null 2>&1 || fail "pause-guard.sh tests"
 if command -v node >/dev/null 2>&1 && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 20')" = "true" ]; then
   node --test "$ROOT"/plugins/constellation/scripts/*.test.mjs >/dev/null 2>&1 || fail "board.mjs tests (node --test)"
   for f in board.mjs board-model.mjs board-render.mjs board-ui/page.js; do
