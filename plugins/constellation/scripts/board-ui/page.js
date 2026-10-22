@@ -3,6 +3,7 @@
   var snap = null;
   var showAllAgents = false;
   var connected = false, lostAt = null;
+  var controlBusy = false, toastTimer = null;     // one Pause or Resume request at a time; one toast timer
   // The task body, the detail body, and the plan dialog each remember what they show. A reply writes the DOM only when it is still the newest request.
   function newSlot() { return { key: null, mtime: null, failed: false, seq: 0 }; }
   var taskSlot = newSlot(), itemSlot = newSlot();
@@ -33,6 +34,7 @@
     if (!snap.hasTracks) meta += '<span class="chip warn">tracks.json missing</span>';
     if (snap.stale) meta += '<span class="chip warn">stale — state file unreadable, showing last good</span>';
     if (!connected && lostAt) meta += '<span class="chip warn">disconnected since ' + hhmm(new Date(lostAt).toISOString()).slice(0, 5) + ' — showing last data</span>';
+    if (connected) meta += '<span class="chip ok live">● live</span>';
     meta += '<span>updated ' + hhmm(snap.at) + '</span>';
     document.getElementById('meta').innerHTML = meta;
   }
@@ -44,7 +46,7 @@
     keepFocus(document.getElementById('now'), function () {
       document.getElementById('now').innerHTML = renderNow({
         state: s, progress: snap.progress, task: task, tokens: snap.tokens, attribution: snap.attribution, projectDir: snap.projectDir,
-        hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok, since: since,
+        hhmm: hhmm, fmtDur: fmtDur, fmtTok: fmtTok, since: since, control: snap.control,
       }, esc);
     });
     document.getElementById('now-errs').innerHTML = snap.errors && snap.errors.length ? snap.errors.map(esc).join('<br>') : '';
@@ -53,6 +55,37 @@
     actions.hidden = !s;
     document.getElementById('desc').hidden = !(s && s.task);
     syncTaskBody(task);
+  }
+
+  // The toast shows for 4 s. A new toast replaces the text and restarts the timer.
+  function showToast(text) {
+    var toast = document.getElementById('toast');
+    toast.textContent = text;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.hidden = true; }, 4000);
+  }
+
+  var CONTROL_DONE = { pause: 'Paused. The session stops at its next tool call.', resume: 'Resumed. A held tool call continues at once.' };
+
+  // The header changes only through the next snapshot: a 403 or a 409 leaves it as it was.
+  function sendControl(action, button) {
+    if (controlBusy) return;
+    controlBusy = true;
+    button.disabled = true;
+    fetch('/api/control', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board-token': snap ? snap.csrf : '' },
+      body: JSON.stringify({ action: action }),
+    }).then(function (r) {
+      if (r.status === 204) { showToast(CONTROL_DONE[action]); return null; }
+      return r.text().then(function (reason) { showToast(r.status + ': ' + reason); });
+    }).catch(function () {
+      showToast('network error');
+    }).then(function () {
+      controlBusy = false;
+      button.disabled = false;
+    });
   }
 
   function loadItem(kind, file) {
@@ -397,7 +430,11 @@
     if (open) openDialogRoute('#/agent/' + open.getAttribute('data-value'));
   });
   document.getElementById('now').addEventListener('click', function (ev) {
-    var open = ev.target && ev.target.closest ? ev.target.closest('[data-action="open-step"]') : null;
+    var target = ev.target;
+    if (!target || !target.closest) return;
+    var control = target.closest('[data-action="pause"], [data-action="resume"]');
+    if (control) { sendControl(control.getAttribute('data-action'), control); return; }
+    var open = target.closest('[data-action="open-step"]');
     if (open) openDialogRoute('#/step/' + open.getAttribute('data-value'));
   });
   document.getElementById('now-actions').addEventListener('click', function (ev) {

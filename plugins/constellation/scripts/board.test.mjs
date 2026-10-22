@@ -18,7 +18,7 @@ import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
   renderSteps, renderAgentHead, renderAgentReport, renderAgentDialog, renderStepDialog,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
-  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
+  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView, renderPauseControl,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import { createSessionReader } from './board-session.mjs';
@@ -1990,7 +1990,8 @@ const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${na
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 // deferred: fetch returns a promise that the test settles with page.resolve(url, item, nth). Timers wait for page.runTimers().
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false } = {}) => {
+// control: the reply of POST /api/control ({ status, text }, or 'network' for a rejected fetch). holdControl: the test settles it with page.settleControl.
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false, control = { status: 204, text: '' }, holdControl = false } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
@@ -2025,14 +2026,22 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
   const fetches = [];
   const pending = {};
   const respond = (item) => (item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
-  const fetchStub = (url) => {
+  const controlPosts = [];
+  const controlHolds = [];
+  const settle = (r) => (r === 'network' ? Promise.reject(new Error('network')) : Promise.resolve({ status: r.status, ok: r.status < 300, text: async () => r.text }));
+  const fetchStub = (url, options) => {
     fetches.push(url);
+    if (url === '/api/control') {
+      controlPosts.push(options);
+      if (holdControl) return new Promise((resolve, reject) => controlHolds.push((r) => settle(r).then(resolve, reject)));
+      return settle(control);
+    }
     if (deferred) return new Promise((resolve) => { (pending[url] ??= []).push((item) => resolve(respond(item))); });
     return Promise.resolve(respond(reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` }));
   };
   const timers = [];
   let timerId = 0;
-  const setTimeoutStub = (fn) => { timers.push({ id: (timerId += 1), fn }); return timerId; };
+  const setTimeoutStub = (fn, ms) => { timers.push({ id: (timerId += 1), fn, ms }); return timerId; };
   const clearTimeoutStub = (id) => { const at = timers.findIndex((t) => t.id === id); if (at >= 0) timers.splice(at, 1); };
   const sources = [];
   const sandbox = {
@@ -2044,14 +2053,16 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
   const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
   // A click whose target answers closest() for one data-action selector, or for tr[data-href].
   const clickOn = (id, { action, value, file, href } = {}) => {
-    const element = { getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href })[name] ?? null };
-    const closest = (selector) => ((action && selector === `[data-action="${action}"]`) || (href && selector === 'tr[data-href]') ? element : null);
+    const element = { disabled: false, getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href, 'data-action': action })[name] ?? null };
+    const closest = (selector) => ((action && selector.split(', ').includes(`[data-action="${action}"]`)) || (href && selector === 'tr[data-href]') ? element : null);
     els[id].handlers.click({ target: { closest } });
+    return element;
   };
   return {
     document, attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
     runTimers: () => { while (timers.length) timers.shift().fn(); },
     resolve: (url, item, nth = 0) => pending[url][nth](item),
+    controlPosts, settleControl: (r, nth = 0) => controlHolds[nth](r), get timers() { return timers; },
     get hashchanges() { return hashchanges; },
   };
 };
@@ -2349,9 +2360,9 @@ test('renderPlanDialog: the header shows title, file, status chip, task id, and 
 const pageTree = (...extra) => buildTree([
   mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
 ], null);
-const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
+const pageSnapshot = ({ state = nowState, tree = pageTree(), ...extra } = {}) => ({
   projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null, tokens: { source: 'none', spent: null }, attribution: {},
-  progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
+  progress: state ? resolveSteps(state, tracks, planReviewOff) : null, ...extra,
 });
 
 test('page.js: a snapshot on #/plan/<file> fetches the plan and opens the dialog', async () => {
@@ -2491,8 +2502,9 @@ const ISOLATION_ARGS = {
   treeHolds: () => [rendererTree(), 'task', '001-open.md'],
   parseRoute: () => ['#/agent/a0e575badeb8675d0'],
   renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc, { architect: ['a0e575badeb8675d0'] }],
-  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] } }), esc],
+  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] }, control: { paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase: 'stopped' } }), esc],
   renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
+  renderPauseControl: () => [{ state: nowState, control: { paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase: 'holding' }, hhmm: stubHhmm }, esc],
   renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
   parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
   formatBacklogRoute: () => [parseBacklogRoute('#/backlog?type=fix&q=a')],
@@ -4281,4 +4293,145 @@ test('cli: Pause and Resume through the running board', async () => {
     assert.equal((await post('{"action":"resume"}')).status, 204);
     assert.ok(!fs.existsSync(controlFileOf(dir)));
   } finally { run.child.kill('SIGKILL'); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. Render and page.
+// ---------------------------------------------------------------------------
+
+const pausedControl = (phase) => ({ paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase });
+const clockOf = (iso) => iso.slice(11, 19);
+const pauseView = (control) => ({ state: nowState, control, hhmm: clockOf });
+
+test('renderPauseControl: no workflow, not paused, paused, holding, stopped', () => {
+  assert.equal(renderPauseControl({ state: null, control: pausedControl('paused'), hhmm: clockOf }, esc), '');
+  assert.equal(renderPauseControl({ state: null, control: { paused: false }, hhmm: clockOf }, esc), '');
+  const pause = '<button type="button" class="btn secondary" data-action="pause">⏸ Pause</button>';
+  assert.equal(renderPauseControl(pauseView({ paused: false, since: null, owner: null, phase: null }), esc), pause);
+  assert.equal(renderPauseControl(pauseView(undefined), esc), pause, 'a snapshot with no control reads as not paused');
+  const chip = '<span class="chip">⏸ paused since 14:02</span>';
+  const resume = '<button type="button" class="btn primary" data-action="resume">▶ Resume</button>';
+  assert.equal(renderPauseControl(pauseView(pausedControl('paused')), esc), chip + resume);
+  assert.equal(renderPauseControl(pauseView(pausedControl('holding')), esc),
+    `${chip}<span class="chip hold">holding — resume continues at once</span>${resume}`);
+  assert.equal(renderPauseControl(pauseView(pausedControl('stopped')), esc),
+    `${chip}<span class="chip warn">session stopped — type /constellation:resume after you resume</span>${resume}`);
+});
+
+test('renderPauseControl: the since time is escaped and cut to hh:mm', () => {
+  const html = renderPauseControl({ ...pauseView(pausedControl('paused')), hhmm: () => '<script>alert(1)</script>' }, esc);
+  assert.ok(!html.includes('<script>'), html);
+  assert.ok(html.includes('paused since &lt;'), html);
+  assert.ok(renderPauseControl(pauseView(pausedControl('paused')), esc).includes('since 14:02<'));
+});
+
+test('renderNow: the header holds the pause control', () => {
+  const head = (html) => html.slice(0, html.indexOf('<div class="strip">'));
+  assert.ok(head(renderNow(nowView(), esc)).includes('data-action="pause"'));
+  const paused = head(renderNow(nowView({ control: pausedControl('paused') }), esc));
+  assert.ok(paused.includes('data-action="resume"') && !paused.includes('data-action="pause"'), paused);
+  const empty = renderNow(nowView({ state: null, progress: null, control: pausedControl('paused') }), esc);
+  assert.ok(!empty.includes('data-action="pause"') && !empty.includes('data-action="resume"'), empty);
+});
+
+const pausedSnapshot = (extra = {}) => pageSnapshot({ csrf: 'f'.repeat(64), control: { paused: false, since: null, owner: null, phase: null }, ...extra });
+const nowHtml = (page) => page.els.now.innerHTML;
+
+test('page: Pause posts the action with the token and shows the toast', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  const before = nowHtml(page);
+  assert.ok(before.includes('data-action="pause"'));
+  const button = page.clickOn('now', { action: 'pause' });
+  assert.equal(button.disabled, true, 'the button is disabled during the request');
+  await flush();
+  assert.equal(page.controlPosts.length, 1);
+  const post = page.controlPosts[0];
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.headers)), { 'content-type': 'application/json', 'x-board-token': 'f'.repeat(64) });
+  assert.equal(post.body, '{"action":"pause"}');
+  assert.equal(page.els.toast.textContent, 'Paused. The session stops at its next tool call.');
+  assert.equal(page.els.toast.hidden, false);
+  assert.ok(page.timers.some((t) => t.ms === 4000), 'the toast hides after 4 s');
+  assert.equal(button.disabled, false);
+  assert.equal(nowHtml(page), before, 'the header changes only through the next snapshot');
+  page.runTimers();
+  assert.equal(page.els.toast.hidden, true);
+  page.feed(pausedSnapshot({ control: pausedControl('paused') }));
+  assert.ok(nowHtml(page).includes('data-action="resume"'));
+});
+
+test('page: a 403 or 409 reply shows the reason and keeps the header', async () => {
+  for (const [status, text] of [[403, 'token'], [409, 'not paused'], [409, 'already paused']]) {
+    const page = bootPage({ control: { status, text } });
+    page.feed(pausedSnapshot());
+    const before = nowHtml(page);
+    page.clickOn('now', { action: 'pause' });
+    await flush();
+    assert.equal(page.els.toast.textContent, `${status}: ${text}`);
+    assert.equal(nowHtml(page), before, `${status} ${text}: the header changed`);
+  }
+  const network = bootPage({ control: 'network' });
+  network.feed(pausedSnapshot());
+  const button = network.clickOn('now', { action: 'pause' });
+  await flush();
+  assert.equal(network.els.toast.textContent, 'network error');
+  assert.equal(button.disabled, false);
+});
+
+test('page: a second click during a request sends nothing', async () => {
+  const page = bootPage({ holdControl: true });
+  page.feed(pausedSnapshot());
+  page.clickOn('now', { action: 'pause' });
+  page.clickOn('now', { action: 'pause' });
+  assert.equal(page.controlPosts.length, 1);
+  page.settleControl({ status: 204, text: '' });
+  await flush();
+  page.clickOn('now', { action: 'pause' });
+  assert.equal(page.controlPosts.length, 2, 'a click after the reply sends again');
+});
+
+test('page: Resume posts resume', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot({ control: pausedControl('holding') }));
+  page.clickOn('now', { action: 'resume' });
+  await flush();
+  assert.equal(page.controlPosts[0].body, '{"action":"resume"}');
+  assert.equal(page.els.toast.textContent, 'Resumed. A held tool call continues at once.');
+});
+
+test('page: live shows while connected and goes away on error', () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  assert.ok(page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+  assert.ok(!page.els.meta.innerHTML.includes('disconnected since'));
+  page.es.onerror();
+  assert.ok(!page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+  assert.ok(page.els.meta.innerHTML.includes('disconnected since'));
+  page.es.onopen();
+  assert.ok(page.els.meta.innerHTML.includes('● live'), 'a reconnect shows live again');
+});
+
+test('page: live stays with an old snapshot time', () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot({ at: new Date(Date.now() - 3600 * 1000).toISOString() }));
+  assert.ok(page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+});
+
+test('page: the toast element and the live style ship with the page', () => {
+  assert.ok(uiText('page.html').includes('<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>'));
+  const html = uiText('page.html');
+  assert.ok(html.indexOf('id="toast"') < html.indexOf('<script>'), 'the toast sits before the scripts');
+  assert.ok(uiText('page.css').includes('.toast {') && uiText('page.css').includes('.chip.ok'));
+});
+
+test('page: a new toast replaces the text and keeps one timer', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  page.clickOn('now', { action: 'pause' });
+  await flush();
+  page.clickOn('now', { action: 'resume' });
+  await flush();
+  assert.equal(page.els.toast.textContent, 'Resumed. A held tool call continues at once.');
+  assert.equal(page.timers.filter((t) => t.ms === 4000).length, 1, 'the first timer was not cleared');
 });

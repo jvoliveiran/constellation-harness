@@ -510,6 +510,7 @@ export function renderNow(view, esc) {
     + '<span class="chip">' + esc(p.track) + (p.n != null ? ' ' + p.n + '/' + p.N : '') + '</span>'
     + (s.branch ? '<span><code>' + esc(s.branch) + '</code></span>' : '')
     + (s.task ? '<span>task ' + taskLabel + '</span>' : '')
+    + renderPauseControl({ state: s, control: view.control, hhmm: view.hhmm }, esc)
     + '</div>';
   var mods = p.modifiers.length ? '<div class="mods">' + p.modifiers.map(function (m) { return '<span class="chip">' + esc(m) + '</span>'; }).join('') + '</div>' : '';
   var facts = '<div class="facts">'
@@ -521,6 +522,22 @@ export function renderNow(view, esc) {
     + fact('model profile', s.modelProfile || '—')
     + '</div>';
   return head + renderSteps(p, esc, view.attribution) + mods + facts;
+}
+
+/**
+ * Render the Pause and Resume controls of the Now header: '' when no workflow runs, the Pause
+ * button when no pause is in force, else the paused chip, the hold phase note, and the Resume
+ * button. view = { state, control, hhmm }. The page receives this function through toString(), so
+ * the body uses no module-scope symbol and no import.
+ */
+export function renderPauseControl(view, esc) {
+  if (!view.state) return '';
+  var c = view.control;
+  if (!c || !c.paused) return '<button type="button" class="btn secondary" data-action="pause">⏸ Pause</button>';
+  var note = c.phase === 'holding' ? '<span class="chip hold">holding — resume continues at once</span>'
+    : c.phase === 'stopped' ? '<span class="chip warn">session stopped — type /constellation:resume after you resume</span>' : '';
+  return '<span class="chip">⏸ paused since ' + esc(String(view.hhmm(c.since)).slice(0, 5)) + '</span>' + note
+    + '<button type="button" class="btn primary" data-action="resume">▶ Resume</button>';
 }
 
 /**
