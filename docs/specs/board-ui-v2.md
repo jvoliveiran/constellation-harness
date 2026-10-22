@@ -489,10 +489,10 @@ expires.
 `.constellation/state/control.json`:
 
 ```json
-{ "paused": true, "since": "2026-10-14T14:02:11Z", "by": "board" }
+{ "paused": true, "since": "2026-10-14T14:02:11Z", "by": "board", "pid": 48213 }
 ```
 
-Pause creates it, with the pid of the board process (`"pid"`). Resume
+Pause creates it, with the pid of the board process in `pid`. Resume
 deletes it. Absence means not paused, so the hook check is one `test -f`.
 The file is under `state/`, which the project template gitignores.
 
@@ -513,20 +513,30 @@ existing `guard-git.sh` entry stays.
 1. Exit 0 at once when `control.json` is absent, or when
    `current-workflow.json` is absent. A stale control file never blocks a
    session without a workflow.
-2. Run the owner rule. Exit 0 at once when it fails. Append
-   `{ "event": "PauseHold", "ts", "session_id", "agent_id" }` to
-   `events.jsonl`.
-3. Poll every second. When `control.json` disappears, append
-   `PauseReleased` and exit 0. The tool
-   runs and the session continues with no user action.
-4. The hold window counts from `since`, the start of the pause. After
-   `CONSTELLATION_HOLD_SECONDS` (default 540, maximum 590, below the
-   600 s hook timeout. At 600 s the tool runs), append `{ "event": "PauseDenied" }` and print:
+2. Run the owner rule. Exit 0 at once when it fails.
+3. Compute one deadline per pause: `since` plus the hold window. A `since`
+   in the future or not parsable counts as now, so a crafted file cannot
+   extend a hold. The window is `CONSTELLATION_HOLD_SECONDS` (default 540,
+   maximum 590, below the 600 s hook timeout. At 600 s the tool runs).
+4. When the deadline has passed, deny the call at once. There is no hold:
+   `heldSec` is 0 and the hook writes no `PauseHold`.
+5. Otherwise append `PauseHold` and poll every second. The hook releases
+   the call, and the tool runs with no user action, in two cases:
+   `control.json` disappears (`reason: resume`), or the owner rule fails
+   because the board stopped (`reason: board-stopped`). A release appends
+   `PauseReleased`.
+6. At the deadline, append `PauseDenied` and print:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny",
-  "permissionDecisionReason": "Constellation board paused this workflow at <since>. Do not run more tools. Report the last save point to the user and end the turn. The user resumes with /constellation:resume." } }
+  "permissionDecisionReason": "Constellation board paused this workflow at <since>. Do not run more tools. If you are a subagent, put this sentence in your final report and end your run. Report the last save point to the user and end the turn. The user clicks Resume on the board, then types /constellation:resume." } }
 ```
+
+Event fields. Every event carries `ts`, `event`, `session_id`,
+`agent_id`, `agent_type`, and `tool_name`, each a string or absent.
+`PauseReleased` and `PauseDenied` add `heldSec`, the seconds that the
+hook held the call. `PauseReleased` also adds `reason`, `resume` or
+`board-stopped`.
 
 `CONSTELLATION_HOLD_SECONDS` and the project directory come from the environment so the
 bash test can set a 2 s hold.
@@ -551,12 +561,16 @@ The hook writes the events `PauseHold`, `PauseReleased`, and
   `Sec-Fetch-Site`, when present, equals `same-origin`; header
   `x-board-token` equals the process token. The token is 32 random bytes
   in hex, minted at start and carried in the snapshot as `csrf`.
-- 409 when no workflow is in flight (`pause`), or when no control file
-  exists (`resume`).
+- Other replies, each with a short reason as the body: 405 with
+  `allow: POST` for any method but POST; 415 for a content type other than
+  `application/json`; 413 for a body over 1 KB; 400 for a body that is not
+  JSON or names another action; 409 `no workflow in flight` (`pause`),
+  409 `already paused` (`pause`), or 409 `not paused` (`resume`).
 - Pause writes to a temp file in `state/` and renames it. `state/` must
   resolve inside the root and be a directory. Resume unlinks the file.
 - 204 on success. The watcher sees the change and pushes a snapshot with
-  `control: { paused, since, by }`.
+  `control: { paused, since, owner, phase }`. `owner` is `this` or
+  `other`. `phase` is `paused`, `holding`, or `stopped`.
 
 ### 9.5 Page
 
@@ -566,6 +580,8 @@ The hook writes the events `PauseHold`, `PauseReleased`, and
 - After `PauseHold` the chip says `holding — resume continues at once`.
   After `PauseDenied` it says `session stopped — type
   /constellation:resume after you resume`.
+- The header shows `● live` while the SSE connection is open. It says
+  nothing about the pause.
 - A toast confirms each action. A 403 or 409 shows the reason.
 - The statusline reads the control file and renders the `aborted` modifier
   from `tracks.json` (`⏸ paused`), so the terminal agrees with the page.
@@ -586,16 +602,16 @@ orchestrator skill command table gains the pause behavior next to
 | `/api/agent` | id regex, snapshot membership, session root, name regex, 32 MB cap |
 | `/api/control` | Host, exact Origin, Sec-Fetch-Site, process token, JSON, 1 KB cap, atomic write inside `state/` |
 | `control.json` | owner rule: live `board.mjs` pid, start at or before `since`, strict `since`, 1 KB, no symlink |
+| Markdown | `html: false`, link validation, `rel=noopener`, no remote images |
+| Vendor file | sha256 pinned in `VERSION`, checked by selftest, served by CSP hash |
+| Transcripts | read-only, under `~/.claude/projects`, never listed, never written |
+| Event log | new fields are strings, capped by the 256 KB tail, validated before use |
 
 Accepted residuals. Any local process can read the token and drive Pause
 and Resume, because the design is loopback-only. A committed control file
 can match only when it guesses the pid of a `board.mjs` that started before
 the commit time. Subagent work after the last save point runs again after
 `/constellation:resume`.
-| Markdown | `html: false`, link validation, `rel=noopener`, no remote images |
-| Vendor file | sha256 pinned in `VERSION`, checked by selftest, served by CSP hash |
-| Transcripts | read-only, under `~/.claude/projects`, never listed, never written |
-| Event log | new fields are strings, capped by the 256 KB tail, validated before use |
 
 ## 11. Tests
 
