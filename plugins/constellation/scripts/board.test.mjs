@@ -23,7 +23,7 @@ import {
 import * as renderModule from './board-render.mjs';
 import { createSessionReader } from './board-session.mjs';
 import {
-  loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -3973,4 +3973,312 @@ test('loadSnapshot: control reads the pause events of the log for the phase', ()
   fs.writeFileSync(path.join(dir, '.constellation', 'state', 'control.json'), JSON.stringify(pauseFile({ pid: process.pid })));
   fs.writeFileSync(path.join(dir, '.constellation', 'metrics', 'events.jsonl'), `${JSON.stringify(pauseEvent('PauseHold', '2026-10-21T14:02:13Z'))}\n`);
   assert.equal(loadSnapshot(dir).control.phase, 'holding');
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. POST /api/control.
+// ---------------------------------------------------------------------------
+
+const CONTROL_TOKEN = 'c'.repeat(64);
+const SINCE_PATTERN = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
+const controlFileOf = (dir) => path.join(dir, '.constellation', 'state', 'control.json');
+const readControlFile = (dir) => JSON.parse(fs.readFileSync(controlFileOf(dir), 'utf8'));
+const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+
+/** POST /api/control with a valid Host, Origin, token, and JSON body. A header set to undefined is removed. */
+const postControl = (port, { headers = {}, body = '{"action":"pause"}', chunked = false } = {}) => new Promise((resolve, reject) => {
+  const all = {
+    host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json',
+    'x-board-token': CONTROL_TOKEN, ...(chunked ? {} : { 'content-length': Buffer.byteLength(body) }), ...headers,
+  };
+  for (const key of Object.keys(all)) if (all[key] === undefined) delete all[key];
+  const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/control', headers: all, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    let text = '';
+    res.on('data', (c) => { text += c; });
+    res.on('end', () => resolve({ status: res.statusCode, body: text, headers: res.headers }));
+  });
+  req.on('timeout', () => req.destroy(new Error('request timeout')));
+  req.on('error', reject);
+  req.end(body);
+});
+
+/** A temp project with a workflow in flight and a server whose control is the real writeControl and clearControl. */
+async function withControlServer(fn, { workflow = true, log } = {}) {
+  const dir = tmpProject();
+  if (workflow) fs.writeFileSync(path.join(dir, '.constellation', 'state', 'current-workflow.json'), JSON.stringify({ track: 'tweak', currentStep: 'engineer', completedSteps: [] }));
+  const act = (action) => (action === 'pause' ? writeControl(dir) : clearControl(dir));
+  const server = serve(() => loadSnapshot(dir), () => {}, () => null, () => null, { token: CONTROL_TOKEN, act, log });
+  const port = await listenOnFreePort(server);
+  try { await fn(port, dir); } finally { await closeServer(server); }
+}
+
+test('/api/control: pause writes the server-built file', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port);
+    assert.equal(r.status, 204);
+    const file = readControlFile(dir);
+    assert.deepEqual(Object.keys(file).sort(), ['by', 'paused', 'pid', 'since']);
+    assert.deepEqual([file.paused, file.by, file.pid], [true, 'board', process.pid]);
+    assert.match(file.since, SINCE_PATTERN);
+    assert.equal(fs.statSync(controlFileOf(dir)).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readdirSync(path.join(dir, '.constellation', 'state')).filter((n) => n.endsWith('.tmp')), []);
+  });
+});
+
+test('/api/control: the body never reaches the file', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port, { body: '{"action":"pause","since":"x","by":"evil","pid":7,"paused":false}' });
+    assert.equal(r.status, 204);
+    const file = readControlFile(dir);
+    assert.deepEqual([file.paused, file.by, file.pid], [true, 'board', process.pid]);
+    assert.match(file.since, SINCE_PATTERN);
+  });
+});
+
+test('/api/control: resume deletes the file', async () => {
+  await withControlServer(async (port, dir) => {
+    assert.equal((await postControl(port)).status, 204);
+    assert.ok(fs.existsSync(controlFileOf(dir)));
+    assert.equal((await postControl(port, { body: '{"action":"resume"}' })).status, 204);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  });
+});
+
+test('/api/control: 403 without a token, with a wrong token, and with a token of the wrong length', async () => {
+  await withControlServer(async (port, dir) => {
+    const tokens = [undefined, 'd'.repeat(64), CONTROL_TOKEN.slice(0, -1), `${CONTROL_TOKEN}c`, '', 'c'.repeat(63) + 'd'];
+    for (const token of tokens) {
+      const r = await postControl(port, { headers: { 'x-board-token': token } });
+      assert.equal(r.status, 403, String(token));
+      assert.equal(r.body, 'token');
+      assert.ok(!fs.existsSync(controlFileOf(dir)), `${token}: file written`);
+    }
+  });
+});
+
+test('/api/control: 403 for a foreign Origin, a missing Origin, and Sec-Fetch-Site cross-site', async () => {
+  await withControlServer(async (port, dir) => {
+    const cases = [
+      { origin: 'http://evil.example' }, { origin: `http://127.0.0.1:${port + 1}` }, { origin: undefined }, { origin: 'null' },
+      { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': 'none' },
+    ];
+    for (const headers of cases) {
+      const r = await postControl(port, { headers });
+      assert.equal(r.status, 403, JSON.stringify(headers));
+      assert.ok(!fs.existsSync(controlFileOf(dir)), `${JSON.stringify(headers)}: file written`);
+    }
+    // The two loopback names of the page are both accepted, and so is a same-origin fetch.
+    assert.equal((await postControl(port, { headers: { origin: `http://localhost:${port}`, 'sec-fetch-site': 'same-origin' } })).status, 204);
+  });
+});
+
+test('/api/control: 403 for a foreign Host', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port, { headers: { host: `attacker.example:${port}` } });
+    assert.equal(r.status, 403);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  });
+});
+
+test('/api/control: 413, 415, and 400', async () => {
+  await withControlServer(async (port, dir) => {
+    const pad = (bytes) => JSON.stringify({ action: 'pause', pad: 'x'.repeat(bytes - 27) });
+    assert.equal(Buffer.byteLength(pad(1025)), 1025);
+    assert.equal((await postControl(port, { body: pad(1025) })).status, 413);
+    assert.equal((await postControl(port, { body: pad(5000), chunked: true })).status, 413, 'a chunked body has no content-length');
+    assert.equal((await postControl(port, { headers: { 'content-type': 'text/plain' } })).status, 415);
+    assert.equal((await postControl(port, { headers: { 'content-type': undefined } })).status, 415);
+    for (const body of ['{"action":"stop"}', 'nope', 'null', '[]', '{}', '{"action":["pause"]}']) {
+      assert.equal((await postControl(port, { body })).status, 400, body);
+    }
+    assert.ok(!fs.existsSync(controlFileOf(dir)), 'a refused request wrote a file');
+    assert.equal((await postControl(port, { body: pad(1024) })).status, 204, 'a body of exactly 1 KB is accepted');
+    fs.rmSync(controlFileOf(dir));
+    assert.equal((await postControl(port, { headers: { 'content-type': 'Application/JSON; charset=utf-8' } })).status, 204);
+  });
+});
+
+test('/api/control: 409 for pause with no workflow, resume with no file, and a second pause', async () => {
+  await withControlServer(async (port, dir) => {
+    assert.equal((await postControl(port)).status, 409);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  }, { workflow: false });
+  await withControlServer(async (port, dir) => {
+    const none = await postControl(port, { body: '{"action":"resume"}' });
+    assert.deepEqual([none.status, none.body], [409, 'not paused']);
+    assert.equal((await postControl(port)).status, 204);
+    const before = fs.readFileSync(controlFileOf(dir), 'utf8');
+    const second = await postControl(port);
+    assert.deepEqual([second.status, second.body], [409, 'already paused']);
+    assert.equal(fs.readFileSync(controlFileOf(dir), 'utf8'), before);
+    // A pause that another live board owns also counts.
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: '2026-10-21T14:02:11Z', by: 'board', pid: process.ppid }));
+    assert.equal((await postControl(port)).status, 409);
+  });
+});
+
+test('/api/control: pause replaces a file whose owner is gone', async () => {
+  await withControlServer(async (port, dir) => {
+    const stale = JSON.stringify({ paused: true, since: '2026-10-21T14:02:11Z', by: 'board', pid: deadPid() });
+    fs.writeFileSync(controlFileOf(dir), stale);
+    assert.equal((await postControl(port)).status, 204);
+    assert.equal(readControlFile(dir).pid, process.pid);
+    // A file that is no pause at all (a string pid) is replaced too.
+    fs.writeFileSync(controlFileOf(dir), '{"paused":true,"by":"board","pid":"1"}');
+    assert.equal((await postControl(port)).status, 204);
+    assert.equal(readControlFile(dir).pid, process.pid);
+  });
+});
+
+test('/api/control: a symlinked state dir is refused', async () => {
+  for (const target of ['inside', 'outside']) {
+    await withControlServer(async (port, dir) => {
+      const state = path.join(dir, '.constellation', 'state');
+      const real = target === 'inside' ? path.join(dir, '.constellation', 'real-state') : mkTmp('board-outside-');
+      if (target === 'inside') fs.renameSync(state, real);
+      else { fs.copyFileSync(path.join(state, 'current-workflow.json'), path.join(real, 'current-workflow.json')); fs.rmSync(state, { recursive: true }); }
+      fs.symlinkSync(real, state);
+      const before = fs.readdirSync(real).sort();
+      for (const action of ['pause', 'resume']) {
+        const r = await postControl(port, { body: JSON.stringify({ action }) });
+        assert.deepEqual([r.status, r.body], [403, 'state dir refused'], `${target} ${action}`);
+      }
+      assert.deepEqual(fs.readdirSync(real).sort(), before, `${target}: something was written in the target`);
+    });
+  }
+});
+
+/** Every file under a directory with its size and mtime: the picture that the one-path test compares. */
+function listTree(root, rel = '') {
+  return fs.readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap((entry) => {
+    const sub = path.join(rel, entry.name);
+    if (entry.isDirectory()) return listTree(root, sub);
+    const st = fs.lstatSync(path.join(root, sub));
+    return [`${sub}|${st.size}|${st.mtimeMs}`];
+  }).sort();
+}
+
+test('/api/control: only state/control.json changes', async () => {
+  await withControlServer(async (port, dir) => {
+    fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+    fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-a.md'), '---\nstatus: refined\n---\n# A\n');
+    const root = path.join(dir, '.constellation');
+    const before = listTree(root);
+    assert.equal((await postControl(port)).status, 204);
+    const paused = listTree(root);
+    const added = paused.filter((line) => !before.includes(line));
+    assert.equal(added.length, 1);
+    assert.ok(added[0].startsWith(`state${path.sep}control.json|`), added[0]);
+    assert.deepEqual(before.filter((line) => !paused.includes(line)), [], 'a file changed or vanished on pause');
+    assert.equal((await postControl(port, { body: '{"action":"resume"}' })).status, 204);
+    assert.deepEqual(listTree(root), before, 'resume left a trace');
+  });
+});
+
+test('serve: every other route still answers 405 to a non-GET method', async () => {
+  await withControlServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    for (const [method, url] of [['POST', '/api/snapshot'], ['PUT', '/'], ['DELETE', '/api/item'], ['POST', '/events'], ['POST', '/api/agent'], ['PATCH', '/nope']]) {
+      assert.equal((await httpRequest(port, { host, method, url })).status, 405, `${method} ${url}`);
+    }
+    const get = await httpRequest(port, { host, url: '/api/control' });
+    assert.deepEqual([get.status, get.headers.allow], [405, 'POST']);
+    const put = await httpRequest(port, { host, method: 'PUT', url: '/api/control' });
+    assert.equal(put.status, 405);
+  });
+  // Without a control, the route answers 405 to every method and offers no POST.
+  await withBoardServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    for (const method of ['GET', 'POST']) {
+      const r = await httpRequest(port, { host, method, url: '/api/control' });
+      assert.deepEqual([r.status, r.headers.allow], [405, undefined], method);
+    }
+  });
+});
+
+/** Open GET /events and resolve with the JSON of the first frame, or of the frame after `trigger` runs. */
+function eventFrame(port, trigger) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/events', headers: { host: `127.0.0.1:${port}` }, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+      let buffered = '';
+      let triggered = false;
+      res.on('data', (chunk) => {
+        buffered += chunk;
+        const end = buffered.indexOf('\n\n');
+        if (end < 0) return;
+        const frame = buffered.slice(0, end);
+        buffered = buffered.slice(end + 2);
+        if (trigger && !triggered) { triggered = true; trigger(); return; }
+        req.destroy();
+        resolve(JSON.parse(frame.replace(/^data: /, '')));
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', (e) => { if (e.code !== 'ECONNRESET') reject(e); });
+    req.end();
+  });
+}
+
+test('serve: the snapshot carries a 64-hex csrf only when control is set', async () => {
+  const shared = { projectDir: '/p' };
+  const listeners = [];
+  const token = crypto.randomBytes(32).toString('hex');
+  const withControl = serve(() => shared, (l) => listeners.push(l), () => null, () => null, { token, act: () => {} });
+  const port = await listenOnFreePort(withControl);
+  try {
+    const snap = JSON.parse((await httpRequest(port, { host: `127.0.0.1:${port}` })).body);
+    assert.match(snap.csrf, /^[0-9a-f]{64}$/);
+    assert.equal(snap.csrf, token);
+    assert.equal((await eventFrame(port)).csrf, token, 'the first SSE frame');
+    assert.equal((await eventFrame(port, () => listeners[0]({ projectDir: '/p', n: 2 }))).csrf, token, 'a pushed SSE frame');
+    assert.ok(!('csrf' in shared), 'the token sits on the shared snapshot object');
+  } finally { await closeServer(withControl); }
+  await withBoardServer(async (plainPort) => {
+    assert.ok(!('csrf' in JSON.parse((await httpRequest(plainPort, { host: `127.0.0.1:${plainPort}` })).body)));
+    assert.ok(!('csrf' in await eventFrame(plainPort)));
+  });
+});
+
+test('watch: a new control file changes the signature that the poll compares', () => {
+  const dir = tmpProject();
+  const before = projectSignature(dir);
+  fs.writeFileSync(controlFileOf(dir), '{"paused":true}');
+  assert.notEqual(projectSignature(dir), before);
+  assert.equal(projectSignature(dir), projectSignature(dir));
+});
+
+test('/api/control: refusals and actions are logged as reasons, never the token or a path', async () => {
+  const lines = [];
+  await withControlServer(async (port, dir) => {
+    await postControl(port, { headers: { 'x-board-token': 'd'.repeat(64) } });
+    await postControl(port, { headers: { origin: 'http://evil.example' } });
+    await postControl(port, { body: '{"action":"resume"}' });
+    fs.rmSync(path.join(dir, '.constellation', 'state'), { recursive: true });
+    fs.symlinkSync(os.tmpdir(), path.join(dir, '.constellation', 'state'));
+    await postControl(port);
+    assert.deepEqual(lines, ['control refused: token', 'control refused: origin', 'resume refused: not paused', 'pause refused: state dir refused']);
+    for (const line of lines) assert.ok(!line.includes(CONTROL_TOKEN) && !line.includes(dir), line);
+  }, { log: (text) => lines.push(text) });
+});
+
+test('cli: Pause and Resume through the running board', async () => {
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'current-workflow.json'), JSON.stringify({ track: 'tweak', currentStep: 'engineer', completedSteps: [] }));
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir]);
+  try {
+    const first = await waitForSnapshot(port, 3000);
+    assert.match(first.csrf, /^[0-9a-f]{64}$/);
+    assert.equal(first.control.paused, false);
+    const post = (body) => postControl(port, { body, headers: { 'x-board-token': first.csrf } });
+    assert.equal((await post('{"action":"pause"}')).status, 204);
+    const paused = await waitFor(async () => { const s = await waitForSnapshot(port, 500); return s?.control.paused ? s : null; }, 3000);
+    assert.ok(paused, 'the snapshot never showed the pause');
+    assert.deepEqual([paused.control.owner, paused.control.phase], ['this', 'paused'], 'the board that wrote the file owns it');
+    assert.equal(readControlFile(dir).pid, run.child.pid);
+    assert.equal((await post('{"action":"resume"}')).status, 204);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  } finally { run.child.kill('SIGKILL'); }
 });
