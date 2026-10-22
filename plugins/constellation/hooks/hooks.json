@@ -20,6 +20,16 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/guard-git.sh\""
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/pause-guard.sh\"",
+            "timeout": 600
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -11,19 +11,19 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, attributeAgents, tokensFact,
-  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, controlView,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
 import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
   renderSteps, renderAgentHead, renderAgentReport, renderAgentDialog, renderStepDialog,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
-  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
+  renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView, renderPauseControl,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
 import { createSessionReader } from './board-session.mjs';
 import {
-  loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, ownsPause, parseBoardPs, boardStartOf, memoizeBriefly, psArgs, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -1990,7 +1990,8 @@ const renderPrelude = Object.entries(renderModule).map(([name, fn]) => `var ${na
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 // deferred: fetch returns a promise that the test settles with page.resolve(url, item, nth). Timers wait for page.runTimers().
-const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false } = {}) => {
+// control: the reply of POST /api/control ({ status, text }, or 'network' for a rejected fetch). holdControl: the test settles it with page.settleControl.
+const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = '', reply = null, deferred = false, control = { status: 204, text: '' }, holdControl = false } = {}) => {
   const attrs = {};
   const button = { textContent: '', attrs: {}, handlers: {},
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, fn) { this.handlers[t] = fn; } };
@@ -2025,14 +2026,22 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
   const fetches = [];
   const pending = {};
   const respond = (item) => (item.error ? { ok: false, status: item.error, json: async () => ({}) } : { ok: true, status: 200, json: async () => item });
-  const fetchStub = (url) => {
+  const controlPosts = [];
+  const controlHolds = [];
+  const settle = (r) => (r === 'network' ? Promise.reject(new Error('network')) : Promise.resolve({ status: r.status, ok: r.status < 300, text: async () => r.text }));
+  const fetchStub = (url, options) => {
     fetches.push(url);
+    if (url === '/api/control') {
+      controlPosts.push(options);
+      if (holdControl) return new Promise((resolve, reject) => controlHolds.push((r) => settle(r).then(resolve, reject)));
+      return settle(control);
+    }
     if (deferred) return new Promise((resolve) => { (pending[url] ??= []).push((item) => resolve(respond(item))); });
     return Promise.resolve(respond(reply ? reply(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` }));
   };
   const timers = [];
   let timerId = 0;
-  const setTimeoutStub = (fn) => { timers.push({ id: (timerId += 1), fn }); return timerId; };
+  const setTimeoutStub = (fn, ms) => { timers.push({ id: (timerId += 1), fn, ms }); return timerId; };
   const clearTimeoutStub = (id) => { const at = timers.findIndex((t) => t.id === id); if (at >= 0) timers.splice(at, 1); };
   const sources = [];
   const sandbox = {
@@ -2044,14 +2053,20 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
   const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
   // A click whose target answers closest() for one data-action selector, or for tr[data-href].
   const clickOn = (id, { action, value, file, href } = {}) => {
-    const element = { getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href })[name] ?? null };
-    const closest = (selector) => ((action && selector === `[data-action="${action}"]`) || (href && selector === 'tr[data-href]') ? element : null);
+    const attrs = {};
+    const element = {
+      attrs, getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href, 'data-action': action })[name] ?? null,
+      setAttribute: (name, v) => { attrs[name] = v; }, removeAttribute: (name) => { delete attrs[name]; },
+    };
+    const closest = (selector) => ((action && selector.split(', ').includes(`[data-action="${action}"]`)) || (href && selector === 'tr[data-href]') ? element : null);
     els[id].handlers.click({ target: { closest } });
+    return element;
   };
   return {
     document, attrs, button, writes, els, location, replaced, fetches, feed, click: () => button.handlers.click(), clickOn, es: sources[0],
     runTimers: () => { while (timers.length) timers.shift().fn(); },
     resolve: (url, item, nth = 0) => pending[url][nth](item),
+    controlPosts, settleControl: (r, nth = 0) => controlHolds[nth](r), get timers() { return timers; },
     get hashchanges() { return hashchanges; },
   };
 };
@@ -2349,9 +2364,9 @@ test('renderPlanDialog: the header shows title, file, status chip, task id, and 
 const pageTree = (...extra) => buildTree([
   mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
 ], null);
-const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
+const pageSnapshot = ({ state = nowState, tree = pageTree(), ...extra } = {}) => ({
   projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null, tokens: { source: 'none', spent: null }, attribution: {},
-  progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
+  progress: state ? resolveSteps(state, tracks, planReviewOff) : null, ...extra,
 });
 
 test('page.js: a snapshot on #/plan/<file> fetches the plan and opens the dialog', async () => {
@@ -2491,8 +2506,9 @@ const ISOLATION_ARGS = {
   treeHolds: () => [rendererTree(), 'task', '001-open.md'],
   parseRoute: () => ['#/agent/a0e575badeb8675d0'],
   renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc, { architect: ['a0e575badeb8675d0'] }],
-  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] } }), esc],
+  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] }, control: { paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase: 'stopped' } }), esc],
   renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
+  renderPauseControl: () => [{ state: nowState, control: { paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase: 'holding' }, hhmm: stubHhmm }, esc],
   renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
   parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
   formatBacklogRoute: () => [parseBacklogRoute('#/backlog?type=fix&q=a')],
@@ -3909,4 +3925,666 @@ test('cli: /api/agent for a finished agent with no workflow in flight reads noth
     const body = JSON.parse(r.body);
     assert.deepEqual([r.status, body.report, body.error], [200, null, 'no workflow in flight']);
   } finally { run.child.kill('SIGKILL'); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. Snapshot.
+// ---------------------------------------------------------------------------
+
+const PAUSE_SINCE = '2026-10-21T14:02:11Z';
+const pauseFile = (extra = {}) => ({ paused: true, since: PAUSE_SINCE, by: 'board', pid: 4242, ...extra });
+const pauseEvent = (event, ts) => ({ ts, event });
+
+test('controlView: owner this, other, and gone', () => {
+  const alive = (pid) => pid === 4242 || pid === 77;
+  assert.equal(controlView(pauseFile({ pid: 77 }), [], { selfPid: 77, alive }).owner, 'this');
+  assert.equal(controlView(pauseFile({ pid: 77 }), [], { selfPid: 77, alive: () => false }).paused, false, 'this pid needs the owner rule too');
+  const other = controlView(pauseFile(), [], { selfPid: 77, alive });
+  assert.deepEqual([other.paused, other.owner, other.since], [true, 'other', PAUSE_SINCE]);
+  const gone = controlView(pauseFile({ pid: 9 }), [], { selfPid: 77, alive });
+  assert.deepEqual(gone, { paused: false, since: null, owner: 'gone', phase: null });
+});
+
+test('controlView: the last pause event since the pause sets the phase', () => {
+  const view = (events) => controlView(pauseFile(), events, { selfPid: 4242, alive: () => true }).phase;
+  const hold = pauseEvent('PauseHold', '2026-10-21T14:02:12Z');
+  const deny = pauseEvent('PauseDenied', '2026-10-21T14:11:12Z');
+  assert.equal(view([]), 'paused');
+  assert.equal(view([hold]), 'holding');
+  assert.equal(view([hold, deny]), 'stopped');
+  assert.equal(view([hold, pauseEvent('PauseReleased', '2026-10-21T14:02:20Z')]), 'paused');
+  // An event of an earlier pause does not count. An event at the second of since does.
+  assert.equal(view([pauseEvent('PauseDenied', '2026-10-21T14:02:10Z')]), 'paused');
+  assert.equal(view([pauseEvent('PauseHold', PAUSE_SINCE)]), 'holding');
+  assert.equal(view([hold, { ts: '2026-10-21T14:03:00Z', event: 'SubagentStart' }]), 'holding');
+});
+
+test('controlView: a malformed file is not a pause', () => {
+  const view = (raw) => controlView(raw, [], { selfPid: 4242, alive: () => true });
+  for (const raw of [null, undefined, 'x', pauseFile({ paused: 'true' }), pauseFile({ paused: false }), pauseFile({ by: 'x' }),
+    pauseFile({ pid: undefined }), pauseFile({ pid: '4242' }), pauseFile({ pid: 1.5 }), pauseFile({ pid: 1 })]) {
+    assert.deepEqual(view(raw), { paused: false, since: null, owner: null, phase: null }, JSON.stringify(raw));
+  }
+});
+
+test('loadSnapshot: control comes from state/control.json and a symlink is refused', () => {
+  const dir = tmpProject();
+  const file = path.join(dir, '.constellation', 'state', 'control.json');
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual([snap.control.paused, snap.control.owner], [true, 'this']);
+  // A committed file that names this board with a since from before it started is no pause.
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow(-3600) })));
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
+  // A symlink to a file inside .constellation reads through the contained reader, so the lstat check refuses it.
+  const real = path.join(dir, '.constellation', 'real-control.json');
+  fs.renameSync(file, real);
+  fs.symlinkSync(real, file);
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  // A file over 1 KB is no pause, as in the hook.
+  fs.rmSync(file);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow(), pad: 'x'.repeat(2048) })));
+  assert.equal(loadSnapshot(dir).control.paused, false);
+});
+
+test('loadSnapshot: control reads the pause events of the log for the phase', () => {
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'control.json'), JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
+  fs.writeFileSync(path.join(dir, '.constellation', 'metrics', 'events.jsonl'), `${JSON.stringify(pauseEvent('PauseHold', isoNow(2)))}\n`);
+  assert.equal(loadSnapshot(dir).control.phase, 'holding');
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. POST /api/control.
+// ---------------------------------------------------------------------------
+
+const CONTROL_TOKEN = 'c'.repeat(64);
+const SINCE_PATTERN = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
+const controlFileOf = (dir) => path.join(dir, '.constellation', 'state', 'control.json');
+const readControlFile = (dir) => JSON.parse(fs.readFileSync(controlFileOf(dir), 'utf8'));
+const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+const isoNow = (offsetSec = 0) => new Date(Date.now() + offsetSec * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// A live process whose command line holds board.mjs: it stands in for a running board. It stops after 60 s.
+const fakeBoards = [];
+after(() => { for (const child of fakeBoards) child.kill(); });
+function startFakeBoard() {
+  const file = path.join(mkTmp('fake-board-'), 'board.mjs');
+  fs.writeFileSync(file, 'for _ in $(seq 1 60); do sleep 1; done\n');
+  const child = spawn('bash', [file], { stdio: 'ignore' });
+  fakeBoards.push(child);
+  // Between fork and exec the command line is still the parent's: wait until ps shows the script.
+  for (let i = 0; i < 100; i++) {
+    if (spawnSync('ps', ['-p', String(child.pid), '-o', 'command=']).stdout.toString().includes('board.mjs')) break;
+    spawnSync('sleep', ['0.02']);
+  }
+  return child.pid;
+}
+
+/** POST /api/control with a valid Host, Origin, token, and JSON body. A header set to undefined is removed. */
+const postControl = (port, { headers = {}, body = '{"action":"pause"}', chunked = false } = {}) => new Promise((resolve, reject) => {
+  const all = {
+    host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json',
+    'x-board-token': CONTROL_TOKEN, ...(chunked ? {} : { 'content-length': Buffer.byteLength(body) }), ...headers,
+  };
+  for (const key of Object.keys(all)) if (all[key] === undefined) delete all[key];
+  const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/control', headers: all, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    let text = '';
+    res.on('data', (c) => { text += c; });
+    res.on('end', () => resolve({ status: res.statusCode, body: text, headers: res.headers }));
+  });
+  req.on('timeout', () => req.destroy(new Error('request timeout')));
+  req.on('error', reject);
+  req.end(body);
+});
+
+/** A temp project with a workflow in flight and a server whose control is the real writeControl and clearControl. */
+async function withControlServer(fn, { workflow = true, log } = {}) {
+  const dir = tmpProject();
+  if (workflow) fs.writeFileSync(path.join(dir, '.constellation', 'state', 'current-workflow.json'), JSON.stringify({ track: 'tweak', currentStep: 'engineer', completedSteps: [] }));
+  const act = (action) => (action === 'pause' ? writeControl(dir) : clearControl(dir));
+  const server = serve(() => loadSnapshot(dir), () => {}, () => null, () => null, { token: CONTROL_TOKEN, act, log });
+  const port = await listenOnFreePort(server);
+  try { await fn(port, dir); } finally { await closeServer(server); }
+}
+
+test('/api/control: pause writes the server-built file', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port);
+    assert.equal(r.status, 204);
+    const file = readControlFile(dir);
+    assert.deepEqual(Object.keys(file).sort(), ['by', 'paused', 'pid', 'since']);
+    assert.deepEqual([file.paused, file.by, file.pid], [true, 'board', process.pid]);
+    assert.match(file.since, SINCE_PATTERN);
+    assert.equal(fs.statSync(controlFileOf(dir)).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readdirSync(path.join(dir, '.constellation', 'state')).filter((n) => n.endsWith('.tmp')), []);
+  });
+});
+
+test('/api/control: the body never reaches the file', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port, { body: '{"action":"pause","since":"x","by":"evil","pid":7,"paused":false}' });
+    assert.equal(r.status, 204);
+    const file = readControlFile(dir);
+    assert.deepEqual([file.paused, file.by, file.pid], [true, 'board', process.pid]);
+    assert.match(file.since, SINCE_PATTERN);
+  });
+});
+
+test('/api/control: resume deletes the file', async () => {
+  await withControlServer(async (port, dir) => {
+    assert.equal((await postControl(port)).status, 204);
+    assert.ok(fs.existsSync(controlFileOf(dir)));
+    assert.equal((await postControl(port, { body: '{"action":"resume"}' })).status, 204);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  });
+});
+
+test('/api/control: 403 without a token, with a wrong token, and with a token of the wrong length', async () => {
+  await withControlServer(async (port, dir) => {
+    const tokens = [undefined, 'd'.repeat(64), CONTROL_TOKEN.slice(0, -1), `${CONTROL_TOKEN}c`, '', 'c'.repeat(63) + 'd'];
+    for (const token of tokens) {
+      const r = await postControl(port, { headers: { 'x-board-token': token } });
+      assert.equal(r.status, 403, String(token));
+      assert.equal(r.body, 'token');
+      assert.ok(!fs.existsSync(controlFileOf(dir)), `${token}: file written`);
+    }
+  });
+});
+
+test('/api/control: 403 for a foreign Origin, a missing Origin, and Sec-Fetch-Site cross-site', async () => {
+  await withControlServer(async (port, dir) => {
+    const cases = [
+      { origin: 'http://evil.example' }, { origin: `http://127.0.0.1:${port + 1}` }, { origin: undefined }, { origin: 'null' },
+      { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': 'none' },
+    ];
+    for (const headers of cases) {
+      const r = await postControl(port, { headers });
+      assert.equal(r.status, 403, JSON.stringify(headers));
+      assert.ok(!fs.existsSync(controlFileOf(dir)), `${JSON.stringify(headers)}: file written`);
+    }
+    // The two loopback names of the page are both accepted, and so is a same-origin fetch.
+    assert.equal((await postControl(port, { headers: { origin: `http://localhost:${port}`, 'sec-fetch-site': 'same-origin' } })).status, 204);
+  });
+});
+
+test('/api/control: 403 for a foreign Host', async () => {
+  await withControlServer(async (port, dir) => {
+    const r = await postControl(port, { headers: { host: `attacker.example:${port}` } });
+    assert.equal(r.status, 403);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  });
+});
+
+test('/api/control: 413, 415, and 400', async () => {
+  await withControlServer(async (port, dir) => {
+    const pad = (bytes) => JSON.stringify({ action: 'pause', pad: 'x'.repeat(bytes - 27) });
+    assert.equal(Buffer.byteLength(pad(1025)), 1025);
+    assert.equal((await postControl(port, { body: pad(1025) })).status, 413);
+    assert.equal((await postControl(port, { body: pad(5000), chunked: true })).status, 413, 'a chunked body has no content-length');
+    assert.equal((await postControl(port, { headers: { 'content-type': 'text/plain' } })).status, 415);
+    assert.equal((await postControl(port, { headers: { 'content-type': undefined } })).status, 415);
+    for (const body of ['{"action":"stop"}', 'nope', 'null', '[]', '{}', '{"action":["pause"]}']) {
+      assert.equal((await postControl(port, { body })).status, 400, body);
+    }
+    assert.ok(!fs.existsSync(controlFileOf(dir)), 'a refused request wrote a file');
+    assert.equal((await postControl(port, { body: pad(1024) })).status, 204, 'a body of exactly 1 KB is accepted');
+    fs.rmSync(controlFileOf(dir));
+    assert.equal((await postControl(port, { headers: { 'content-type': 'Application/JSON; charset=utf-8' } })).status, 204);
+  });
+});
+
+test('/api/control: 409 for pause with no workflow, resume with no file, and a second pause', async () => {
+  await withControlServer(async (port, dir) => {
+    assert.equal((await postControl(port)).status, 409);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  }, { workflow: false });
+  await withControlServer(async (port, dir) => {
+    const none = await postControl(port, { body: '{"action":"resume"}' });
+    assert.deepEqual([none.status, none.body], [409, 'not paused']);
+    assert.equal((await postControl(port)).status, 204);
+    const before = fs.readFileSync(controlFileOf(dir), 'utf8');
+    const second = await postControl(port);
+    assert.deepEqual([second.status, second.body], [409, 'already paused']);
+    assert.equal(fs.readFileSync(controlFileOf(dir), 'utf8'), before);
+    // A pause that another live board owns also counts.
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: startFakeBoard() }));
+    assert.equal((await postControl(port)).status, 409);
+  });
+});
+
+test('/api/control: pause replaces a file whose owner is gone', async () => {
+  await withControlServer(async (port, dir) => {
+    const stale = JSON.stringify({ paused: true, since: '2026-10-21T14:02:11Z', by: 'board', pid: deadPid() });
+    fs.writeFileSync(controlFileOf(dir), stale);
+    assert.equal((await postControl(port)).status, 204);
+    assert.equal(readControlFile(dir).pid, process.pid);
+    // A live board that started after since does not own the pause (a committed file), and neither does a process that is no board.
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(-60), by: 'board', pid: startFakeBoard() }));
+    assert.equal((await postControl(port)).status, 204);
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: process.ppid }));
+    assert.equal((await postControl(port)).status, 204);
+    // A file that is no pause at all (a string pid) is replaced too.
+    fs.writeFileSync(controlFileOf(dir), '{"paused":true,"by":"board","pid":"1"}');
+    assert.equal((await postControl(port)).status, 204);
+    assert.equal(readControlFile(dir).pid, process.pid);
+  });
+});
+
+test('/api/control: a symlinked state dir is refused', async () => {
+  for (const target of ['inside', 'outside']) {
+    await withControlServer(async (port, dir) => {
+      const state = path.join(dir, '.constellation', 'state');
+      const real = target === 'inside' ? path.join(dir, '.constellation', 'real-state') : mkTmp('board-outside-');
+      if (target === 'inside') fs.renameSync(state, real);
+      else { fs.copyFileSync(path.join(state, 'current-workflow.json'), path.join(real, 'current-workflow.json')); fs.rmSync(state, { recursive: true }); }
+      fs.symlinkSync(real, state);
+      const before = fs.readdirSync(real).sort();
+      for (const action of ['pause', 'resume']) {
+        const r = await postControl(port, { body: JSON.stringify({ action }) });
+        assert.deepEqual([r.status, r.body], [403, 'state dir refused'], `${target} ${action}`);
+      }
+      assert.deepEqual(fs.readdirSync(real).sort(), before, `${target}: something was written in the target`);
+    });
+  }
+});
+
+/** Every file under a directory with its size and mtime: the picture that the one-path test compares. */
+function listTree(root, rel = '') {
+  return fs.readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap((entry) => {
+    const sub = path.join(rel, entry.name);
+    if (entry.isDirectory()) return listTree(root, sub);
+    const st = fs.lstatSync(path.join(root, sub));
+    return [`${sub}|${st.size}|${st.mtimeMs}`];
+  }).sort();
+}
+
+test('/api/control: only state/control.json changes', async () => {
+  await withControlServer(async (port, dir) => {
+    fs.mkdirSync(path.join(dir, '.constellation', 'tasks'));
+    fs.writeFileSync(path.join(dir, '.constellation', 'tasks', '001-a.md'), '---\nstatus: refined\n---\n# A\n');
+    const root = path.join(dir, '.constellation');
+    const before = listTree(root);
+    assert.equal((await postControl(port)).status, 204);
+    const paused = listTree(root);
+    const added = paused.filter((line) => !before.includes(line));
+    assert.equal(added.length, 1);
+    assert.ok(added[0].startsWith(`state${path.sep}control.json|`), added[0]);
+    assert.deepEqual(before.filter((line) => !paused.includes(line)), [], 'a file changed or vanished on pause');
+    assert.equal((await postControl(port, { body: '{"action":"resume"}' })).status, 204);
+    assert.deepEqual(listTree(root), before, 'resume left a trace');
+  });
+});
+
+test('serve: every other route still answers 405 to a non-GET method', async () => {
+  await withControlServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    for (const [method, url] of [['POST', '/api/snapshot'], ['PUT', '/'], ['DELETE', '/api/item'], ['POST', '/events'], ['POST', '/api/agent'], ['PATCH', '/nope']]) {
+      assert.equal((await httpRequest(port, { host, method, url })).status, 405, `${method} ${url}`);
+    }
+    const get = await httpRequest(port, { host, url: '/api/control' });
+    assert.deepEqual([get.status, get.headers.allow], [405, 'POST']);
+    const put = await httpRequest(port, { host, method: 'PUT', url: '/api/control' });
+    assert.equal(put.status, 405);
+  });
+  // Without a control, the route answers 405 to every method and offers no POST.
+  await withBoardServer(async (port) => {
+    const host = `127.0.0.1:${port}`;
+    for (const method of ['GET', 'POST']) {
+      const r = await httpRequest(port, { host, method, url: '/api/control' });
+      assert.deepEqual([r.status, r.headers.allow], [405, undefined], method);
+    }
+  });
+});
+
+/** Open GET /events and resolve with the JSON of the first frame, or of the frame after `trigger` runs. */
+function eventFrame(port, trigger) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/events', headers: { host: `127.0.0.1:${port}` }, agent: false, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+      let buffered = '';
+      let triggered = false;
+      res.on('data', (chunk) => {
+        buffered += chunk;
+        const end = buffered.indexOf('\n\n');
+        if (end < 0) return;
+        const frame = buffered.slice(0, end);
+        buffered = buffered.slice(end + 2);
+        if (trigger && !triggered) { triggered = true; trigger(); return; }
+        req.destroy();
+        resolve(JSON.parse(frame.replace(/^data: /, '')));
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', (e) => { if (e.code !== 'ECONNRESET') reject(e); });
+    req.end();
+  });
+}
+
+test('serve: the snapshot carries a 64-hex csrf only when control is set', async () => {
+  const shared = { projectDir: '/p' };
+  const listeners = [];
+  const token = crypto.randomBytes(32).toString('hex');
+  const withControl = serve(() => shared, (l) => listeners.push(l), () => null, () => null, { token, act: () => {} });
+  const port = await listenOnFreePort(withControl);
+  try {
+    const snap = JSON.parse((await httpRequest(port, { host: `127.0.0.1:${port}` })).body);
+    assert.match(snap.csrf, /^[0-9a-f]{64}$/);
+    assert.equal(snap.csrf, token);
+    assert.equal((await eventFrame(port)).csrf, token, 'the first SSE frame');
+    assert.equal((await eventFrame(port, () => listeners[0]({ projectDir: '/p', n: 2 }))).csrf, token, 'a pushed SSE frame');
+    assert.ok(!('csrf' in shared), 'the token sits on the shared snapshot object');
+  } finally { await closeServer(withControl); }
+  await withBoardServer(async (plainPort) => {
+    assert.ok(!('csrf' in JSON.parse((await httpRequest(plainPort, { host: `127.0.0.1:${plainPort}` })).body)));
+    assert.ok(!('csrf' in await eventFrame(plainPort)));
+  });
+});
+
+test('watch: a new control file changes the signature that the poll compares', () => {
+  const dir = tmpProject();
+  const before = projectSignature(dir);
+  fs.writeFileSync(controlFileOf(dir), '{"paused":true}');
+  assert.notEqual(projectSignature(dir), before);
+  assert.equal(projectSignature(dir), projectSignature(dir));
+});
+
+test('/api/control: refusals and actions are logged as reasons, never the token or a path', async () => {
+  const lines = [];
+  await withControlServer(async (port, dir) => {
+    await postControl(port, { headers: { 'x-board-token': 'd'.repeat(64) } });
+    await postControl(port, { headers: { origin: 'http://evil.example' } });
+    await postControl(port, { body: '{"action":"resume"}' });
+    fs.rmSync(path.join(dir, '.constellation', 'state'), { recursive: true });
+    fs.symlinkSync(os.tmpdir(), path.join(dir, '.constellation', 'state'));
+    await postControl(port);
+    assert.deepEqual(lines, ['control refused: token', 'control refused: origin', 'resume refused: not paused', 'pause refused: state dir refused']);
+    for (const line of lines) assert.ok(!line.includes(CONTROL_TOKEN) && !line.includes(dir), line);
+  }, { log: (text) => lines.push(text) });
+});
+
+test('cli: Pause and Resume through the running board', async () => {
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'current-workflow.json'), JSON.stringify({ track: 'tweak', currentStep: 'engineer', completedSteps: [] }));
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir]);
+  try {
+    const first = await waitForSnapshot(port, 3000);
+    assert.match(first.csrf, /^[0-9a-f]{64}$/);
+    assert.equal(first.control.paused, false);
+    const post = (body) => postControl(port, { body, headers: { 'x-board-token': first.csrf } });
+    assert.equal((await post('{"action":"pause"}')).status, 204);
+    const paused = await waitFor(async () => { const s = await waitForSnapshot(port, 500); return s?.control.paused ? s : null; }, 3000);
+    assert.ok(paused, 'the snapshot never showed the pause');
+    assert.deepEqual([paused.control.owner, paused.control.phase], ['this', 'paused'], 'the board that wrote the file owns it');
+    assert.equal(readControlFile(dir).pid, run.child.pid);
+    assert.equal((await post('{"action":"resume"}')).status, 204);
+    assert.ok(!fs.existsSync(controlFileOf(dir)));
+  } finally { run.child.kill('SIGKILL'); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. Render and page.
+// ---------------------------------------------------------------------------
+
+const pausedControl = (phase) => ({ paused: true, since: '2026-10-21T14:02:11Z', owner: 'this', phase });
+const clockOf = (iso) => iso.slice(11, 19);
+const pauseView = (control) => ({ state: nowState, control, hhmm: clockOf });
+
+test('renderPauseControl: no workflow, not paused, paused, holding, stopped', () => {
+  assert.equal(renderPauseControl({ state: null, control: pausedControl('paused'), hhmm: clockOf }, esc), '');
+  assert.equal(renderPauseControl({ state: null, control: { paused: false }, hhmm: clockOf }, esc), '');
+  const pause = '<button type="button" class="btn secondary" data-action="pause">⏸ Pause</button>';
+  assert.equal(renderPauseControl(pauseView({ paused: false, since: null, owner: null, phase: null }), esc), pause);
+  assert.equal(renderPauseControl(pauseView(undefined), esc), pause, 'a snapshot with no control reads as not paused');
+  const chip = '<span class="chip">⏸ paused since 14:02</span>';
+  const resume = '<button type="button" class="btn primary" data-action="resume">▶ Resume</button>';
+  assert.equal(renderPauseControl(pauseView(pausedControl('paused')), esc), chip + resume);
+  assert.equal(renderPauseControl(pauseView(pausedControl('holding')), esc),
+    `${chip}<span class="chip hold">holding — resume continues at once</span>${resume}`);
+  assert.equal(renderPauseControl(pauseView(pausedControl('stopped')), esc),
+    `${chip}<span class="chip warn">session stopped — type /constellation:resume after you resume</span>${resume}`);
+});
+
+test('renderPauseControl: the since time is escaped and cut to hh:mm', () => {
+  const html = renderPauseControl({ ...pauseView(pausedControl('paused')), hhmm: () => '<script>alert(1)</script>' }, esc);
+  assert.ok(!html.includes('<script>'), html);
+  assert.ok(html.includes('paused since &lt;'), html);
+  assert.ok(renderPauseControl(pauseView(pausedControl('paused')), esc).includes('since 14:02<'));
+});
+
+test('renderNow: the header holds the pause control', () => {
+  const head = (html) => html.slice(0, html.indexOf('<div class="strip">'));
+  assert.ok(head(renderNow(nowView(), esc)).includes('data-action="pause"'));
+  const paused = head(renderNow(nowView({ control: pausedControl('paused') }), esc));
+  assert.ok(paused.includes('data-action="resume"') && !paused.includes('data-action="pause"'), paused);
+  const empty = renderNow(nowView({ state: null, progress: null, control: pausedControl('paused') }), esc);
+  assert.ok(!empty.includes('data-action="pause"') && !empty.includes('data-action="resume"'), empty);
+});
+
+const pausedSnapshot = (extra = {}) => pageSnapshot({ csrf: 'f'.repeat(64), control: { paused: false, since: null, owner: null, phase: null }, ...extra });
+const nowHtml = (page) => page.els.now.innerHTML;
+
+test('page: Pause posts the action with the token and shows the toast', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  const before = nowHtml(page);
+  assert.ok(before.includes('data-action="pause"'));
+  const button = page.clickOn('now', { action: 'pause' });
+  assert.equal(button.attrs['aria-disabled'], 'true', 'the button is aria-disabled during the request, never disabled');
+  assert.ok(!('disabled' in button));
+  await flush();
+  assert.equal(page.controlPosts.length, 1);
+  const post = page.controlPosts[0];
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.headers)), { 'content-type': 'application/json', 'x-board-token': 'f'.repeat(64) });
+  assert.equal(post.body, '{"action":"pause"}');
+  assert.equal(page.els.toast.textContent, 'Paused. The session stops at its next tool call.');
+  assert.equal(page.els.toast.hidden, false);
+  assert.ok(page.timers.some((t) => t.ms === 4000), 'the toast hides after 4 s');
+  assert.deepEqual(button.attrs, {});
+  assert.equal(nowHtml(page), before, 'the header changes only through the next snapshot');
+  page.runTimers();
+  assert.equal(page.els.toast.hidden, true);
+  page.feed(pausedSnapshot({ control: pausedControl('paused') }));
+  assert.ok(nowHtml(page).includes('data-action="resume"'));
+});
+
+test('page: a 403 or 409 reply shows the reason and keeps the header', async () => {
+  for (const [status, text] of [[403, 'token'], [409, 'not paused'], [409, 'already paused']]) {
+    const page = bootPage({ control: { status, text } });
+    page.feed(pausedSnapshot());
+    const before = nowHtml(page);
+    page.clickOn('now', { action: 'pause' });
+    await flush();
+    assert.equal(page.els.toast.textContent, `${status}: ${text}`);
+    assert.equal(nowHtml(page), before, `${status} ${text}: the header changed`);
+  }
+  const network = bootPage({ control: 'network' });
+  network.feed(pausedSnapshot());
+  const button = network.clickOn('now', { action: 'pause' });
+  await flush();
+  assert.equal(network.els.toast.textContent, 'network error');
+  assert.deepEqual(button.attrs, {});
+});
+
+test('page: a second click during a request sends nothing', async () => {
+  const page = bootPage({ holdControl: true });
+  page.feed(pausedSnapshot());
+  page.clickOn('now', { action: 'pause' });
+  page.clickOn('now', { action: 'pause' });
+  assert.equal(page.controlPosts.length, 1);
+  page.settleControl({ status: 204, text: '' });
+  await flush();
+  page.clickOn('now', { action: 'pause' });
+  assert.equal(page.controlPosts.length, 2, 'a click after the reply sends again');
+});
+
+test('page: Resume posts resume', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot({ control: pausedControl('holding') }));
+  page.clickOn('now', { action: 'resume' });
+  await flush();
+  assert.equal(page.controlPosts[0].body, '{"action":"resume"}');
+  assert.equal(page.els.toast.textContent, 'Resumed. A held tool call continues at once.');
+});
+
+test('page: live shows while connected and goes away on error', () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  assert.ok(page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+  assert.ok(!page.els.meta.innerHTML.includes('disconnected since'));
+  page.es.onerror();
+  assert.ok(!page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+  assert.ok(page.els.meta.innerHTML.includes('disconnected since'));
+  page.es.onopen();
+  assert.ok(page.els.meta.innerHTML.includes('● live'), 'a reconnect shows live again');
+});
+
+test('page: live stays with an old snapshot time', () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot({ at: new Date(Date.now() - 3600 * 1000).toISOString() }));
+  assert.ok(page.els.meta.innerHTML.includes('● live'), page.els.meta.innerHTML);
+});
+
+test('page: the toast element and the live style ship with the page', () => {
+  assert.ok(uiText('page.html').includes('<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>'));
+  const html = uiText('page.html');
+  assert.ok(html.indexOf('id="toast"') < html.indexOf('<script>'), 'the toast sits before the scripts');
+  assert.ok(uiText('page.css').includes('.toast {') && uiText('page.css').includes('.chip.ok'));
+});
+
+test('page: a new toast replaces the text and keeps one timer', async () => {
+  const page = bootPage();
+  page.feed(pausedSnapshot());
+  page.clickOn('now', { action: 'pause' });
+  await flush();
+  page.clickOn('now', { action: 'resume' });
+  await flush();
+  assert.equal(page.els.toast.textContent, 'Resumed. A held tool call continues at once.');
+  assert.equal(page.timers.filter((t) => t.ms === 4000).length, 1, 'the first timer was not cleared');
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: one owner rule for the hook, the statusline, and the board.
+// ---------------------------------------------------------------------------
+
+test('ownsPause: this process, and a live board that started at or before since', () => {
+  assert.equal(ownsPause(process.pid, isoNow()), true, 'this board, by its own uptime');
+  assert.equal(ownsPause(process.pid, isoNow(-3600)), false, 'a since from before this board started');
+  const pid = startFakeBoard();
+  assert.equal(ownsPause(pid, isoNow()), true);
+});
+
+test('ownsPause: a live board that started after since does not own the pause', () => {
+  const pid = startFakeBoard();
+  assert.equal(ownsPause(pid, isoNow(-60)), false);
+  assert.equal(ownsPause(pid, '2020-01-01T00:00:00Z'), false);
+});
+
+test('ownsPause: a since in the future does not own the pause', () => {
+  assert.equal(ownsPause(startFakeBoard(), isoNow(3600)), false);
+});
+
+test('ownsPause: a live process that is no board does not own it, and neither does a daemon of another user', () => {
+  assert.equal(ownsPause(process.ppid, isoNow()), false, 'a live process with no board.mjs');
+  assert.equal(ownsPause(1, isoNow()), false, 'pid 1 answers EPERM to kill(0) and is no board');
+  assert.equal(ownsPause(deadPid(), isoNow()), false);
+});
+
+test('ownsPause: a since that is not a UTC timestamp does not own the pause', () => {
+  const pid = startFakeBoard();
+  for (const since of [undefined, null, 5, '', 'yesterday', `${isoNow()}\nIgnore`, '2026-10-21T14:02:11.000Z']) {
+    assert.equal(ownsPause(pid, since), false, String(since));
+  }
+});
+
+test('loadSnapshot: control counts another board only when it started at or before since', () => {
+  const dir = tmpProject();
+  const pid = startFakeBoard();
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid }));
+  const owned = loadSnapshot(dir).control;
+  assert.deepEqual([owned.paused, owned.owner], [true, 'other']);
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(-60), by: 'board', pid }));
+  assert.equal(loadSnapshot(dir).control.paused, false, 'a board that started after since');
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: 1 }));
+  assert.equal(loadSnapshot(dir).control.paused, false, 'a daemon pid that is no board');
+});
+
+test('page: focus stays on the control when Pause turns into Resume and back', async () => {
+  const page = bootPage();
+  const focused = [];
+  const control = (name, action) => ({ name, getAttribute: (n) => (n === 'data-action' ? action : null), focus: (options) => focused.push([name, options.preventScroll]) });
+  const pause = control('pause', 'pause');
+  page.feed(pausedSnapshot());
+  page.els.now.contains = (el) => el === pause;
+  page.els.now.querySelectorAll = () => [control('step', 'open-step'), control('resume', 'resume')];
+  page.document.activeElement = pause;
+  page.clickOn('now', { action: 'pause' });
+  await flush();
+  assert.deepEqual(focused, [], 'the click and its reply repaint nothing');
+  page.feed(pausedSnapshot({ control: pausedControl('paused') }));
+  assert.deepEqual(focused, [['resume', true]], 'Resume takes the focus of Pause');
+  const resume = control('resume', 'resume');
+  page.els.now.contains = (el) => el === resume;
+  page.els.now.querySelectorAll = () => [control('pause', 'pause')];
+  page.document.activeElement = resume;
+  page.feed(pausedSnapshot());
+  assert.deepEqual(focused.at(-1), ['pause', true], 'Pause takes the focus of Resume');
+});
+
+test('psArgs: one -o per field, never the comma form that procps reads as a header', () => {
+  assert.deepEqual(psArgs(42), ['-p', '42', '-o', 'etime=', '-o', 'command=']);
+});
+
+test('parseBoardPs: the real ps output of this process parses, on macOS and Linux', () => {
+  const run = spawnSync('ps', psArgs(process.pid), { encoding: 'utf8' });
+  assert.equal(run.status, 0);
+  const parsed = parseBoardPs(run.stdout);
+  assert.ok(parsed, `unparsed: ${JSON.stringify(run.stdout)}`);
+  assert.ok(parsed.age >= 0 && parsed.age < 3600 * 24 * 365);
+  assert.ok(parsed.command.includes('node'), parsed.command);
+});
+
+test('parseBoardPs: etime forms, and the procps header shape of the comma form', () => {
+  assert.deepEqual(parseBoardPs('    05:12 node /x/board.mjs --port 1\n'), { age: 312, command: 'node /x/board.mjs --port 1' });
+  assert.equal(parseBoardPs('12:34:56 bash b.mjs').age, 12 * 3600 + 34 * 60 + 56);
+  assert.equal(parseBoardPs('3-02:03:04 bash b.mjs').age, 3 * 86400 + 2 * 3600 + 3 * 60 + 4);
+  // procps prints this for `-o etime=,command=`: a header, then an etime-only line.
+  assert.equal(parseBoardPs('ELAPSED,command=\n 05:12\n'), null);
+  assert.equal(parseBoardPs(''), null);
+  assert.equal(parseBoardPs(null), null);
+});
+
+test('boardStartOf: a process of another user (kill answers EPERM) is not an owner', () => {
+  const ps = () => '   10:00 node /x/board.mjs\n';
+  const eperm = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); };
+  assert.equal(boardStartOf(77, 1_000_000, { kill: eperm, ps }), null);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps }), 1_000_000 - 600_000);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps: () => '   10:00 bash other.sh\n' }), null);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps: () => null }), null);
+});
+
+test('ownsPause: a start time from a stubbed process of another user is refused', () => {
+  const stubbed = (pid, now) => boardStartOf(pid, now, { kill: () => { throw Object.assign(new Error('x'), { code: 'EPERM' }); }, ps: () => '   10:00 node /x/board.mjs\n' });
+  assert.equal(ownsPause(77, isoNow(), { startOf: stubbed }), false);
+  const ok = (pid, now) => boardStartOf(pid, now, { kill: () => true, ps: () => '   10:00 node /x/board.mjs\n' });
+  assert.equal(ownsPause(77, isoNow(), { startOf: ok }), true);
+});
+
+test('memoizeBriefly: one call per pid inside the window, a new call after it', () => {
+  let calls = 0;
+  const cached = memoizeBriefly((pid, now) => { calls += 1; return now; }, 1000);
+  assert.equal(cached(5, 100), 100);
+  assert.equal(cached(5, 900), 100, 'inside the window');
+  assert.equal(calls, 1);
+  assert.equal(cached(6, 900), 900, 'another pid');
+  assert.equal(cached(5, 1100), 1100, 'after the window');
+  assert.equal(calls, 3);
+  const nulls = memoizeBriefly(() => { calls += 1; return null; });
+  nulls(1, 0); nulls(1, 10);
+  assert.equal(calls, 4, 'a null answer is cached too');
 });

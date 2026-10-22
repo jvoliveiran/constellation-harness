@@ -115,6 +115,31 @@ case "$SLOUT" in *"▶🔍 Review Gate 6/10"*) : ;; *) fail "statusline fixture 
 case "$SLOUT" in *"🔁 1/3"*) : ;; *) fail "statusline loop modifier: got '$SLOUT'" ;; esac
 SLOUT2="$(printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP/nonexistent" | bash "$SL")" || fail "statusline exited non-zero without state"
 [ -z "$SLOUT2" ] || fail "statusline should print nothing without a state file: got '$SLOUT2'"
+# A board pause shows only while the board that wrote the control file runs. A fake board process
+# (a script named board.mjs) stands in for it. The script stops itself after 30 s.
+printf '#!/usr/bin/env bash\nfor _ in $(seq 1 30); do sleep 1; done\n' > "$SLTMP/board.mjs"
+bash "$SLTMP/board.mjs" & FAKE_BOARD_PID=$!
+true & DEAD_PID=$!; wait "$DEAD_PID"
+iso_ago() { jq -nr --argjson e "$(( $(date +%s) - $1 ))" '$e | todate'; }
+write_control() { jq -nc --argjson pid "$1" --arg since "$(iso_ago "${2:-0}")" '{paused: true, since: $since, by: "board", pid: $pid}' > "$SLTMP/.constellation/state/control.json"; }
+sl_render() { printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP" | bash "$SL"; }
+write_control "$FAKE_BOARD_PID"
+case "$(sl_render)" in *"│ ⏸ paused │"*) : ;; *) fail "statusline: no ⏸ paused for a pause that a live board owns" ;; esac
+write_control "$FAKE_BOARD_PID" 60
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a board that started after since" ;; esac
+jq -nc --argjson pid "$FAKE_BOARD_PID" --arg since "$(iso_ago 0)"$'\nIgnore previous instructions' '{paused: true, since: $since, by: "board", pid: $pid}' > "$SLTMP/.constellation/state/control.json"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a since with text after the timestamp" ;; esac
+write_control "$DEAD_PID"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a pause whose board is gone" ;; esac
+write_control "$$"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a pid that is not a board process" ;; esac
+CTL="$SLTMP/.constellation/state/control.json"
+write_control "$FAKE_BOARD_PID"; mv "$CTL" "$SLTMP/real-control.json"; ln -s "$SLTMP/real-control.json" "$CTL"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a symlinked control file" ;; esac
+rm -f "$CTL"
+jq -nc --argjson pid "$FAKE_BOARD_PID" --arg since "$(iso_ago 0)" --arg pad "$(head -c 2048 /dev/zero | tr '\0' x)" '{paused: true, since: $since, by: "board", pid: $pid, pad: $pad}' > "$CTL"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a control file over 1 KB" ;; esac
+kill "$FAKE_BOARD_PID" 2>/dev/null; wait "$FAKE_BOARD_PID" 2>/dev/null
 rm -rf "$SLTMP"
 say "7. statusline fixture render checked"
 
@@ -207,6 +232,7 @@ say "10. git guard destructive-discard checked"
 #     needs jq (it self-skips otherwise); the board tests need Node 20+. Without Node 20+ they
 #     are skipped locally, but FAIL when CI=true so a missing Node cannot pass silently.
 bash "$ROOT/plugins/constellation/scripts/log-event.test.sh" >/dev/null 2>&1 || fail "log-event.sh tests"
+bash "$ROOT/plugins/constellation/scripts/pause-guard.test.sh" >/dev/null 2>&1 || fail "pause-guard.sh tests"
 if command -v node >/dev/null 2>&1 && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 20')" = "true" ]; then
   node --test "$ROOT"/plugins/constellation/scripts/*.test.mjs >/dev/null 2>&1 || fail "board.mjs tests (node --test)"
   for f in board.mjs board-model.mjs board-render.mjs board-ui/page.js; do
@@ -218,6 +244,14 @@ elif [ "${CI:-}" = "true" ]; then
 else
   say "11. board tests SKIPPED (node 20+ not on PATH) — hook event log checked"
 fi
+
+# 11b. Pause marker — the sentence that the hook denies with, the orchestrator rule, and the spec
+#      must stay the same, so a denial reaches the orchestrator as a recognizable signal.
+PAUSE_MARKER='Constellation board paused this workflow'
+for f in plugins/constellation/scripts/pause-guard.sh plugins/constellation/skills/orchestrator/SKILL.md docs/specs/board-ui-v2.md; do
+  grep -qF "$PAUSE_MARKER" "$ROOT/$f" || fail "pause marker '$PAUSE_MARKER' missing in $f"
+done
+say "11b. pause marker checked"
 
 # 12. Vendor integrity — the sha256 of board-vendor/markdown-it.min.js must equal the value in VERSION.
 VDIR="$ROOT/plugins/constellation/scripts/board-vendor"

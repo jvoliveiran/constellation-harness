@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Constellation Harness — board: live workflow panel and backlog tree on localhost.
 //
-// Read-only. Watches .constellation/ of one project: state/, metrics/, and the epics/,
-// features/, tasks/, and plans/ directories. Resolves the active track against
-// .constellation/tracks.json with the same rules as the statusline, and serves one HTML
-// page that updates over Server-Sent Events.
+// Reads .constellation/ of one project: state/, metrics/, and the epics/, features/, tasks/,
+// and plans/ directories. Resolves the active track against .constellation/tracks.json with
+// the same rules as the statusline, and serves one HTML page that updates over Server-Sent
+// Events. It writes one file only: state/control.json, on a Pause click. A Resume click
+// deletes it (POST /api/control).
 //
 //   node board.mjs [projectDir] [--port N] [--quiet] [--probe]
 //
@@ -15,8 +16,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
+import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh, controlView } from './board-model.mjs';
 import { createSessionReader, projectSlugOf } from './board-session.mjs';
 import * as render from './board-render.mjs';
 
@@ -33,6 +35,10 @@ const POLL_MS = 1500;
 const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
 const SESSION_POLL_MS = 5000;
+const CONTROL_CAP_BYTES = 1024;
+const CONTROL_ACTIONS = ['pause', 'resume'];
+const CONTROL_TOKEN_BYTES = 32;
+const STATE_DIR_REFUSED = 'state dir refused';
 const JSON_CAP_BYTES = 1024 * 1024;
 export const TAIL_CAP_BYTES = 256 * 1024;
 const ROOT_OUTSIDE = '.constellation resolves outside the project';
@@ -79,6 +85,7 @@ function paths(projectDir) {
     state: path.join(root, 'state', 'current-workflow.json'),
     tracks: path.join(root, 'tracks.json'),
     config: path.join(root, 'config.json'),
+    control: path.join(root, 'state', 'control.json'),
     events: path.join(root, 'metrics', 'events.jsonl'),
     epicsDir: path.join(root, 'epics'),
     featuresDir: path.join(root, 'features'),
@@ -244,6 +251,162 @@ function readJson(root, file) {
 }
 
 /**
+ * Read state/control.json for the pause view. The pause gate of the hook refuses a symlink and a
+ * file over 1 KB, so the board refuses them too. Any other problem reads as no file.
+ */
+function readControl(root, file) {
+  if (!root) return null;
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > CONTROL_CAP_BYTES) return null;
+  } catch {
+    return null;
+  }
+  return readJson(root, file).value;
+}
+
+const PS_TIMEOUT_MS = 2000;
+const START_TOLERANCE_MS = 2000;
+const SINCE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const ETIME_PATTERN = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/;
+
+/** Seconds that ps reports as etime, [[dd-]hh:]mm:ss on macOS and Linux, or null. */
+function etimeSeconds(text) {
+  const m = ETIME_PATTERN.exec(text);
+  return m ? Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]) : null;
+}
+
+/**
+ * Parse the output of `ps -p PID -o etime= -o command=` into { age, command }, or null. One `-o` per
+ * field: procps (Linux) reads all text after the first `=` of `-o etime=,command=` as a header.
+ */
+export function parseBoardPs(stdout) {
+  const m = /^\s*(\S+)\s+(.*)$/s.exec(String(stdout ?? ''));
+  const age = m ? etimeSeconds(m[1]) : null;
+  return age === null ? null : { age, command: m[2].trim() };
+}
+
+const realKill = (pid) => process.kill(pid, 0);
+/** The ps arguments: one -o per field. */
+export const psArgs = (pid) => ['-p', String(pid), '-o', 'etime=', '-o', 'command='];
+const realPs = (pid) => {
+  const ps = spawnSync('ps', psArgs(pid), { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+  return ps.status === 0 ? ps.stdout : null;
+};
+
+/**
+ * When another process started, as epoch ms, or null. The process must exist for this user (kill 0
+ * answers EPERM for another user's process, which the hook and the statusline ignore too) and run
+ * with board.mjs in its command line. kill and ps are injectable for tests.
+ */
+export function boardStartOf(pid, nowMs, { kill = realKill, ps = realPs } = {}) {
+  try { kill(pid); } catch { return null; }
+  const parsed = parseBoardPs(ps(pid));
+  return parsed && parsed.command.includes('board.mjs') ? nowMs - parsed.age * 1000 : null;
+}
+
+const START_CACHE_MAX = 64;
+
+/** Keep the last answer of fn(pid, nowMs) per pid for ttlMs, so a crafted file cannot spawn ps on every refresh. */
+export function memoizeBriefly(fn, ttlMs = 1000) {
+  const cache = new Map();
+  return (pid, nowMs) => {
+    const hit = cache.get(pid);
+    if (hit && nowMs - hit.at < ttlMs) return hit.value;
+    const value = fn(pid, nowMs);
+    if (cache.size >= START_CACHE_MAX) cache.clear();
+    cache.set(pid, { at: nowMs, value });
+    return value;
+  };
+}
+
+const cachedBoardStart = memoizeBriefly(boardStartOf);
+
+/**
+ * The owner rule of a pause, the same as the hook and the statusline apply (keep the three in sync).
+ * since must be a UTC timestamp that is not in the future. The owner is this process, or a process
+ * with board.mjs in its command line, and it must have started at or before since. The start rule
+ * binds the file to the board that wrote it: a committed file predates any board started later.
+ * deps: now (epoch ms) and startOf(pid, nowMs), both injectable for tests.
+ */
+export function ownsPause(pid, since, { now = Date.now(), startOf = cachedBoardStart } = {}) {
+  const sinceMs = typeof since === 'string' && SINCE_PATTERN.test(since) ? Date.parse(since) : NaN;
+  if (Number.isNaN(sinceMs) || sinceMs > now + START_TOLERANCE_MS) return false;
+  const startMs = pid === process.pid ? now - process.uptime() * 1000 : startOf(pid, now);
+  return startMs !== null && startMs <= sinceMs + START_TOLERANCE_MS;
+}
+
+const controlFailure = (status, text) => Object.assign(new Error(text), { status });
+
+/**
+ * The real state/ directory of the project. It must be a directory and not a symlink, and its
+ * real path must lie directly under the real .constellation/ root. Anything else is a 403.
+ */
+function checkedStateDir(projectDir) {
+  const { root } = resolveRoot(projectDir);
+  if (!root) throw controlFailure(403, STATE_DIR_REFUSED);
+  const stateDir = path.join(root, 'state');
+  try {
+    if (!fs.lstatSync(stateDir).isDirectory() || fs.realpathSync(stateDir) !== stateDir) throw new Error('not a real directory');
+  } catch {
+    throw controlFailure(403, STATE_DIR_REFUSED);
+  }
+  return { root, stateDir };
+}
+
+/** Write text to a new file that nothing else holds: O_EXCL and O_NOFOLLOW, mode 0600. */
+function writeNewFile(file, text) {
+  const flags = fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  const fd = fs.openSync(file, flags, 0o600);
+  try {
+    fs.writeSync(fd, text);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Pause: write state/control.json. The server builds the content, with its own pid. A temp file in
+ * state/ and a rename make the write atomic, and rename replaces a symlink at control.json without
+ * following it. Throws an Error with a status: 403 for a refused state/ and 409 when no workflow
+ * runs or a live board already owns a pause.
+ */
+export function writeControl(projectDir, now = new Date()) {
+  const { root, stateDir } = checkedStateDir(projectDir);
+  const target = path.join(stateDir, 'control.json');
+  let hasWorkflow = false;
+  try { hasWorkflow = fs.statSync(path.join(stateDir, 'current-workflow.json')).isFile(); } catch { /* none */ }
+  if (!hasWorkflow) throw controlFailure(409, 'no workflow in flight');
+  if (pauseOf(readControl(root, target), []).paused) throw controlFailure(409, 'already paused');
+  const since = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const tmp = path.join(stateDir, `.control-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
+  try {
+    writeNewFile(tmp, JSON.stringify({ paused: true, since, by: 'board', pid: process.pid }));
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    throw e;
+  }
+}
+
+/** The pause view of a control file: another pid counts only when it passes the owner rule. */
+function pauseOf(raw, events) {
+  return controlView(raw, events, { selfPid: process.pid, alive: (pid) => ownsPause(pid, raw?.since) });
+}
+
+/** Resume: delete state/control.json. A missing file is a 409, and so is a directory in its place. */
+export function clearControl(projectDir) {
+  const { stateDir } = checkedStateDir(projectDir);
+  try {
+    fs.unlinkSync(path.join(stateDir, 'control.json'));
+  } catch (e) {
+    if (e.code === 'ENOENT') throw controlFailure(409, 'not paused');
+    if (e.code === 'EISDIR' || e.code === 'EPERM') throw controlFailure(409, 'control file is not a file');
+    throw e;
+  }
+}
+
+/**
  * Read the last maxLines lines of one contained regular file, from at most the last
  * TAIL_CAP_BYTES. A window that starts after offset 0 cuts its first line, so that line is dropped.
  * Returns { text, error }. A missing file is silent.
@@ -354,6 +517,7 @@ export function loadSnapshot(projectDir, prev = null, session = null) {
     transitions,
     stale,
     errors,
+    control: pauseOf(readControl(root, p.control), events),
   };
 }
 
@@ -389,11 +553,11 @@ function watch(projectDir, onChange) {
     [p.root, p.stateDir, p.metricsDir, p.epicsDir, p.featuresDir, p.tasksDir, p.plansDir].forEach((dir) => arm(root, dir));
   armAll();
 
-  let sig = signature(p, liveRoot());
+  let sig = projectSignature(projectDir);
   const poll = setInterval(() => {
     const root = liveRoot();
     armAll(root);
-    const next = signature(p, root);
+    const next = projectSignature(projectDir);
     if (next !== sig) {
       sig = next;
       fire();
@@ -416,6 +580,11 @@ function isDirectory(dir) {
   try { return fs.statSync(dir).isDirectory(); } catch { return false; }
 }
 
+/** A text that changes when any watched file changes: the floor under fs.watch. */
+export function projectSignature(projectDir) {
+  return signature(paths(projectDir), resolveRoot(projectDir).root);
+}
+
 function signature(p, root) {
   const stamp = (f) => {
     try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
@@ -427,7 +596,7 @@ function signature(p, root) {
     return names.filter(isWorkFile).sort().map((n) => `${n}=${stamp(path.join(dir, n))}`).join(',');
   };
   const workDirs = WORK_DIRS.map(([, key]) => dirStamp(p[key]));
-  return [p.state, p.events, p.tracks, p.config].map(stamp).concat(workDirs).join('|');
+  return [p.state, p.events, p.tracks, p.config, p.control].map(stamp).concat(workDirs).join('|');
 }
 
 // ---------------------------------------------------------------------------
@@ -461,8 +630,93 @@ function agentReplyBody(agent, raw) {
   };
 }
 
-export function serve(getSnapshot, subscribe, readItemBody = () => null, readAgent = () => null) {
+const CONTROL_TEXT_HEADERS = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' };
+
+/** True when the header holds the token. The compare is constant-time and needs equal lengths. */
+function tokenMatches(header, token) {
+  if (typeof header !== 'string') return false;
+  const given = Buffer.from(header);
+  const wanted = Buffer.from(token);
+  return given.length === wanted.length && crypto.timingSafeEqual(given, wanted);
+}
+
+/** The first refusal among checks 2 to 6 of the control route, as [status, text], or null. */
+function controlRefusal(req, control, port) {
+  const origin = req.headers.origin;
+  if (origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return [403, 'origin'];
+  const site = req.headers['sec-fetch-site'];
+  if (site !== undefined && site !== 'same-origin') return [403, 'fetch site'];
+  if (!tokenMatches(req.headers['x-board-token'], control.token)) return [403, 'token'];
+  const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') return [415, 'content type'];
+  if (Number(req.headers['content-length']) > CONTROL_CAP_BYTES) return [413, 'body too large'];
+  return null;
+}
+
+/** The action of a request body, or null when the body is not JSON or names another action. */
+function controlAction(raw) {
+  try {
+    const action = JSON.parse(raw)?.action;
+    return CONTROL_ACTIONS.includes(action) ? action : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Run the action. Replies 204, or the status and reason of the failure. */
+function runControlAction(res, control, action) {
+  try {
+    control.act(action);
+    res.writeHead(204).end();
+  } catch (e) {
+    const status = Number.isInteger(e.status) ? e.status : 500;
+    control.log?.(`${action} refused: ${status === 500 ? 'internal error' : e.message}`);
+    res.writeHead(status, CONTROL_TEXT_HEADERS).end(status === 500 ? 'control failed' : e.message);
+  }
+}
+
+/** POST /api/control: checks 1 to 7 of the plan, then control.act. Every reply body is a short reason. */
+function handleControl(req, res, control, port) {
+  const reply = (status, text) => res.writeHead(status, CONTROL_TEXT_HEADERS).end(text);
+  if (!control || req.method !== 'POST') {
+    res.writeHead(405, control ? { ...CONTROL_TEXT_HEADERS, allow: 'POST' } : CONTROL_TEXT_HEADERS).end('method not allowed');
+    return;
+  }
+  const refusal = controlRefusal(req, control, port);
+  if (refusal) {
+    control.log?.(`control refused: ${refusal[1]}`);
+    reply(...refusal);
+    return;
+  }
+  const chunks = [];
+  let size = 0;
+  let over = false;
+  req.on('data', (chunk) => {
+    size += chunk.length;
+    if (over) return;
+    if (size > CONTROL_CAP_BYTES) {
+      over = true;
+      res.writeHead(413, { ...CONTROL_TEXT_HEADERS, connection: 'close' }).end('body too large', () => req.destroy());
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (over) return;
+    const action = controlAction(Buffer.concat(chunks).toString('utf8'));
+    if (action) runControlAction(res, control, action);
+    else reply(400, 'bad request');
+  });
+}
+
+/**
+ * The HTTP server. control is null (the board is read-only: POST /api/control answers 405) or
+ * { token, act(action), log? }. With control set, every snapshot that the server sends carries
+ * the token as csrf: only a same-origin page reads it, because no CORS header exists.
+ */
+export function serve(getSnapshot, subscribe, readItemBody = () => null, readAgent = () => null, control = null) {
   const clients = new Set();
+  const outgoing = (snap) => (control ? { ...snap, csrf: control.token } : snap);
   const server = http.createServer((req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
     // Defense in depth: a link in a rendered body never sends the board URL as a referrer.
@@ -474,6 +728,7 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null, readAge
       return;
     }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname === '/api/control') { handleControl(req, res, control, port); return; }
     if (req.method !== 'GET') { res.writeHead(405).end(); return; }
     if (url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': PAGE_CSP });
@@ -482,7 +737,7 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null, readAge
     }
     if (url.pathname === '/api/snapshot') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(JSON.stringify(getSnapshot()));
+      res.end(JSON.stringify(outgoing(getSnapshot())));
       return;
     }
     if (url.pathname === '/api/item') {
@@ -514,7 +769,7 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null, readAge
         'cache-control': 'no-store',
         connection: 'keep-alive',
       });
-      res.write(`data: ${JSON.stringify(getSnapshot())}\n\n`);
+      res.write(`data: ${JSON.stringify(outgoing(getSnapshot()))}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
@@ -523,7 +778,7 @@ export function serve(getSnapshot, subscribe, readItemBody = () => null, readAge
   });
 
   subscribe((snap) => {
-    const frame = `data: ${JSON.stringify(snap)}\n\n`;
+    const frame = `data: ${JSON.stringify(outgoing(snap))}\n\n`;
     for (const c of clients) c.write(frame);
   });
   const keepalive = setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000);
@@ -718,7 +973,7 @@ function main() {
   }
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Read-only live panel of the in-flight Constellation workflow.\n  --probe prints whether a board for this project runs on the port, then exits.');
+    console.log('usage: node board.mjs [projectDir] [--port N] [--quiet] [--probe]\n  Live panel of the in-flight Constellation workflow. It writes only state/control.json (Pause and Resume).\n  --probe prints whether a board for this project runs on the port, then exits.');
     process.exit(0);
   }
   if (!Number.isInteger(args.port) || args.port < 1 || args.port > MAX_PORT) {
@@ -763,7 +1018,17 @@ function runServer({ projectDir, port, quiet }) {
   }, SESSION_POLL_MS);
 
   const readAgent = (agent) => (snapshot?.state ? reader.agentReply(agent) : { error: 'no workflow in flight' });
-  const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file), readAgent);
+  const log = quiet ? null : (text) => console.error(`board: ${text}`);
+  const control = {
+    token: crypto.randomBytes(CONTROL_TOKEN_BYTES).toString('hex'),
+    act: (action) => {
+      if (action === 'pause') writeControl(projectDir);
+      else clearControl(projectDir);
+      log?.(`${action} by the page`);
+    },
+    log,
+  };
+  const server = serve(getSnapshot, (l) => listeners.add(l), (kind, file) => readItem(projectDir, kind, file), readAgent, control);
   server.on('listening', () => {
     getSnapshot();
     stopWatch = watch(projectDir, refresh);

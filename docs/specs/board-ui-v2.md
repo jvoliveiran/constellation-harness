@@ -489,12 +489,21 @@ expires.
 `.constellation/state/control.json`:
 
 ```json
-{ "paused": true, "since": "2026-10-14T14:02:11Z", "by": "board" }
+{ "paused": true, "since": "2026-10-14T14:02:11Z", "by": "board", "pid": 48213 }
 ```
 
-Pause creates it. Resume deletes it. Absence means not paused, so the hook
-check is one `test -f`. The file is under `state/`, which the project
-template gitignores.
+Pause creates it, with the pid of the board process in `pid`. Resume
+deletes it. Absence means not paused, so the hook check is one `test -f`.
+The file is under `state/`, which the project template gitignores.
+
+Owner rule. The hook, the statusline, and the board apply one rule. A
+pause is in force only when all of these are true: the file is a regular
+file, not a symlink, of at most 1 KB; `paused` is true and `by` is
+`board`; `pid` is an integer of a live process whose command line holds
+`board.mjs`; `since` matches the strict UTC pattern and is not in the
+future; and that process started at or before `since`. The start rule
+binds a pause to the board that wrote it. A stale or committed control
+file does nothing.
 
 ### 9.2 Hook `pause-guard.sh`
 
@@ -504,19 +513,32 @@ existing `guard-git.sh` entry stays.
 1. Exit 0 at once when `control.json` is absent, or when
    `current-workflow.json` is absent. A stale control file never blocks a
    session without a workflow.
-2. Append `{ "event": "PauseHold", "ts", "session_id", "agent_id" }` to
-   `events.jsonl`.
-3. Poll every second. When `control.json` disappears, exit 0. The tool
-   runs and the session continues with no user action.
-4. After `HOLD_SECONDS` (default 540, below the 600 s hook timeout. At
-   600 s the tool runs), append `{ "event": "PauseDenied" }` and print:
+2. Run the owner rule. Exit 0 at once when it fails.
+3. Compute one deadline per pause: `since` plus the hold window. A `since`
+   in the future or not parsable counts as now, so a crafted file cannot
+   extend a hold. The window is `CONSTELLATION_HOLD_SECONDS` (default 540,
+   maximum 590, below the 600 s hook timeout. At 600 s the tool runs).
+4. When the deadline has passed, deny the call at once. There is no hold:
+   `heldSec` is 0 and the hook writes no `PauseHold`.
+5. Otherwise append `PauseHold` and poll every second. The hook releases
+   the call, and the tool runs with no user action, in two cases:
+   `control.json` disappears (`reason: resume`), or the owner rule fails
+   because the board stopped (`reason: board-stopped`). A release appends
+   `PauseReleased`.
+6. At the deadline, append `PauseDenied` and print:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny",
-  "permissionDecisionReason": "Constellation board paused this workflow at <since>. Do not run more tools. Report the last save point to the user and end the turn. The user resumes with /constellation:resume." } }
+  "permissionDecisionReason": "Constellation board paused this workflow at <since>. Do not run more tools. If you are a subagent, put this sentence in your final report and end your run. Report the last save point to the user and end the turn. The user clicks Resume on the board, then types /constellation:resume." } }
 ```
 
-`HOLD_SECONDS` and the project directory come from the environment so the
+Event fields. Every event carries `ts`, `event`, `session_id`,
+`agent_id`, `agent_type`, and `tool_name`, each a string or absent.
+`PauseReleased` and `PauseDenied` add `heldSec`, the seconds that the
+hook held the call. `PauseReleased` also adds `reason`, `resume` or
+`board-stopped`.
+
+`CONSTELLATION_HOLD_SECONDS` and the project directory come from the environment so the
 bash test can set a 2 s hold.
 
 ### 9.3 Orchestrator rule
@@ -527,8 +549,8 @@ with the pause message and the last save point. Do not save. Do not
 retry. `/constellation:resume` starts from `currentStep` of the saved
 state, as today.
 
-Add `workflow-paused` to the metrics event table, written by the hook, not
-by the model.
+The hook writes the events `PauseHold`, `PauseReleased`, and
+`PauseDenied`. The model writes none of them.
 
 ### 9.4 Route `POST /api/control`
 
@@ -539,12 +561,16 @@ by the model.
   `Sec-Fetch-Site`, when present, equals `same-origin`; header
   `x-board-token` equals the process token. The token is 32 random bytes
   in hex, minted at start and carried in the snapshot as `csrf`.
-- 409 when no workflow is in flight (`pause`), or when no control file
-  exists (`resume`).
+- Other replies, each with a short reason as the body: 405 with
+  `allow: POST` for any method but POST; 415 for a content type other than
+  `application/json`; 413 for a body over 1 KB; 400 for a body that is not
+  JSON or names another action; 409 `no workflow in flight` (`pause`),
+  409 `already paused` (`pause`), or 409 `not paused` (`resume`).
 - Pause writes to a temp file in `state/` and renames it. `state/` must
   resolve inside the root and be a directory. Resume unlinks the file.
 - 204 on success. The watcher sees the change and pushes a snapshot with
-  `control: { paused, since, by }`.
+  `control: { paused, since, owner, phase }`. `owner` is `this` or
+  `other`. `phase` is `paused`, `holding`, or `stopped`.
 
 ### 9.5 Page
 
@@ -554,15 +580,17 @@ by the model.
 - After `PauseHold` the chip says `holding — resume continues at once`.
   After `PauseDenied` it says `session stopped — type
   /constellation:resume after you resume`.
+- The header shows `● live` while the SSE connection is open. It says
+  nothing about the pause.
 - A toast confirms each action. A 403 or 409 shows the reason.
 - The statusline reads the control file and renders the `aborted` modifier
   from `tracks.json` (`⏸ paused`), so the terminal agrees with the page.
 
 ### 9.6 Documentation changes
 
-README, the board section: replace `never writes to .constellation/` with
-`writes one file, state/control.json, on a Pause click, and deletes it on
-Resume`. The task 001 criterion 6 stays true for every other file. The
+README, the board section: the heading drops "read-only". The text says
+that the board writes one file, `state/control.json`, on a Pause click, and
+deletes it on Resume. The README hook text names `pause-guard.sh`. The task 001 criterion 6 stays true for every other file. The
 orchestrator skill command table gains the pause behavior next to
 `/constellation:abort`.
 
@@ -572,11 +600,18 @@ orchestrator skill command table gains the pause behavior next to
 |---------|------|
 | `/api/item` | name regex, tree membership, `openContained`, 512 KB cap |
 | `/api/agent` | id regex, snapshot membership, session root, name regex, 32 MB cap |
-| `/api/control` | Host, Origin, Sec-Fetch-Site, process token, body cap, atomic write inside `state/` |
+| `/api/control` | Host, exact Origin, Sec-Fetch-Site, process token, JSON, 1 KB cap, atomic write inside `state/` |
+| `control.json` | owner rule: live `board.mjs` pid, start at or before `since`, strict `since`, 1 KB, no symlink |
 | Markdown | `html: false`, link validation, `rel=noopener`, no remote images |
 | Vendor file | sha256 pinned in `VERSION`, checked by selftest, served by CSP hash |
 | Transcripts | read-only, under `~/.claude/projects`, never listed, never written |
 | Event log | new fields are strings, capped by the 256 KB tail, validated before use |
+
+Accepted residuals. Any local process can read the token and drive Pause
+and Resume, because the design is loopback-only. A committed control file
+can match only when it guesses the pid of a `board.mjs` that started before
+the commit time. Subagent work after the last save point runs again after
+`/constellation:resume`.
 
 ## 11. Tests
 
@@ -600,7 +635,7 @@ HTTP (`serve` tests as today):
   no workflow, 204 and file content on pause, 204 and no file on resume.
 - The CSP header lists exactly two script hashes and one style hash.
 
-Hook (`pause-guard.test.sh`): absent file exits 0 within 100 ms; a file
+Hook (`pause-guard.test.sh`): absent file exits 0 within 100 ms; a stale or foreign-owner file exits 0; a file
 removed during the hold exits 0; an expired hold prints the deny JSON and
 appends `PauseDenied`.
 
@@ -620,7 +655,8 @@ generated tasks renders under 100 ms per snapshot.
 
 025 and 026 can run in parallel after 023. Each phase is one PR. The
 CHANGELOG entries go under `[Unreleased]` until the release that follows
-the last merged phase.
+the last merged phase. Task 026 adds no version bump and no `[1.4.0]`
+section. The release is a separate step.
 
 ## 13. Out of scope
 

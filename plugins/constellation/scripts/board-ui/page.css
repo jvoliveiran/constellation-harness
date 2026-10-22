@@ -20,6 +20,8 @@
   .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); background: var(--surface-2); }
   .chip.accent, .mods .chip { color: var(--accent); border-color: var(--accent); }
   .chip.warn { color: var(--danger); border-color: var(--danger); }
+  .chip.hold { color: var(--warn); border-color: var(--warn); }
+  .chip.ok { color: var(--ok); border-color: var(--ok); }
   .chip.s-inbox, .chip.s-parked, .chip.s-other { color: var(--muted); }
   .chip.s-refined { color: var(--accent); border-color: var(--accent); }
   .chip.s-in-progress { color: var(--warn); border-color: var(--warn); }
@@ -33,7 +35,7 @@
   .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--bg); }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
   .btn:focus-visible, #theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* Top bar */
@@ -41,6 +43,9 @@
   .meta { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; min-width: 0; }
   .meta > * { min-width: 0; overflow-wrap: anywhere; }
   #theme { margin-left: auto; width: 32px; padding: 0; }
+
+  /* Toast: one line, bottom right, above the dialog. */
+  .toast { position: fixed; bottom: 16px; right: 16px; max-width: calc(100vw - 32px); z-index: 10; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; box-shadow: 0 8px 24px color-mix(in srgb, var(--bg) 70%, transparent); overflow-wrap: anywhere; }
 
   /* Main grid and cards */
   main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 16px; }
