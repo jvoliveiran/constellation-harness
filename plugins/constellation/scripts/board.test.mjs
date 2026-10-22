@@ -10,16 +10,18 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  resolveSteps, pairEvents, parseEventLines, tokenDelta,
+  resolveSteps, pairEvents, parseEventLines, tokenDelta, attributeAgents, tokensFact,
   parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
 import {
   renderBacklog, feedText, renderAgents, renderMarkdown, renderItemBody, treeHolds, parseRoute, renderNow, renderNowActions, renderPlanDialog, chipClass,
+  renderSteps, renderAgentHead, renderAgentReport, renderAgentDialog, renderStepDialog,
   parseBacklogRoute, formatBacklogRoute, toggleBacklogRoute, backlogRows, filterRows, sortRows,
   renderTable, renderToolbar, renderAttention, internalHref, findItem, renderItemView,
 } from './board-render.mjs';
 import * as renderModule from './board-render.mjs';
+import { createSessionReader } from './board-session.mjs';
 import {
   loadSnapshot, serve, readItem, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
@@ -1805,7 +1807,7 @@ test('page sources cannot end their element: no script or comment opener in our 
 test('cli: a missing vendor file logs one line and serves the page with one script hash', async () => {
   // The real path: board.mjs runs main() only when argv[1] equals its resolved module path.
   const copy = fs.realpathSync(mkTmp('board-novendor-'));
-  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
+  for (const f of ['board.mjs', 'board-model.mjs', 'board-render.mjs', 'board-session.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, f));
   fs.cpSync(path.join(here, 'board-ui'), path.join(copy, 'board-ui'), { recursive: true });
   const probe = http.createServer();
   const port = await listenOnFreePort(probe);
@@ -2296,7 +2298,7 @@ const nowState = {
   reviewLoopCount: 1, prNumber: 7, modelProfile: 'balanced',
 };
 const nowView = (extra = {}) => ({
-  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokenDelta: 1500, projectDir: '/p',
+  state: nowState, progress: resolveSteps(nowState, tracks, planReviewOff), task: null, tokens: { source: 'state', spent: 1500 }, attribution: {}, projectDir: '/p',
   hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => `${n}t`, since: () => 65, ...extra,
 });
 const taskCard = '<span>task <code>';
@@ -2348,7 +2350,7 @@ const pageTree = (...extra) => buildTree([
   mk('task', '023-x.md', ['status: in-progress'], ...extra), mk('plan', '023-x.md', ['status: approved', 'task: 023-x.md']),
 ], null);
 const pageSnapshot = ({ state = nowState, tree = pageTree() } = {}) => ({
-  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null,
+  projectDir: '/p', initialized: true, hasTracks: true, stale: false, at: MTIME, state, tree, feed: [], agents: [], errors: [], tokenDelta: null, tokens: { source: 'none', spent: null }, attribution: {},
   progress: state ? resolveSteps(state, tracks, planReviewOff) : null,
 });
 
@@ -2466,18 +2468,30 @@ test('chipClass: the allow-list picks the class, anything else is other', () => 
   }
 });
 
+// Task 025 render fixtures.
+const AGENT_ID_A = 'a0e575badeb8675d0';
+const AGENT_REPLY = {
+  id: AGENT_ID_A, agent_type: 'constellation:software-architect', description: 'Plan <x>', model: 'opus',
+  start: '2026-10-21T09:05:00Z', end: '2026-10-21T09:06:01Z', durationSec: 61,
+  usage: { spent: 1234, input: 1, cache: 2, output: 3 }, report: '# Heading\n\nbody', truncated: false, error: null,
+};
+const agentDialogView = (extra = {}) => ({
+  reply: AGENT_REPLY, markdownit: stubFactory(), tree: null, hhmm: stubHhmm, fmtDur: stubFmtDur, fmtTok: (n) => (n == null ? '—' : `${n}t`), ...extra,
+});
+const agentsWithIds = () => agentsFixture(1, 3).map((a, i) => ({ ...a, agent_id: runId(i + 1), description: i === 1 ? 'Muted <b>' : undefined }));
+
 /** One thunk per export: the arguments that the isolation test passes to it. */
 const ISOLATION_ARGS = {
   chipClass: () => ['s-', ['inbox', 'done'], 'done'],
   renderBacklog: () => [{ tree: rendererTree(), route: listRoute() }, esc],
   feedText: () => [{ kind: 'transition', file: 'a.md', from: null, to: 'inbox' }, esc],
-  renderAgents: () => [agentsView(agentsFixture(1, 25)), esc],
-  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc],
+  renderAgents: () => [agentsView(agentsWithIds()), esc],
+  renderMarkdown: () => ['---\nstatus: x\n---\n# T\nbody', stubFactory(), esc, null, true],
   renderItemBody: () => [{ text: 'x', truncated: true }, null, esc],
   treeHolds: () => [rendererTree(), 'task', '001-open.md'],
-  parseRoute: () => ['#/plan/023-x.md'],
-  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc],
-  renderNow: () => [nowView(), esc],
+  parseRoute: () => ['#/agent/a0e575badeb8675d0'],
+  renderSteps: () => [resolveSteps(nowState, tracks, planReviewOff), esc, { architect: ['a0e575badeb8675d0'] }],
+  renderNow: () => [nowView({ tokens: { source: 'transcripts', spent: 9, input: 1, cache: 2, output: 6, since: 'x' }, attribution: { architect: ['a0e575badeb8675d0'] } }), esc],
   renderNowActions: () => [{ state: nowState, tree: rendererTree() }, esc],
   renderPlanDialog: () => [{ plan: { file: '023-x.md', status: 'approved', title: 'T', taskId: '023' }, item: { text: 'x' }, markdownit: stubFactory() }, esc],
   parseBacklogRoute: () => ['#/backlog?kind=feature&status=done&q=a%20b&attn=1'],
@@ -2492,6 +2506,10 @@ const ISOLATION_ARGS = {
   internalHref: () => ['../tasks/001-one.md', detailTree()],
   findItem: () => [detailTree(), 'task', '001-one.md'],
   renderItemView: () => [{ kind: 'feature', file: 'F001-a.md', tree: detailTree(), body: '<p>b</p>', backHash: '#/' }, esc],
+  renderAgentHead: () => [AGENT_REPLY, agentDialogView(), esc],
+  renderAgentReport: () => [AGENT_REPLY, agentDialogView(), esc],
+  renderAgentDialog: () => [agentDialogView(), esc],
+  renderStepDialog: () => [{ ...agentDialogView(), step: { id: 'architect', emoji: '📐', label: 'Plan' }, replies: [AGENT_REPLY, { ...AGENT_REPLY, start: '2026-10-21T09:00:00Z' }] }, esc],
 };
 
 test('board-render.mjs: every export runs in a vm context that holds only the prelude', () => {
@@ -3381,4 +3399,514 @@ test('page.js: in the detail view the focus goes to the visible anchor, not the 
   page.feed(pageSnapshot({ state: null, tree: itemPageTree() }));
   assert.equal(page.els['bl-item'].hidden, false);
   assert.deepEqual(focused, ['visible detail']);
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: attribution and the tokens fact
+// ---------------------------------------------------------------------------
+
+const runId = (n) => `a${n.toString(16).padStart(16, '0')}`;
+// Runs in the order given, one minute apart. The list that attributeAgents gets is newest first, as in the snapshot.
+const runsOf = (types) => types.map((type, i) => ({
+  agent_id: runId(i + 1), agent_type: type, start: `2026-10-21T09:${String(i).padStart(2, '0')}:00Z`, end: null, running: false,
+})).reverse();
+const progressOf = (track, config = planReviewOff) => resolveSteps({ track, currentStep: '', completedSteps: [] }, tracks, config);
+const ATTR_SINCE = '2026-10-21T09:00:00Z';
+const GATE_TRIO = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:dx-analyst'];
+
+test('attributeAgents: planned track, two architect runs, Plan then Verify', () => {
+  const types = [
+    'constellation:software-architect', 'constellation:devops-engineer', 'constellation:software-engineer', ...GATE_TRIO,
+    'constellation:sdet', 'constellation:technical-writer', 'constellation:software-architect', 'constellation:devops-engineer',
+  ];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned'), ATTR_SINCE), {
+    architect: [runId(1)],
+    'devops-branch': [runId(2)],
+    engineer: [runId(3)],
+    'parallel-gate-1': [runId(4), runId(5), runId(6)],
+    'parallel-gate-2': [runId(7), runId(8)],
+    'architect-verify': [runId(9)],
+    'devops-pr': [runId(10)],
+  });
+});
+
+test('attributeAgents: planned track with pairing rounds and a fix loop', () => {
+  const types = [
+    'constellation:product-manager', 'constellation:software-architect', 'constellation:software-architect',
+    'constellation:devops-engineer', 'constellation:software-engineer', 'constellation:code-reviewer',
+    'constellation:software-engineer', 'constellation:code-reviewer', 'constellation:software-architect',
+  ];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned'), ATTR_SINCE), {
+    architect: [runId(1), runId(2), runId(3)],
+    'devops-branch': [runId(4)],
+    engineer: [runId(5), runId(7)],
+    'parallel-gate-1': [runId(6), runId(8)],
+    'architect-verify': [runId(9)],
+  });
+});
+
+test('attributeAgents: the plan-review step takes the cross-model review that runs before the engineer', () => {
+  const types = ['constellation:software-architect', 'constellation:cross-model-reviewer', 'constellation:software-engineer', 'constellation:cross-model-reviewer'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('planned', planReviewOn), ATTR_SINCE), {
+    architect: [runId(1)], 'plan-review': [runId(2)], engineer: [runId(3)], 'parallel-gate-1': [runId(4)],
+  });
+});
+
+test('attributeAgents: tweak track', () => {
+  const types = [...GATE_TRIO, 'constellation:sdet', 'constellation:technical-writer'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('tweak'), ATTR_SINCE), {
+    'parallel-gate-1': [runId(1), runId(2), runId(3)], sdet: [runId(4), runId(5)],
+  });
+});
+
+test('attributeAgents: hotfix track', () => {
+  const types = ['constellation:code-reviewer', 'constellation:security-analyst', 'constellation:sdet'];
+  assert.deepEqual(attributeAgents(runsOf(types), progressOf('hotfix'), ATTR_SINCE), {
+    'review-gate': [runId(1), runId(2)], sdet: [runId(3)],
+  });
+});
+
+test('attributeAgents: discovery track', () => {
+  assert.deepEqual(attributeAgents(runsOf(['constellation:product-manager', 'constellation:software-architect']), progressOf('discovery'), ATTR_SINCE), {
+    'product-manager': [runId(1)], 'architect-feasibility': [runId(2)],
+  });
+});
+
+test('attributeAgents: spike track and unknown types', () => {
+  const agents = [
+    ...runsOf(['constellation:software-architect', 'constellation:software-engineer', 'Explore', null, 'constellation:code-reviewer']),
+    { agent_id: '../bad', agent_type: 'constellation:software-engineer', start: '2026-10-21T09:30:00Z' },
+    { agent_id: null, agent_type: 'constellation:software-engineer', start: '2026-10-21T09:31:00Z' },
+    { agent_id: runId(99), agent_type: 'constellation:software-engineer', start: null },
+  ];
+  assert.deepEqual(attributeAgents(agents, progressOf('spike'), ATTR_SINCE), { architect: [runId(1)], engineer: [runId(2)] });
+  assert.deepEqual(attributeAgents(agents, null, ATTR_SINCE), {});
+});
+
+test('tokensFact: transcripts first, then the state delta, then none', () => {
+  const sum = { spent: 10, input: 1, cache: 2, output: 7 };
+  assert.deepEqual(tokensFact(sum, 500, '2026-10-21T09:00:00Z'), { source: 'transcripts', spent: 10, input: 1, cache: 2, output: 7, since: '2026-10-21T09:00:00Z' });
+  assert.deepEqual(tokensFact(null, 500, 'x'), { source: 'state', spent: 500 });
+  assert.deepEqual(tokensFact(null, 0, 'x'), { source: 'state', spent: 0 });
+  assert.deepEqual(tokensFact(null, null, 'x'), { source: 'none', spent: null });
+});
+
+test('pairEvents: the description of the start line reaches the agent, capped, and no other new field', () => {
+  const long = 'x'.repeat(201);
+  const { agents } = pairEvents([
+    { ts: '2026-10-21T09:00:00Z', event: 'SubagentStart', agent_id: runId(1), agent_type: 'a', description: 'Plan it', transcript_path: '/SECRET' },
+    { ts: '2026-10-21T09:01:00Z', event: 'SubagentStart', agent_id: runId(2), agent_type: 'a', description: long },
+    { ts: '2026-10-21T09:02:00Z', event: 'SubagentStart', agent_id: runId(3), agent_type: 'a', description: { x: 1 } },
+    { ts: '2026-10-21T09:03:00Z', event: 'SubagentStop', agent_id: runId(1), agent_type: 'a', agent_transcript_path: '/SECRET' },
+  ]);
+  const byId = Object.fromEntries(agents.map((a) => [a.agent_id, a]));
+  assert.equal(byId[runId(1)].description, 'Plan it');
+  assert.equal(Object.hasOwn(byId[runId(2)], 'description'), false);
+  assert.equal(Object.hasOwn(byId[runId(3)], 'description'), false);
+  assert.equal(JSON.stringify(agents).includes('SECRET'), false);
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: GET /api/agent. Every transcript is synthetic, under a temp root.
+// ---------------------------------------------------------------------------
+
+const AG_SID = '11111111-2222-4333-8444-555555555555';
+const AG_OUT_SID = '22222222-3333-4444-8555-666666666666';
+const AG = { done: 'a1111111111111111', running: 'a2222222222222222', outside: 'a3333333333333333', foreign: 'a4444444444444444' };
+const AG_STATE = { track: 'planned', currentStep: 'engineer', completedSteps: ['architect'], startedAt: '2026-10-21T09:00:00Z' };
+const agUsage = (i, c, r, o) => ({ input_tokens: i, cache_creation_input_tokens: c, cache_read_input_tokens: r, output_tokens: o });
+const agJsonl = (objs) => `${objs.map((o) => JSON.stringify(o)).join('\n')}\n`;
+
+function agentWorld() {
+  const tmp = fs.realpathSync(mkTmp('board-agent-'));
+  const root = path.join(tmp, 'projects');
+  const slug = path.join(root, '-p');
+  const sub = path.join(slug, AG_SID, 'subagents');
+  fs.mkdirSync(sub, { recursive: true });
+  const main = path.join(slug, `${AG_SID}.jsonl`);
+  fs.writeFileSync(main, agJsonl([{ type: 'assistant', timestamp: '2026-10-21T10:00:00Z', message: { id: 'mm', usage: agUsage(1, 0, 0, 1), content: [] } }]));
+  fs.writeFileSync(path.join(sub, `agent-${AG.done}.jsonl`), agJsonl([
+    { type: 'user', timestamp: '2026-10-21T09:05:01Z', message: { role: 'user', content: 'AGENT-PROMPT-SECRET' } },
+    { type: 'assistant', timestamp: '2026-10-21T09:05:02Z', message: { id: 'x1', model: 'opus', usage: agUsage(1, 1, 1, 1), content: [{ type: 'tool_use', name: 'Bash', input: { command: 'TOOL-SECRET' } }] } },
+    { type: 'assistant', timestamp: '2026-10-21T09:05:50Z', message: { id: 'x2', model: 'opus', usage: agUsage(10, 20, 30, 40), content: [{ type: 'text', text: 'TEXT-NOT-THE-REPORT' }, { type: 'tool_use', name: 'SubagentHandback', input: { message: '# Report A1\n\nbody' } }] } },
+  ]));
+  fs.writeFileSync(path.join(sub, `agent-${AG.done}.meta.json`), JSON.stringify({ agentType: 'x', description: 'Arch run', model: 'opus' }));
+  const foreignDir = path.join(slug, AG_OUT_SID, 'subagents');
+  fs.mkdirSync(foreignDir, { recursive: true });
+  const foreignFile = path.join(foreignDir, `agent-${AG.foreign}.jsonl`);
+  fs.writeFileSync(foreignFile, agJsonl([{ type: 'assistant', timestamp: '2026-10-21T09:07:00Z', message: { id: 'f1', usage: agUsage(1, 1, 1, 1), content: [{ type: 'text', text: 'FOREIGN-SECRET' }] } }]));
+  const outside = path.join(tmp, 'outside');
+  fs.mkdirSync(outside);
+  const outsideMain = path.join(outside, `${AG_OUT_SID}.jsonl`);
+  fs.writeFileSync(outsideMain, '');
+  const line = (ts, event, sid, mainPath, id, extra = {}) => ({ ts, event, session_id: sid, transcript_path: mainPath, agent_id: id, agent_type: 'constellation:software-architect', ...extra });
+  const events = [
+    { ts: '2026-10-21T09:01:00Z', event: 'PostToolUse', session_id: AG_SID, transcript_path: main, file: '.constellation/state/current-workflow.json' },
+    line('2026-10-21T09:05:00Z', 'SubagentStart', AG_SID, main, AG.done),
+    line('2026-10-21T09:06:00Z', 'SubagentStop', AG_SID, main, AG.done, { agent_transcript_path: path.join(sub, `agent-${AG.done}.jsonl`) }),
+    line('2026-10-21T09:07:00Z', 'SubagentStart', AG_SID, main, AG.running),
+    line('2026-10-21T09:08:00Z', 'SubagentStart', AG_OUT_SID, outsideMain, AG.outside),
+    line('2026-10-21T09:09:00Z', 'SubagentStop', AG_OUT_SID, outsideMain, AG.outside, { agent_transcript_path: path.join(outside, 'x', `agent-${AG.outside}.jsonl`) }),
+    line('2026-10-21T09:10:00Z', 'SubagentStart', AG_SID, main, AG.foreign),
+    line('2026-10-21T09:11:00Z', 'SubagentStop', AG_SID, main, AG.foreign, { agent_transcript_path: foreignFile }),
+  ];
+  const project = tmpProject();
+  fs.writeFileSync(path.join(project, '.constellation', 'state', 'current-workflow.json'), JSON.stringify(AG_STATE));
+  fs.writeFileSync(path.join(project, '.constellation', 'metrics', 'events.jsonl'), `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const reader = createSessionReader({ projectSlug: '-p', root });
+  const snap = loadSnapshot(project, null, reader);
+  return { tmp, reader, snap };
+}
+
+async function withAgentServer(fn) {
+  const w = agentWorld();
+  const server = serve(() => w.snap, () => {}, () => null, (agent) => w.reader.agentReply(agent));
+  const port = await listenOnFreePort(server);
+  try { await fn((url, host = `127.0.0.1:${port}`) => httpRequest(port, { host, url }), w); } finally { await closeServer(server); }
+}
+const agentUrl = (id) => `/api/agent?id=${encodeURIComponent(id)}`;
+
+test('serve: /api/agent returns 200 with the report of a fixture transcript', async () => {
+  await withAgentServer(async (get) => {
+    const r = await get(agentUrl(AG.done));
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-type'], /^application\/json/);
+    const body = JSON.parse(r.body);
+    assert.equal(body.report, '# Report A1\n\nbody');
+    assert.deepEqual(body.usage, { spent: 4 + 100, input: 11, cache: 52, output: 41 });
+    assert.deepEqual([body.start, body.end, body.durationSec], ['2026-10-21T09:05:00Z', '2026-10-21T09:06:00Z', 60]);
+    assert.deepEqual([body.id, body.agent_type, body.description, body.model, body.truncated, body.error], [AG.done, 'constellation:software-architect', 'Arch run', 'opus', false, null]);
+  });
+});
+
+test('serve: /api/agent with a refused path returns report null and the reason', async () => {
+  await withAgentServer(async (get, w) => {
+    const r = await get(agentUrl(AG.outside));
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.deepEqual([body.report, body.error, body.usage], [null, 'refused: outside root', null]);
+    assert.equal(r.body.includes(w.tmp), false);
+  });
+});
+
+test('serve: /api/agent replies with the spec keys only, no path, no prompt, no tool input', async () => {
+  await withAgentServer(async (get, w) => {
+    for (const id of [AG.done, AG.outside, AG.foreign]) {
+      const r = await get(agentUrl(id));
+      assert.deepEqual(Object.keys(JSON.parse(r.body)), ['id', 'agent_type', 'description', 'model', 'start', 'end', 'durationSec', 'usage', 'report', 'truncated', 'error']);
+      for (const secret of [w.tmp, 'AGENT-PROMPT-SECRET', 'TOOL-SECRET', 'TEXT-NOT-THE-REPORT', 'FOREIGN-SECRET']) assert.equal(r.body.includes(secret), false, secret);
+      assert.equal(r.headers['cache-control'], 'no-store');
+      assert.equal(r.headers['x-content-type-options'], 'nosniff');
+      assert.equal(r.headers['referrer-policy'], 'no-referrer');
+    }
+  });
+});
+
+test('serve: /api/agent with a foreign session folder reads nothing', async () => {
+  await withAgentServer(async (get, w) => {
+    const before = w.reader.bytesRead;
+    const body = JSON.parse((await get(agentUrl(AG.foreign))).body);
+    assert.deepEqual([body.report, body.error], [null, 'refused: foreign session']);
+    assert.equal(w.reader.bytesRead, before);
+  });
+});
+
+test('serve: /api/agent refuses a bad id, an unknown id, and a running agent with 404', async () => {
+  await withAgentServer(async (get, w) => {
+    const before = w.reader.bytesRead;
+    for (const id of ['../x', 'ABCDEF12', 'abc', 'c999999999999999c', AG.running, '']) {
+      const r = await get(agentUrl(id));
+      assert.equal(r.status, 404, id);
+      assert.equal(r.body, 'not found', id);
+    }
+    assert.equal((await get('/api/agent')).status, 404);
+    assert.equal(w.reader.bytesRead, before);
+  });
+});
+
+test('serve: foreign Host on /api/agent returns 403', async () => {
+  await withAgentServer(async (get) => {
+    const r = await get(agentUrl(AG.done), 'attacker.example:1234');
+    assert.equal(r.status, 403);
+    assert.equal(r.body, '');
+  });
+});
+
+test('serve: /api/agent without a reader answers with the missing reason and an empty report', async () => {
+  const w = agentWorld();
+  const server = serve(() => w.snap, () => {});
+  const port = await listenOnFreePort(server);
+  try {
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: agentUrl(AG.done) });
+    const body = JSON.parse(r.body);
+    assert.deepEqual([r.status, body.report, body.error, body.id], [200, null, 'missing', AG.done]);
+  } finally { await closeServer(server); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: render (routes, agent rows, step buttons, dialogs, tokens tooltip)
+// ---------------------------------------------------------------------------
+
+test('parseRoute: agent and step routes', () => {
+  assert.deepEqual(parseRoute('#/agent/a0e575badeb8675d0'), { view: 'agent', id: 'a0e575badeb8675d0' });
+  assert.deepEqual(parseRoute('#/step/architect-verify'), { view: 'step', id: 'architect-verify' });
+  for (const hash of ['#/agent/XYZ', '#/agent/../x', '#/agent/abc', '#/agent/a0e575badeb8675d0/x', '#/agent/a0e575badeb8675d0\n', '#/step/A b', '#/step/', '#/step/-x', '#/step/a/b']) {
+    assert.deepEqual(parseRoute(hash), { view: 'overview' }, hash);
+  }
+});
+
+test('renderAgentDialog: header, report, truncation line, and the unavailable state', () => {
+  const record = {};
+  const view = (reply) => agentDialogView({ reply, markdownit: (o) => ({ render: (t) => { record.input = t; return `R(${t})`; }, renderer: { rules: {} } }) });
+  const html = renderAgentDialog(view({ ...AGENT_REPLY, truncated: true }), esc);
+  for (const fact of ['software-architect', 'Plan &lt;x&gt;', 'opus', 'T2026-10-21T09:05:00Z', '61s', '1234t tok']) assert.ok(html.includes(fact), fact);
+  assert.ok(!html.includes('constellation:'), html);
+  assert.equal(record.input, '# Heading\n\nbody', 'the first heading stays');
+  assert.ok(html.includes('<p class="muted">truncated at 256 KB</p>'));
+  assert.ok(html.includes('id="dialog-title"') && html.includes('data-action="close-dialog"'));
+  assert.ok(!renderAgentDialog(view(AGENT_REPLY), esc).includes('truncated at'));
+  const gone = (reply) => renderAgentDialog(view(reply), esc);
+  assert.ok(gone({ ...AGENT_REPLY, report: null, error: 'missing' }).includes('Transcript not available (missing)'));
+  assert.ok(gone({ error: 'network' }).includes('Transcript not available (network)'));
+  assert.ok(gone({ error: 404 }).includes('Transcript not available (404)'));
+  assert.ok(gone({ ...AGENT_REPLY, report: null, error: '<b>' }).includes('(&lt;b&gt;)'));
+});
+
+test('renderStepDialog: one block per agent, newest last, open when alone', () => {
+  const first = { ...AGENT_REPLY, id: 'a1', start: '2026-10-21T09:05:00Z', description: 'FIRST' };
+  const second = { ...AGENT_REPLY, id: 'a2', start: '2026-10-21T09:10:00Z', description: 'SECOND' };
+  const step = { id: 'architect', emoji: '📐', label: 'Plan' };
+  const two = renderStepDialog(agentDialogView({ step, replies: [second, first] }), esc);
+  assert.ok(two.indexOf('FIRST') < two.indexOf('SECOND'));
+  assert.equal(two.split('<details class="ablock">').length - 1, 2);
+  assert.ok(!two.includes(' open'));
+  assert.ok(two.includes('📐 Plan') && two.includes('data-action="close-dialog"'));
+  const alone = renderStepDialog(agentDialogView({ step, replies: [first] }), esc);
+  assert.equal(alone.split('<details class="ablock" open>').length - 1, 1);
+  assert.ok(alone.includes('R(# Heading'));
+});
+
+test('renderAgents: a finished row with a valid id is a button; a running row is not; the description is muted', () => {
+  const agents = agentsWithIds();
+  const html = renderAgents(agentsView(agents), esc);
+  assert.equal(countRows(html), 4);
+  assert.equal(html.split('data-action="open-agent"').length - 1, 3);
+  assert.ok(html.includes(`data-value="${runId(2)}"`) && !html.includes(`data-value="${runId(1)}"`), 'the running row has no button');
+  assert.ok(html.includes('<span class="muted desc">Muted &lt;b&gt;</span>') && !html.includes('<b>'), html);
+  const plain = renderAgents(agentsView([
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1, agent_id: 'ZZ' },
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1 },
+    { agent_type: 'x', start: 'a', running: false, durationSec: 1, agent_id: '<a0e575badeb8675d0' },
+  ]), esc);
+  assert.ok(!plain.includes('<button'), plain);
+});
+
+test('renderSteps: only a done step with attributed agents is a button', () => {
+  const progress = resolveSteps({ track: 'planned', currentStep: 'engineer', completedSteps: ['architect', 'devops-branch'] }, tracks, planReviewOff);
+  const html = renderSteps(progress, esc, { architect: [runId(1)], engineer: [runId(2)], 'lint-gate': [runId(3)], 'devops-branch': [] });
+  assert.equal(html.split('data-action="open-step"').length - 1, 1);
+  assert.ok(html.includes('<button type="button" class="step done" data-action="open-step" data-value="architect">'));
+  assert.ok(html.includes('<div class="step done"><div class="e">'), 'a done step without agents stays a div');
+  assert.ok(html.includes('<div class="step current">') && html.includes('<div class="step pending">'));
+  assert.equal(renderSteps(progress, esc).includes('<button'), false);
+  assert.equal(renderSteps(progress, esc, { constructor: [1] }).includes('<button'), false);
+});
+
+test('renderNow: the tokens fact shows the source tooltip', () => {
+  const fmtTok = (n) => (n == null ? '—' : `${n}t`);
+  const fact = (tokens) => {
+    const html = renderNow(nowView({ tokens, fmtTok }), esc);
+    return /<div class="k">tokens spent<\/div><div class="v"([^>]*)>([^<]*)<\/div>/.exec(html).slice(1);
+  };
+  assert.deepEqual(fact({ source: 'transcripts', spent: 6902, input: 1234, cache: 5678, output: 90, since: '2026-10-21T09:00:00Z' }),
+    [' title="from session transcripts since 2026-10-21T09:00:00Z: 1,234 / 5,678 / 90"', '6902t']);
+  assert.deepEqual(fact({ source: 'state', spent: 1500 }), [' title="from the state file, as the model reported it"', '1500t']);
+  assert.deepEqual(fact({ source: 'none', spent: null }), ['', '—']);
+  assert.deepEqual(fact(undefined), ['', '—']);
+});
+
+test('renderMarkdown: keepHead keeps the front matter and the first H1', () => {
+  const record = {};
+  const text = '---\nstatus: x\n---\n# T\nbody\n';
+  renderMarkdown(text, (o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } }), esc, null, true);
+  assert.equal(record.input, text);
+  renderMarkdown(text, (o) => ({ render: (t) => { record.input = t; return ''; }, renderer: { rules: {} } }), esc);
+  assert.equal(record.input, 'body\n');
+});
+
+test('page.css: agent rows and done steps have button rules with a visible focus ring', () => {
+  const css = uiText('page.css');
+  assert.ok(ruleBodies(css, '.arow').some((b) => b.includes('all: unset') && b.includes('grid-template-columns')));
+  assert.ok(ruleBodies(css, '.arow:focus-visible').some((b) => b.includes('outline: 2px solid var(--accent)')));
+  assert.ok(ruleBodies(css, 'button.step:focus-visible').length > 0);
+  assert.ok(ruleBodies(css, 'button.step').some((b) => b.includes('cursor: pointer')));
+  assert.ok(ruleBodies(css, '.ablock').length > 0 && ruleBodies(css, '.dlg-body').some((b) => b.includes('overflow: auto')));
+});
+
+// ---------------------------------------------------------------------------
+// Task 025: page runtime (agent and step dialogs, shared dialog state, live repaint)
+// ---------------------------------------------------------------------------
+
+const PA = { a: AGENT_ID_A, b: runId(2), running: runId(3) };
+const pageAgentList = () => [
+  { agent_id: PA.running, agent_type: 'constellation:software-engineer', start: '2026-10-21T09:20:00Z', end: null, running: true, durationSec: null, transcript: true, description: null, model: null },
+  { agent_id: PA.b, agent_type: 'constellation:software-architect', start: '2026-10-21T09:10:00Z', end: '2026-10-21T09:11:00Z', running: false, durationSec: 60, transcript: true, description: 'STEP-B', model: 'opus' },
+  { agent_id: PA.a, agent_type: 'constellation:software-architect', start: '2026-10-21T09:05:00Z', end: '2026-10-21T09:06:00Z', running: false, durationSec: 60, transcript: true, description: 'AGENT-A', model: 'opus' },
+];
+const agentSnapshot = (attribution = { architect: [PA.a, PA.b] }) => ({ ...pageSnapshot(), agents: pageAgentList(), attribution });
+const apiReplyFor = (url) => {
+  const agent = pageAgentList().find((a) => url.endsWith(`id=${a.agent_id}`));
+  return { ...agent, id: agent.agent_id, usage: { spent: 5, input: 1, cache: 1, output: 3 }, report: `# R ${agent.description}`, truncated: false, error: null };
+};
+const pageApi = (url) => (url.startsWith('/api/agent') ? apiReplyFor(url) : { kind: 'x', file: 'x', mtime: MTIME, truncated: false, text: `body of ${url}` });
+
+test('page: a click on a finished agent row opens #/agent/<id> and renders the reply', async () => {
+  const page = bootPage({ reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  assert.equal(page.location.hash, `#/agent/${PA.a}`);
+  await flush();
+  assert.deepEqual(page.fetches.filter((u) => u.startsWith('/api/agent')), [`/api/agent?id=${PA.a}`]);
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(page.els.dialog.innerHTML.includes('id="dialog-title"') && page.els.dialog.innerHTML.includes('R(# R AGENT-A)'), page.els.dialog.innerHTML);
+  page.feed(agentSnapshot());
+  await flush();
+  assert.equal(page.fetches.filter((u) => u.startsWith('/api/agent')).length, 1, 'a new snapshot does not refetch');
+  const running = bootPage({ hash: `#/agent/${PA.running}`, reply: pageApi });
+  running.feed(agentSnapshot());
+  await flush();
+  assert.equal(running.els.dialog.showModals, 0, 'a running agent opens no dialog');
+  assert.deepEqual(running.fetches.filter((u) => u.startsWith('/api/agent')), []);
+});
+
+test('page: a failed agent fetch keeps the header facts and says that the transcript is not available', async () => {
+  const page = bootPage({ reply: (url) => (url.startsWith('/api/agent') ? { error: 500 } : pageApi(url)) });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('Transcript not available (500)') && page.els.dialog.innerHTML.includes('AGENT-A'), page.els.dialog.innerHTML);
+});
+
+test('page: closing an agent dialog returns to the route before it', async () => {
+  const page = bootPage({ hash: '#/backlog?kind=feature', reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  assert.equal(page.els.dialog.open, true);
+  page.els.dialog.close();
+  assert.equal(page.location.hash, '#/backlog?kind=feature');
+  assert.equal(page.replaced.at(-1), '#/backlog?kind=feature');
+  const plan = bootPage({ reply: pageApi });
+  plan.feed(agentSnapshot());
+  plan.clickOn('now-actions', { action: 'view-plan', file: '023-x.md' });
+  await flush();
+  plan.els.dialog.close();
+  assert.equal(plan.location.hash, '#/', 'the plan dialog still returns to its route');
+});
+
+test('page: a done step opens #/step/<id> and fetches each attributed agent', async () => {
+  const page = bootPage({ reply: pageApi });
+  page.feed(agentSnapshot());
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  assert.equal(page.location.hash, '#/step/architect');
+  await flush();
+  assert.deepEqual(page.fetches.filter((u) => u.startsWith('/api/agent')).sort(), [`/api/agent?id=${PA.a}`, `/api/agent?id=${PA.b}`].sort());
+  const html = page.els.dialog.innerHTML;
+  assert.equal(page.els.dialog.showModals, 1);
+  assert.ok(html.indexOf('AGENT-A') < html.indexOf('STEP-B'), html);
+  assert.ok(html.includes('📐') || html.includes('Plan') || html.includes('Architect'), html);
+  const pending = bootPage({ hash: '#/step/lint-gate', reply: pageApi });
+  pending.feed(agentSnapshot({ architect: [PA.a], 'lint-gate': [PA.b] }));
+  await flush();
+  assert.equal(pending.els.dialog.showModals, 0);
+  assert.deepEqual(pending.fetches.filter((u) => u.startsWith('/api/agent')), []);
+});
+
+test('page: a reply for an earlier dialog after a later one opened is dropped', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(agentSnapshot({ architect: [PA.b] }));
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  await flush();
+  page.resolve(`/api/agent?id=${PA.b}`, apiReplyFor(`/api/agent?id=${PA.b}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('STEP-B'), page.els.dialog.innerHTML);
+  page.resolve(`/api/agent?id=${PA.a}`, apiReplyFor(`/api/agent?id=${PA.a}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('STEP-B') && !page.els.dialog.innerHTML.includes('AGENT-A'), page.els.dialog.innerHTML);
+});
+
+test('page: a snapshot repaint keeps the focus on a step button and an agent row, and the agents scroll offset', async () => {
+  const page = bootPage({ reply: pageApi });
+  const focused = [];
+  const control = (name, action, value) => ({
+    name, getAttribute: (n) => ({ 'data-action': action, 'data-value': value })[n] ?? null, focus: (options) => focused.push([name, options.preventScroll]),
+  });
+  const oldStep = control('old step', 'open-step', 'architect');
+  const oldRow = control('old row', 'open-agent', PA.a);
+  page.els.now.contains = (el) => el === oldStep;
+  page.els.now.querySelectorAll = () => [control('other step', 'open-step', 'x'), control('new step', 'open-step', 'architect')];
+  page.els.agents.contains = (el) => el === oldRow;
+  page.els.agents.querySelectorAll = () => [control('new row', 'open-agent', PA.a)];
+  Object.defineProperty(page.els.agents, 'innerHTML', { get() { return this.html ?? ''; }, set(v) { this.html = v; this.scrollTop = 0; } });
+  page.els.agents.scrollTop = 120;
+  page.document.activeElement = oldStep;
+  page.feed(agentSnapshot());
+  assert.deepEqual(focused, [['new step', true]]);
+  assert.equal(page.els.agents.scrollTop, 120);
+  page.document.activeElement = oldRow;
+  page.feed(agentSnapshot());
+  assert.deepEqual(focused.at(-1), ['new row', true]);
+  assert.equal(page.els.agents.scrollTop, 120);
+});
+
+test('page: a late step reply after a later agent dialog opened is dropped', async () => {
+  const page = bootPage({ deferred: true });
+  page.feed(agentSnapshot({ architect: [PA.b] }));
+  page.clickOn('now', { action: 'open-step', value: 'architect' });
+  await flush();
+  page.clickOn('agents', { action: 'open-agent', value: PA.a });
+  await flush();
+  page.resolve(`/api/agent?id=${PA.a}`, apiReplyFor(`/api/agent?id=${PA.a}`));
+  await flush();
+  page.resolve(`/api/agent?id=${PA.b}`, apiReplyFor(`/api/agent?id=${PA.b}`));
+  await flush();
+  assert.ok(page.els.dialog.innerHTML.includes('AGENT-A') && !page.els.dialog.innerHTML.includes('STEP-B'), page.els.dialog.innerHTML);
+});
+
+test('attributeAgents: runs of an earlier workflow attach to no step and do not move the new Plan run', () => {
+  const at = (hhmm) => `2026-10-21T${hhmm}:00Z`;
+  const run = (n, type, hhmm) => ({ agent_id: runId(n), agent_type: `constellation:${type}`, start: at(hhmm), end: null, running: false });
+  const agents = [
+    run(1, 'software-engineer', '07:00'), run(2, 'software-architect', '07:30'), run(3, 'code-reviewer', '07:40'),
+    run(4, 'sdet', '07:50'), run(5, 'devops-engineer', '08:00'), run(6, 'software-architect', '09:10'),
+  ].reverse();
+  assert.deepEqual(attributeAgents(agents, progressOf('planned'), ATTR_SINCE), { architect: [runId(6)] });
+  assert.deepEqual(attributeAgents(agents, progressOf('planned'), 'not a date'), {});
+  assert.deepEqual(attributeAgents(agents, progressOf('planned')), {});
+});
+
+// Task 025 criterion 9, through the real CLI wiring: with no workflow state, a finished agent
+// from the event log opens no transcript and the reply says why.
+test('cli: /api/agent for a finished agent with no workflow in flight reads nothing and says so', async () => {
+  const dir = tmpProject();
+  const home = mkTmp('board-home-');
+  const id = 'a0e575badeb8675d0';
+  fs.writeFileSync(eventsFile(dir), [
+    { ts: '2026-10-21T09:00:00Z', event: 'SubagentStart', agent_id: id, agent_type: 'constellation:sdet' },
+    { ts: '2026-10-21T09:01:00Z', event: 'SubagentStop', agent_id: id, agent_type: 'constellation:sdet' },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await closeServer(probe);
+  const run = spawnBoard(['--quiet', '--port', String(port), dir], { HOME: home });
+  try {
+    const snap = await waitForSnapshot(port, 3000);
+    assert.equal(snap?.state, null);
+    assert.equal(snap.agents.some((a) => a.agent_id === id && !a.running), true);
+    const r = await httpRequest(port, { host: `127.0.0.1:${port}`, url: `/api/agent?id=${id}` });
+    const body = JSON.parse(r.body);
+    assert.deepEqual([r.status, body.report, body.error], [200, null, 'no workflow in flight']);
+  } finally { run.child.kill('SIGKILL'); }
 });

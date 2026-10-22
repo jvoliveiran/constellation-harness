@@ -59,6 +59,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `GET /api/item` also serves the kinds `epic` and `feature` (#024).
 - Snapshot nodes carry `created`, `edited`, and `related`. Epic, feature,
   and plan nodes carry `mtime` (#024).
+- **Tokens spent comes from the session transcripts** (#025). While a
+  workflow runs, the board reads the Claude Code transcripts of the
+  workflow sessions and their agents, read-only, and sums input, cache,
+  and output tokens since the workflow start. The tooltip names the
+  source. Without usable transcripts the fact falls back to the
+  state-file delta, then to `—`. The value follows a growing transcript
+  within 5 seconds.
+- **Agent and step outputs** (#025). A finished agent row opens
+  `#/agent/<id>`: type, description, model, start, duration, tokens, and
+  the final report rendered from markdown. A done step with agents opens
+  `#/step/<id>` with the reports of its agents, newest last. A report
+  over 256 KB shows its first 256 KB. A missing or refused transcript
+  shows the reason.
+- Agent rows show the agent description in muted text (#025).
+- **`GET /api/agent?id=<id>`** (#025). It returns `{ id, agent_type,
+  description, model, start, end, durationSec, usage, report, truncated,
+  error }` for a finished agent in the snapshot. It holds no file path,
+  no prompt, and no tool input.
+- `log-event.sh` logs `transcript_path` on every event,
+  `agent_transcript_path` on SubagentStop, and `description` on
+  SubagentStart when the hook input carries them (#025).
+- The snapshot carries `tokens` (with `source`), `attribution`, and per
+  agent `description`, `model`, and `transcript` (#025).
+- **Privacy scope of the transcript reader** (#025). The board reads only
+  the session transcripts of this project under `~/.claude/projects`. It
+  shows token counts and agent final reports only. It serves them only on
+  127.0.0.1 and prints nothing about them under `--quiet`. The event log
+  `.constellation/metrics/events.jsonl` now holds transcript paths, which
+  are home-directory paths. The file stays out of git.
 
 ### Changed
 - **The Agents card fits the viewport** (#022). It is at most
@@ -79,7 +108,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in-flight `▶ <step>` marker, the warnings in the row title, and one line
   for plans without a task.
 - Every response carries `referrer-policy: no-referrer` (#030).
-- The board test count grows from 138 to 243 (#022, #023, #024).
+- `log-event.sh` logs no line for a SubagentStop without `agent_type`
+  (#025). Claude Code sends one for internal helper agents every 30 to 60
+  seconds. The event window now holds hours of a workflow.
+- Known limit (#025, criterion 24): the tokens spent fact does not count
+  the spend of these helper agents. A session that starts in a
+  subdirectory or a worktree of the project is refused as `other
+  project`, and the fact falls back to the state file.
+- The board test count grows from 138 to 276 (#022, #023, #024, #025),
+  plus 26 session-reader tests in `board-session.test.mjs` (#025).
 
 ### Fixed
 - **Board page markup guards from the task 022 review** (#029). A test
@@ -100,6 +137,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   search timer yields to navigation. Keyboard focus survives repaints and
   does not scroll the page. The board does not fetch a task that the tree
   does not hold.
+
+### Security
+- **The transcript reader reads only this project and only named paths** (#025).
+  It reads a path only when the project event log names it, under the real
+  `~/.claude/projects` root, in the folder of this project, with no
+  symlink below that root. It checks the file name, the session folder,
+  and the agent id of the same log line. It opens files with `O_NOFOLLOW`,
+  reads at most the last 32 MB, lists no directory, and writes nothing. It
+  reads nothing while no workflow runs.
 
 ## [1.3.4] - 2026-10-15
 
