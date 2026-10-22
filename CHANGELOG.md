@@ -88,6 +88,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   127.0.0.1 and prints nothing about them under `--quiet`. The event log
   `.constellation/metrics/events.jsonl` now holds transcript paths, which
   are home-directory paths. The file stays out of git.
+- **Pause and Resume on the board page** (#026). The Now header shows
+  Pause while a workflow runs. A click writes `state/control.json`. The
+  header then shows `⏸ paused since hh:mm` and Resume. Resume deletes the
+  file. After a hold starts, the chip says `holding — resume continues at
+  once`. After the hold ends, it says `session stopped — type
+  /constellation:resume after you resume`. A toast confirms each action.
+- **`pause-guard.sh` PreToolUse hook** (#026). While a board pause is in
+  force, it holds the next tool call of the session and its subagents.
+  Resume releases the call with no user action. The hold lasts up to
+  `CONSTELLATION_HOLD_SECONDS` (default 540, maximum 590), counted from
+  the pause. Then the hook denies the call, and the model ends the turn.
+  It logs `PauseHold`, `PauseReleased`, and `PauseDenied` to
+  `events.jsonl`.
+- **`POST /api/control`** (#026). Body is `{ "action": "pause" }` or
+  `{ "action": "resume" }`, as JSON, at most 1 KB. The route checks the
+  Host, the exact Origin, `Sec-Fetch-Site`, and a per-process token. Each
+  failed check returns 403. It writes a temp file and renames it. It
+  touches `state/control.json` only. It returns 409 when no workflow runs
+  (pause) or no pause exists (resume).
+- **`● live` marker** (#026). The board header shows it while the event
+  stream is connected.
+- **Statusline shows `⏸ paused`** (#026) while a board pause is in force.
+- **Orchestrator rule and `/constellation:resume` step 0** (#026). When a
+  tool denial carries `Constellation board paused this workflow`, the
+  orchestrator ends the turn with the last save point. It does not save
+  and does not retry. `/constellation:resume` checks for a pause first.
 
 ### Changed
 - **The Agents card fits the viewport** (#022). It is at most
@@ -115,8 +141,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the spend of these helper agents. A session that starts in a
   subdirectory or a worktree of the project is refused as `other
   project`, and the fact falls back to the state file.
-- The board test count grows from 138 to 276 (#022, #023, #024, #025),
-  plus 26 session-reader tests in `board-session.test.mjs` (#025).
+- The board test count grows from 138 to 321 (#022, #023, #024, #025,
+  #026), plus 26 session-reader tests in `board-session.test.mjs` (#025).
+  The new `pause-guard.test.sh` tests the hook (#026).
 
 ### Fixed
 - **Board page markup guards from the task 022 review** (#029). A test
@@ -146,6 +173,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the agent id of the same log line. It opens files with `O_NOFOLLOW`,
   reads at most the last 32 MB, lists no directory, and writes nothing. It
   reads nothing while no workflow runs.
+- **A pause binds to the board that wrote it** (#026). The hook, the
+  statusline, and the board apply one owner rule. The pause counts only
+  when all of these are true: the file is a regular file, not a symlink,
+  of at most 1 KB; the pid is alive; its command line holds `board.mjs`;
+  it started at or before `since`; and `since` is a strict UTC timestamp
+  that is not in the future. A stale or committed control file does
+  nothing.
+- Known limits (#026). Any local process can read the token and drive
+  Pause and Resume. The design is loopback-only. A committed control file
+  can match only when it guesses the pid of a `board.mjs` that started
+  before the commit time. Subagent work after the last save point runs
+  again after `/constellation:resume`.
 
 ## [1.3.4] - 2026-10-15
 
