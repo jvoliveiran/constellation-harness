@@ -11,7 +11,7 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   resolveSteps, pairEvents, parseEventLines, tokenDelta, attributeAgents, tokensFact,
-  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh,
+  parseFrontMatter, extractTitle, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, safeRefresh, controlView,
   READ_CAP_BYTES, CAP_WARNING,
 } from './board-model.mjs';
 import {
@@ -3909,4 +3909,68 @@ test('cli: /api/agent for a finished agent with no workflow in flight reads noth
     const body = JSON.parse(r.body);
     assert.deepEqual([r.status, body.report, body.error], [200, null, 'no workflow in flight']);
   } finally { run.child.kill('SIGKILL'); }
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: pause and resume. Snapshot.
+// ---------------------------------------------------------------------------
+
+const PAUSE_SINCE = '2026-10-21T14:02:11Z';
+const pauseFile = (extra = {}) => ({ paused: true, since: PAUSE_SINCE, by: 'board', pid: 4242, ...extra });
+const pauseEvent = (event, ts) => ({ ts, event });
+
+test('controlView: owner this, other, and gone', () => {
+  const alive = (pid) => pid === 4242;
+  assert.equal(controlView(pauseFile({ pid: 77 }), [], { selfPid: 77, alive }).owner, 'this');
+  const other = controlView(pauseFile(), [], { selfPid: 77, alive });
+  assert.deepEqual([other.paused, other.owner, other.since], [true, 'other', PAUSE_SINCE]);
+  const gone = controlView(pauseFile({ pid: 9 }), [], { selfPid: 77, alive });
+  assert.deepEqual(gone, { paused: false, since: null, owner: 'gone', phase: null });
+});
+
+test('controlView: the last pause event since the pause sets the phase', () => {
+  const view = (events) => controlView(pauseFile(), events, { selfPid: 4242, alive: () => true }).phase;
+  const hold = pauseEvent('PauseHold', '2026-10-21T14:02:12Z');
+  const deny = pauseEvent('PauseDenied', '2026-10-21T14:11:12Z');
+  assert.equal(view([]), 'paused');
+  assert.equal(view([hold]), 'holding');
+  assert.equal(view([hold, deny]), 'stopped');
+  assert.equal(view([hold, pauseEvent('PauseReleased', '2026-10-21T14:02:20Z')]), 'paused');
+  // An event of an earlier pause does not count. An event at the second of since does.
+  assert.equal(view([pauseEvent('PauseDenied', '2026-10-21T14:02:10Z')]), 'paused');
+  assert.equal(view([pauseEvent('PauseHold', PAUSE_SINCE)]), 'holding');
+  assert.equal(view([hold, { ts: '2026-10-21T14:03:00Z', event: 'SubagentStart' }]), 'holding');
+});
+
+test('controlView: a malformed file is not a pause', () => {
+  const view = (raw) => controlView(raw, [], { selfPid: 4242, alive: () => true });
+  for (const raw of [null, undefined, 'x', pauseFile({ paused: 'true' }), pauseFile({ paused: false }), pauseFile({ by: 'x' }),
+    pauseFile({ pid: undefined }), pauseFile({ pid: '4242' }), pauseFile({ pid: 1.5 }), pauseFile({ pid: 1 })]) {
+    assert.deepEqual(view(raw), { paused: false, since: null, owner: null, phase: null }, JSON.stringify(raw));
+  }
+});
+
+test('loadSnapshot: control comes from state/control.json and a symlink is refused', () => {
+  const dir = tmpProject();
+  const file = path.join(dir, '.constellation', 'state', 'control.json');
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid })));
+  const snap = loadSnapshot(dir);
+  assert.deepEqual([snap.control.paused, snap.control.owner, snap.control.since], [true, 'this', PAUSE_SINCE]);
+  // A symlink to a file inside .constellation reads through the contained reader, so the lstat check refuses it.
+  const real = path.join(dir, '.constellation', 'real-control.json');
+  fs.renameSync(file, real);
+  fs.symlinkSync(real, file);
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  // A file over 1 KB is no pause, as in the hook.
+  fs.rmSync(file);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, pad: 'x'.repeat(2048) })));
+  assert.equal(loadSnapshot(dir).control.paused, false);
+});
+
+test('loadSnapshot: control reads the pause events of the log for the phase', () => {
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'control.json'), JSON.stringify(pauseFile({ pid: process.pid })));
+  fs.writeFileSync(path.join(dir, '.constellation', 'metrics', 'events.jsonl'), `${JSON.stringify(pauseEvent('PauseHold', '2026-10-21T14:02:13Z'))}\n`);
+  assert.equal(loadSnapshot(dir).control.phase, 'holding');
 });

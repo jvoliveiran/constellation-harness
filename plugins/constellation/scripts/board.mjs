@@ -16,7 +16,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh } from './board-model.mjs';
+import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh, controlView } from './board-model.mjs';
 import { createSessionReader, projectSlugOf } from './board-session.mjs';
 import * as render from './board-render.mjs';
 
@@ -33,6 +33,7 @@ const POLL_MS = 1500;
 const TRANSITION_CAP = 50;
 const STANDBY_MS = 5000;
 const SESSION_POLL_MS = 5000;
+const CONTROL_CAP_BYTES = 1024;
 const JSON_CAP_BYTES = 1024 * 1024;
 export const TAIL_CAP_BYTES = 256 * 1024;
 const ROOT_OUTSIDE = '.constellation resolves outside the project';
@@ -79,6 +80,7 @@ function paths(projectDir) {
     state: path.join(root, 'state', 'current-workflow.json'),
     tracks: path.join(root, 'tracks.json'),
     config: path.join(root, 'config.json'),
+    control: path.join(root, 'state', 'control.json'),
     events: path.join(root, 'metrics', 'events.jsonl'),
     epicsDir: path.join(root, 'epics'),
     featuresDir: path.join(root, 'features'),
@@ -244,6 +246,31 @@ function readJson(root, file) {
 }
 
 /**
+ * Read state/control.json for the pause view. The pause gate of the hook refuses a symlink and a
+ * file over 1 KB, so the board refuses them too. Any other problem reads as no file.
+ */
+function readControl(root, file) {
+  if (!root) return null;
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > CONTROL_CAP_BYTES) return null;
+  } catch {
+    return null;
+  }
+  return readJson(root, file).value;
+}
+
+/** True when a process with this pid exists. EPERM means it exists under another user. */
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+/**
  * Read the last maxLines lines of one contained regular file, from at most the last
  * TAIL_CAP_BYTES. A window that starts after offset 0 cuts its first line, so that line is dropped.
  * Returns { text, error }. A missing file is silent.
@@ -354,6 +381,7 @@ export function loadSnapshot(projectDir, prev = null, session = null) {
     transitions,
     stale,
     errors,
+    control: controlView(readControl(root, p.control), events, { selfPid: process.pid, alive }),
   };
 }
 
@@ -427,7 +455,7 @@ function signature(p, root) {
     return names.filter(isWorkFile).sort().map((n) => `${n}=${stamp(path.join(dir, n))}`).join(',');
   };
   const workDirs = WORK_DIRS.map(([, key]) => dirStamp(p[key]));
-  return [p.state, p.events, p.tracks, p.config].map(stamp).concat(workDirs).join('|');
+  return [p.state, p.events, p.tracks, p.config, p.control].map(stamp).concat(workDirs).join('|');
 }
 
 // ---------------------------------------------------------------------------
