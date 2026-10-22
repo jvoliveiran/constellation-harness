@@ -254,5 +254,13 @@ unset FAKE_RM_AFTER FAKE_RM_FILE FAKE_RM_COUNT
 [ "$RC" -eq 0 ] && [ "$(events)" = "PauseHold,PauseReleased" ] && [ "$(jq -sr '.[1].reason' "$LOG")" = "resume" ] \
   && pass "H18 a Resume during the gate logs resume" || fail "H18 rc=$RC events: $(cat "$LOG" 2>/dev/null)"
 
+# H19. The hook is registered: a PreToolUse entry with an empty matcher (every tool, subagents too)
+# and a timeout above the 590 s hold ceiling, and the script is executable. Without the entry,
+# no hold ever happens in a real session.
+HOOKS_JSON="$HERE/../hooks/hooks.json"
+REG="$(jq -r '[.hooks.PreToolUse[]? | select(.matcher == "") | .hooks[]? | select(.command | test("scripts/pause-guard\\.sh")) | .timeout] | first // "none"' "$HOOKS_JSON" 2>/dev/null)"
+[ "$REG" != "none" ] && [ "$REG" -gt 590 ] 2>/dev/null && [ -x "$HOOK" ] \
+  && pass "H19 pause-guard.sh is a PreToolUse hook for every tool with timeout $REG" || fail "H19 registration: timeout=$REG executable=$([ -x "$HOOK" ] && echo yes || echo no)"
+
 [ $FAIL -eq 0 ] && echo "pause-guard.sh: all green" || echo "pause-guard.sh: FAILURES"
 exit $FAIL
