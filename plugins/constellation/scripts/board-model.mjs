@@ -433,7 +433,7 @@ const notPaused = (owner = null) => ({ paused: false, since: null, owner, phase:
 
 /**
  * The pause the page shows. raw is the parsed state/control.json, or null. selfPid is this
- * board's pid. alive(pid) tells whether another process runs. A file that is not a board pause
+ * board's pid. alive(pid) applies the owner rule: true when the pid is a board that owns the pause. A file that is not a board pause
  * (paused: true, by: "board", an integer pid above 1) is no pause. A pid that is gone is no pause.
  * The phase comes from the last pause event at or after since: PauseHold is holding, PauseDenied
  * is stopped, and anything else is paused.
@@ -441,8 +441,8 @@ const notPaused = (owner = null) => ({ paused: false, since: null, owner, phase:
 export function controlView(raw, events, { selfPid, alive }) {
   const valid = raw && raw.paused === true && raw.by === 'board' && Number.isInteger(raw.pid) && raw.pid > 1;
   if (!valid) return notPaused();
-  const owner = raw.pid === selfPid ? 'this' : alive(raw.pid) ? 'other' : 'gone';
-  if (owner === 'gone') return notPaused(owner);
+  if (!alive(raw.pid)) return notPaused('gone');
+  const owner = raw.pid === selfPid ? 'this' : 'other';
   const since = typeof raw.since === 'string' ? raw.since.slice(0, SINCE_CAP) : null;
   const sinceMs = Date.parse(since);
   const last = Number.isNaN(sinceMs) ? null : events.findLast((e) => PAUSE_PHASES[e?.event] && Date.parse(e.ts) >= sinceMs);

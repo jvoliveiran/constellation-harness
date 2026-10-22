@@ -2053,7 +2053,11 @@ const bootPage = ({ os = 'dark', stored = null, storageThrows = false, hash = ''
   const feed = (snapshot) => sources[0].onmessage({ data: JSON.stringify(snapshot) });
   // A click whose target answers closest() for one data-action selector, or for tr[data-href].
   const clickOn = (id, { action, value, file, href } = {}) => {
-    const element = { disabled: false, getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href, 'data-action': action })[name] ?? null };
+    const attrs = {};
+    const element = {
+      attrs, getAttribute: (name) => ({ 'data-value': value, 'data-file': file, 'data-href': href, 'data-action': action })[name] ?? null,
+      setAttribute: (name, v) => { attrs[name] = v; }, removeAttribute: (name) => { delete attrs[name]; },
+    };
     const closest = (selector) => ((action && selector.split(', ').includes(`[data-action="${action}"]`)) || (href && selector === 'tr[data-href]') ? element : null);
     els[id].handlers.click({ target: { closest } });
     return element;
@@ -3932,8 +3936,9 @@ const pauseFile = (extra = {}) => ({ paused: true, since: PAUSE_SINCE, by: 'boar
 const pauseEvent = (event, ts) => ({ ts, event });
 
 test('controlView: owner this, other, and gone', () => {
-  const alive = (pid) => pid === 4242;
+  const alive = (pid) => pid === 4242 || pid === 77;
   assert.equal(controlView(pauseFile({ pid: 77 }), [], { selfPid: 77, alive }).owner, 'this');
+  assert.equal(controlView(pauseFile({ pid: 77 }), [], { selfPid: 77, alive: () => false }).paused, false, 'this pid needs the owner rule too');
   const other = controlView(pauseFile(), [], { selfPid: 77, alive });
   assert.deepEqual([other.paused, other.owner, other.since], [true, 'other', PAUSE_SINCE]);
   const gone = controlView(pauseFile({ pid: 9 }), [], { selfPid: 77, alive });
@@ -3966,9 +3971,13 @@ test('loadSnapshot: control comes from state/control.json and a symlink is refus
   const dir = tmpProject();
   const file = path.join(dir, '.constellation', 'state', 'control.json');
   assert.equal(loadSnapshot(dir).control.paused, false);
-  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid })));
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
   const snap = loadSnapshot(dir);
-  assert.deepEqual([snap.control.paused, snap.control.owner, snap.control.since], [true, 'this', PAUSE_SINCE]);
+  assert.deepEqual([snap.control.paused, snap.control.owner], [true, 'this']);
+  // A committed file that names this board with a since from before it started is no pause.
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow(-3600) })));
+  assert.equal(loadSnapshot(dir).control.paused, false);
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
   // A symlink to a file inside .constellation reads through the contained reader, so the lstat check refuses it.
   const real = path.join(dir, '.constellation', 'real-control.json');
   fs.renameSync(file, real);
@@ -3976,14 +3985,14 @@ test('loadSnapshot: control comes from state/control.json and a symlink is refus
   assert.equal(loadSnapshot(dir).control.paused, false);
   // A file over 1 KB is no pause, as in the hook.
   fs.rmSync(file);
-  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, pad: 'x'.repeat(2048) })));
+  fs.writeFileSync(file, JSON.stringify(pauseFile({ pid: process.pid, since: isoNow(), pad: 'x'.repeat(2048) })));
   assert.equal(loadSnapshot(dir).control.paused, false);
 });
 
 test('loadSnapshot: control reads the pause events of the log for the phase', () => {
   const dir = tmpProject();
-  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'control.json'), JSON.stringify(pauseFile({ pid: process.pid })));
-  fs.writeFileSync(path.join(dir, '.constellation', 'metrics', 'events.jsonl'), `${JSON.stringify(pauseEvent('PauseHold', '2026-10-21T14:02:13Z'))}\n`);
+  fs.writeFileSync(path.join(dir, '.constellation', 'state', 'control.json'), JSON.stringify(pauseFile({ pid: process.pid, since: isoNow() })));
+  fs.writeFileSync(path.join(dir, '.constellation', 'metrics', 'events.jsonl'), `${JSON.stringify(pauseEvent('PauseHold', isoNow(2)))}\n`);
   assert.equal(loadSnapshot(dir).control.phase, 'holding');
 });
 
@@ -4365,7 +4374,8 @@ test('page: Pause posts the action with the token and shows the toast', async ()
   const before = nowHtml(page);
   assert.ok(before.includes('data-action="pause"'));
   const button = page.clickOn('now', { action: 'pause' });
-  assert.equal(button.disabled, true, 'the button is disabled during the request');
+  assert.equal(button.attrs['aria-disabled'], 'true', 'the button is aria-disabled during the request, never disabled');
+  assert.ok(!('disabled' in button));
   await flush();
   assert.equal(page.controlPosts.length, 1);
   const post = page.controlPosts[0];
@@ -4375,7 +4385,7 @@ test('page: Pause posts the action with the token and shows the toast', async ()
   assert.equal(page.els.toast.textContent, 'Paused. The session stops at its next tool call.');
   assert.equal(page.els.toast.hidden, false);
   assert.ok(page.timers.some((t) => t.ms === 4000), 'the toast hides after 4 s');
-  assert.equal(button.disabled, false);
+  assert.deepEqual(button.attrs, {});
   assert.equal(nowHtml(page), before, 'the header changes only through the next snapshot');
   page.runTimers();
   assert.equal(page.els.toast.hidden, true);
@@ -4398,7 +4408,7 @@ test('page: a 403 or 409 reply shows the reason and keeps the header', async () 
   const button = network.clickOn('now', { action: 'pause' });
   await flush();
   assert.equal(network.els.toast.textContent, 'network error');
-  assert.equal(button.disabled, false);
+  assert.deepEqual(button.attrs, {});
 });
 
 test('page: a second click during a request sends nothing', async () => {
@@ -4463,7 +4473,8 @@ test('page: a new toast replaces the text and keeps one timer', async () => {
 // ---------------------------------------------------------------------------
 
 test('ownsPause: this process, and a live board that started at or before since', () => {
-  assert.equal(ownsPause(process.pid, 'garbage'), true, 'the pid of this board needs no ps');
+  assert.equal(ownsPause(process.pid, isoNow()), true, 'this board, by its own uptime');
+  assert.equal(ownsPause(process.pid, isoNow(-3600)), false, 'a since from before this board started');
   const pid = startFakeBoard();
   assert.equal(ownsPause(pid, isoNow()), true);
 });
@@ -4501,4 +4512,26 @@ test('loadSnapshot: control counts another board only when it started at or befo
   assert.equal(loadSnapshot(dir).control.paused, false, 'a board that started after since');
   fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: 1 }));
   assert.equal(loadSnapshot(dir).control.paused, false, 'a daemon pid that is no board');
+});
+
+test('page: focus stays on the control when Pause turns into Resume and back', async () => {
+  const page = bootPage();
+  const focused = [];
+  const control = (name, action) => ({ name, getAttribute: (n) => (n === 'data-action' ? action : null), focus: (options) => focused.push([name, options.preventScroll]) });
+  const pause = control('pause', 'pause');
+  page.feed(pausedSnapshot());
+  page.els.now.contains = (el) => el === pause;
+  page.els.now.querySelectorAll = () => [control('step', 'open-step'), control('resume', 'resume')];
+  page.document.activeElement = pause;
+  page.clickOn('now', { action: 'pause' });
+  await flush();
+  assert.deepEqual(focused, [], 'the click and its reply repaint nothing');
+  page.feed(pausedSnapshot({ control: pausedControl('paused') }));
+  assert.deepEqual(focused, [['resume', true]], 'Resume takes the focus of Pause');
+  const resume = control('resume', 'resume');
+  page.els.now.contains = (el) => el === resume;
+  page.els.now.querySelectorAll = () => [control('pause', 'pause')];
+  page.document.activeElement = resume;
+  page.feed(pausedSnapshot());
+  assert.deepEqual(focused.at(-1), ['pause', true], 'Pause takes the focus of Resume');
 });

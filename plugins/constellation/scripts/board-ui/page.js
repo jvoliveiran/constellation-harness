@@ -72,7 +72,8 @@
   function sendControl(action, button) {
     if (controlBusy) return;
     controlBusy = true;
-    button.disabled = true;
+    // aria-disabled keeps the focus on the button: disabled would blur it before the repaint. controlBusy blocks a second click.
+    button.setAttribute('aria-disabled', 'true');
     fetch('/api/control', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board-token': snap ? snap.csrf : '' },
@@ -84,7 +85,7 @@
       showToast('network error');
     }).then(function () {
       controlBusy = false;
-      button.disabled = false;
+      button.removeAttribute('aria-disabled');
     });
   }
 
@@ -263,6 +264,9 @@
   // A repaint replaces the focused chip, link, or button. Record its stable key first, then focus the match after
   // the repaint. container holds the focus; scope() names the element that holds the match (default: container).
   // An action with no data-value matches the first element of that action.
+  // Pause turns into Resume on the next snapshot, so the two controls share one focus key.
+  var FOCUS_PAIRS = { pause: 'resume', resume: 'pause' };
+
   function keepFocus(container, repaint, scope) {
     var active = document.activeElement;
     var key = null;
@@ -275,8 +279,9 @@
     var candidates = (scope ? scope() : container).querySelectorAll('[data-action], a[href]');
     for (var i = 0; i < candidates.length; i++) {
       var c = candidates[i];
+      var cAction = c.getAttribute('data-action');
       var same = key.action
-        ? c.getAttribute('data-action') === key.action && c.getAttribute('data-value') === key.value && c.getAttribute('data-file') === key.file
+        ? (cAction === key.action || cAction === FOCUS_PAIRS[key.action]) && c.getAttribute('data-value') === key.value && c.getAttribute('data-file') === key.file
         : c.getAttribute('href') === key.href;
       if (same) { c.focus({ preventScroll: true }); return; }
     }

@@ -276,21 +276,25 @@ function etimeSeconds(text) {
   return m ? Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]) : null;
 }
 
-/**
- * The owner rule of a pause, the same as the hook and the statusline apply. This process owns the
- * pause that it wrote. Another pid owns it when since is a UTC timestamp that is not in the future,
- * the process runs with board.mjs in its command line, and it started at or before since. The start
- * rule binds the file to the board that wrote it: a committed file predates any later board.
- */
-export function ownsPause(pid, since, nowMs = Date.now()) {
-  if (pid === process.pid) return true;
-  const sinceMs = typeof since === 'string' && SINCE_PATTERN.test(since) ? Date.parse(since) : NaN;
-  if (Number.isNaN(sinceMs) || sinceMs > nowMs + START_TOLERANCE_MS) return false;
+/** When another process started, as epoch ms, or null unless it runs with board.mjs in its command line. */
+function otherBoardStart(pid, nowMs) {
   const ps = spawnSync('ps', ['-p', String(pid), '-o', 'etime=,command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
   const m = ps.status === 0 ? /^\s*(\S+)\s+(.*)$/s.exec(ps.stdout) : null;
   const age = m ? etimeSeconds(m[1]) : null;
-  if (age === null || !m[2].includes('board.mjs')) return false;
-  return nowMs - age * 1000 <= sinceMs + START_TOLERANCE_MS;
+  return age !== null && m[2].includes('board.mjs') ? nowMs - age * 1000 : null;
+}
+
+/**
+ * The owner rule of a pause, the same as the hook and the statusline apply. since must be a UTC
+ * timestamp that is not in the future. The owner is this process, or a process with board.mjs in
+ * its command line, and it must have started at or before since. The start rule binds the file to
+ * the board that wrote it: a committed file predates any board that started after the clone.
+ */
+export function ownsPause(pid, since, nowMs = Date.now()) {
+  const sinceMs = typeof since === 'string' && SINCE_PATTERN.test(since) ? Date.parse(since) : NaN;
+  if (Number.isNaN(sinceMs) || sinceMs > nowMs + START_TOLERANCE_MS) return false;
+  const startMs = pid === process.pid ? nowMs - process.uptime() * 1000 : otherBoardStart(pid, nowMs);
+  return startMs !== null && startMs <= sinceMs + START_TOLERANCE_MS;
 }
 
 const controlFailure = (status, text) => Object.assign(new Error(text), { status });

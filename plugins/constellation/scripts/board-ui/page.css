@@ -35,7 +35,7 @@
   .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--bg); }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
   .btn:focus-visible, #theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* Top bar */
