@@ -17,7 +17,7 @@ HOOK_PID=""
 FAKE_PID=""
 cleanup() {
   [ -n "$HOOK_PID" ] && kill "$HOOK_PID" 2>/dev/null
-  [ -n "$FAKE_PID" ] && kill "$FAKE_PID" 2>/dev/null
+  [ -n "$FAKE_PID" ] && { kill "$FAKE_PID"; wait "$FAKE_PID"; } 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -175,7 +175,7 @@ LIMIT=4 run_hook 9999
 
 # H12. The board stops during a hold: released, reason board-stopped.
 reset_project; write_control "$(iso_ago 0)" "$FAKE_PID"
-start_hook 20; sleep 1.2; kill "$FAKE_PID"; { wait "$FAKE_PID"; } 2>/dev/null; KILL_MS=$(now_ms); FAKE_PID=""; wait_hook 5
+start_hook 20; sleep 1.2; { kill "$FAKE_PID"; wait "$FAKE_PID"; } 2>/dev/null; KILL_MS=$(now_ms); FAKE_PID=""; wait_hook 5
 [ "$RC" -eq 0 ] && [ ! -s "$OUT" ] && [ $(( END_MS - KILL_MS )) -le "$(limit_ms 1600 2000)" ] \
   && pass "H12 released after the board stopped" || fail "H12 rc=$RC out=$(cat "$OUT") ms=$(( END_MS - KILL_MS ))"
 [ "$(events)" = "PauseHold,PauseReleased" ] && [ "$(jq -sr '.[1].reason' "$LOG")" = "board-stopped" ] \
