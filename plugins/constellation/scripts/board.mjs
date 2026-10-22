@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { READ_CAP_BYTES, resolveSteps, parseEventLines, pairEvents, tokenDelta, tokensFact, attributeAgents, toNode, buildTree, diffStatuses, collapseBurst, mergeFeed, emptySnapshot, safeRefresh, controlView } from './board-model.mjs';
 import { createSessionReader, projectSlugOf } from './board-session.mjs';
@@ -264,14 +265,32 @@ function readControl(root, file) {
   return readJson(root, file).value;
 }
 
-/** True when a process with this pid exists. EPERM means it exists under another user. */
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === 'EPERM';
-  }
+const PS_TIMEOUT_MS = 2000;
+const START_TOLERANCE_MS = 2000;
+const SINCE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const ETIME_PATTERN = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/;
+
+/** Seconds that ps reports as etime, [[dd-]hh:]mm:ss on macOS and Linux, or null. */
+function etimeSeconds(text) {
+  const m = ETIME_PATTERN.exec(text);
+  return m ? Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]) : null;
+}
+
+/**
+ * The owner rule of a pause, the same as the hook and the statusline apply. This process owns the
+ * pause that it wrote. Another pid owns it when since is a UTC timestamp that is not in the future,
+ * the process runs with board.mjs in its command line, and it started at or before since. The start
+ * rule binds the file to the board that wrote it: a committed file predates any later board.
+ */
+export function ownsPause(pid, since, nowMs = Date.now()) {
+  if (pid === process.pid) return true;
+  const sinceMs = typeof since === 'string' && SINCE_PATTERN.test(since) ? Date.parse(since) : NaN;
+  if (Number.isNaN(sinceMs) || sinceMs > nowMs + START_TOLERANCE_MS) return false;
+  const ps = spawnSync('ps', ['-p', String(pid), '-o', 'etime=,command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+  const m = ps.status === 0 ? /^\s*(\S+)\s+(.*)$/s.exec(ps.stdout) : null;
+  const age = m ? etimeSeconds(m[1]) : null;
+  if (age === null || !m[2].includes('board.mjs')) return false;
+  return nowMs - age * 1000 <= sinceMs + START_TOLERANCE_MS;
 }
 
 const controlFailure = (status, text) => Object.assign(new Error(text), { status });
@@ -315,8 +334,7 @@ export function writeControl(projectDir, now = new Date()) {
   let hasWorkflow = false;
   try { hasWorkflow = fs.statSync(path.join(stateDir, 'current-workflow.json')).isFile(); } catch { /* none */ }
   if (!hasWorkflow) throw controlFailure(409, 'no workflow in flight');
-  const owned = controlView(readControl(root, target), [], { selfPid: process.pid, alive });
-  if (owned.paused) throw controlFailure(409, 'already paused');
+  if (pauseOf(readControl(root, target), []).paused) throw controlFailure(409, 'already paused');
   const since = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
   const tmp = path.join(stateDir, `.control-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
   try {
@@ -326,6 +344,11 @@ export function writeControl(projectDir, now = new Date()) {
     try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
     throw e;
   }
+}
+
+/** The pause view of a control file: another pid counts only when it passes the owner rule. */
+function pauseOf(raw, events) {
+  return controlView(raw, events, { selfPid: process.pid, alive: (pid) => ownsPause(pid, raw?.since) });
 }
 
 /** Resume: delete state/control.json. A missing file is a 409, and so is a directory in its place. */
@@ -451,7 +474,7 @@ export function loadSnapshot(projectDir, prev = null, session = null) {
     transitions,
     stale,
     errors,
-    control: controlView(readControl(root, p.control), events, { selfPid: process.pid, alive }),
+    control: pauseOf(readControl(root, p.control), events),
   };
 }
 

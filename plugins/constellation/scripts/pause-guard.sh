@@ -14,6 +14,7 @@
 HOLD_DEFAULT=540
 HOLD_MAX=590
 CONTROL_MAX_BYTES=1024
+START_TOLERANCE=2   # seconds: etime has a 1 s resolution
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 C="$PROJECT_DIR/.constellation"
@@ -25,18 +26,38 @@ CONTROL="$C/state/control.json"
 [ -f "$CONTROL" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-# Owner gate. Prints the board pid and returns 0 only when the pause is in force.
+# Owner gate. Prints the board pid and returns 0 only when the pause is in force: a regular
+# file of at most 1 KB, paused true, by board, an integer pid of a live process whose command
+# line holds board.mjs, a since that is not in the future, and a process that started at or
+# before since. The start rule binds the pause to the board that wrote it: a committed file
+# predates any board that started after the clone. etime is [[dd-]hh:]mm:ss on macOS and Linux.
+etime_seconds() {
+  local t="$1" days=0 a b c
+  case "$t" in *-*) days=${t%%-*}; t=${t#*-} ;; esac
+  IFS=: read -r a b c <<< "$t"
+  if [ -n "$c" ]; then echo $((10#$days * 86400 + 10#$a * 3600 + 10#$b * 60 + 10#$c))
+  else echo $((10#$days * 86400 + 10#$a * 60 + 10#$b)); fi
+}
+
 board_owner_pid() {
-  local pid
+  local fields pid since_epoch etime command now started
   [ -f "$CONTROL" ] && [ ! -L "$CONTROL" ] || return 1
   [ "$(wc -c < "$CONTROL" 2>/dev/null | tr -d ' ')" -le "$CONTROL_MAX_BYTES" ] 2>/dev/null || return 1
-  pid=$(jq -r 'select(.paused == true and .by == "board") | .pid | select(type == "number" and . > 1 and . == floor)' "$CONTROL" 2>/dev/null)
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
-  ps -p "$pid" -o command= 2>/dev/null | grep -q 'board\.mjs' || return 1
+  fields=$(jq -r 'select(.paused == true and .by == "board") | [(.pid | select(type == "number" and . > 1 and . == floor)), (.since | fromdateiso8601)] | @tsv' "$CONTROL" 2>/dev/null)
+  pid=${fields%%$'\t'*}
+  since_epoch=${fields##*$'\t'}
+  case "$pid$since_epoch" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  read -r etime command <<< "$(ps -p "$pid" -o etime=,command= 2>/dev/null)"
+  case "$command" in *board.mjs*) ;; *) return 1 ;; esac
+  [[ "$etime" =~ ^([0-9]+-)?([0-9]+:)?[0-9]+:[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  started=$((now - $(etime_seconds "$etime")))
+  [ "$since_epoch" -le $((now + START_TOLERANCE)) ] && [ "$started" -le $((since_epoch + START_TOLERANCE)) ] || return 1
   printf '%s' "$pid"
 }
 
-BOARD_PID=$(board_owner_pid) || exit 0
+board_owner_pid > /dev/null || exit 0
 
 INPUT=$(cat 2>/dev/null)
 IDS=$(printf '%s' "$INPUT" | jq -c 'def s: if type == "string" then . else null end;
@@ -51,6 +72,8 @@ esac
 
 NOW=$(date +%s)
 SINCE_RAW=$(jq -r '.since | if type == "string" then .[0:40] else "unknown" end' "$CONTROL" 2>/dev/null)
+# The reason reaches the model: only an exact UTC timestamp enters it.
+[[ "$SINCE_RAW" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || SINCE_RAW=unknown
 SINCE_EPOCH=$(jq -r '.since | fromdateiso8601' "$CONTROL" 2>/dev/null)
 # One deadline per pause. A since in the future or unparsable counts as now, so a
 # crafted since cannot extend a hold.
@@ -91,7 +114,7 @@ while true; do
     log_event PauseReleased "$HELD" resume
     exit 0
   fi
-  if ! kill -0 "$BOARD_PID" 2>/dev/null; then
+  if ! board_owner_pid > /dev/null; then
     log_event PauseReleased "$HELD" board-stopped
     exit 0
   fi

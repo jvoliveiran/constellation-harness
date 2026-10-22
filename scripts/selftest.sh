@@ -120,10 +120,13 @@ SLOUT2="$(printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP/nonexistent" | bas
 printf '#!/usr/bin/env bash\nfor _ in $(seq 1 30); do sleep 1; done\n' > "$SLTMP/board.mjs"
 bash "$SLTMP/board.mjs" & FAKE_BOARD_PID=$!
 true & DEAD_PID=$!; wait "$DEAD_PID"
-write_control() { jq -nc --argjson pid "$1" '{paused: true, since: "2026-10-21T14:02:11Z", by: "board", pid: $pid}' > "$SLTMP/.constellation/state/control.json"; }
+iso_ago() { jq -nr --argjson e "$(( $(date +%s) - $1 ))" '$e | todate'; }
+write_control() { jq -nc --argjson pid "$1" --arg since "$(iso_ago "${2:-0}")" '{paused: true, since: $since, by: "board", pid: $pid}' > "$SLTMP/.constellation/state/control.json"; }
 sl_render() { printf '{"workspace":{"current_dir":"%s"}}' "$SLTMP" | bash "$SL"; }
 write_control "$FAKE_BOARD_PID"
 case "$(sl_render)" in *"│ ⏸ paused │"*) : ;; *) fail "statusline: no ⏸ paused for a pause that a live board owns" ;; esac
+write_control "$FAKE_BOARD_PID" 60
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a board that started after since" ;; esac
 write_control "$DEAD_PID"
 case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a pause whose board is gone" ;; esac
 write_control "$$"
@@ -132,7 +135,7 @@ CTL="$SLTMP/.constellation/state/control.json"
 write_control "$FAKE_BOARD_PID"; mv "$CTL" "$SLTMP/real-control.json"; ln -s "$SLTMP/real-control.json" "$CTL"
 case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a symlinked control file" ;; esac
 rm -f "$CTL"
-jq -nc --argjson pid "$FAKE_BOARD_PID" --arg pad "$(head -c 2048 /dev/zero | tr '\0' x)" '{paused: true, by: "board", pid: $pid, pad: $pad}' > "$CTL"
+jq -nc --argjson pid "$FAKE_BOARD_PID" --arg since "$(iso_ago 0)" --arg pad "$(head -c 2048 /dev/zero | tr '\0' x)" '{paused: true, since: $since, by: "board", pid: $pid, pad: $pad}' > "$CTL"
 case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a control file over 1 KB" ;; esac
 kill "$FAKE_BOARD_PID" 2>/dev/null; wait "$FAKE_BOARD_PID" 2>/dev/null
 rm -rf "$SLTMP"

@@ -35,16 +35,33 @@ CONFIG="$DIR/.constellation/config.json"
 [ -f "$STATE" ] && [ -f "$TRACKS" ] || exit 0
 
 # A board pause is in force only while the board that wrote state/control.json runs: a regular
-# file, at most 1 KB, paused true, by board, with the integer pid of a live board.mjs process.
-# The hook scripts/pause-guard.sh applies the same gate.
+# file, at most 1 KB, paused true, by board, the integer pid of a live board.mjs process, a since
+# that is not in the future, and a process that started at or before since. The hook
+# scripts/pause-guard.sh applies the same gate. etime is [[dd-]hh:]mm:ss on macOS and Linux.
 CONTROL="$DIR/.constellation/state/control.json"
+START_TOLERANCE=2
+etime_seconds() {
+  local t="$1" days=0 a b c
+  case "$t" in *-*) days=${t%%-*}; t=${t#*-} ;; esac
+  IFS=: read -r a b c <<< "$t"
+  if [ -n "$c" ]; then echo $((10#$days * 86400 + 10#$a * 3600 + 10#$b * 60 + 10#$c))
+  else echo $((10#$days * 86400 + 10#$a * 60 + 10#$b)); fi
+}
 board_pause_in_force() {
-  local pid
+  local fields pid since_epoch etime command now started
   [ -f "$CONTROL" ] && [ ! -L "$CONTROL" ] || return 1
   [ "$(wc -c < "$CONTROL" 2>/dev/null | tr -d ' ')" -le 1024 ] 2>/dev/null || return 1
-  pid=$(jq -r 'select(.paused == true and .by == "board") | .pid | select(type == "number" and . > 1 and . == floor)' "$CONTROL" 2>/dev/null)
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
-  ps -p "$pid" -o command= 2>/dev/null | grep -q 'board\.mjs'
+  fields=$(jq -r 'select(.paused == true and .by == "board") | [(.pid | select(type == "number" and . > 1 and . == floor)), (.since | fromdateiso8601)] | @tsv' "$CONTROL" 2>/dev/null)
+  pid=${fields%%$'\t'*}
+  since_epoch=${fields##*$'\t'}
+  case "$pid$since_epoch" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  read -r etime command <<< "$(ps -p "$pid" -o etime=,command= 2>/dev/null)"
+  case "$command" in *board.mjs*) ;; *) return 1 ;; esac
+  [[ "$etime" =~ ^([0-9]+-)?([0-9]+:)?[0-9]+:[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  started=$((now - $(etime_seconds "$etime")))
+  [ "$since_epoch" -le $((now + START_TOLERANCE)) ] && [ "$started" -le $((since_epoch + START_TOLERANCE)) ]
 }
 PAUSED=false
 board_pause_in_force && PAUSED=true

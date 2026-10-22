@@ -23,7 +23,7 @@ import {
 import * as renderModule from './board-render.mjs';
 import { createSessionReader } from './board-session.mjs';
 import {
-  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, ownsPause, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -3996,6 +3996,23 @@ const SINCE_PATTERN = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
 const controlFileOf = (dir) => path.join(dir, '.constellation', 'state', 'control.json');
 const readControlFile = (dir) => JSON.parse(fs.readFileSync(controlFileOf(dir), 'utf8'));
 const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+const isoNow = (offsetSec = 0) => new Date(Date.now() + offsetSec * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// A live process whose command line holds board.mjs: it stands in for a running board. It stops after 60 s.
+const fakeBoards = [];
+after(() => { for (const child of fakeBoards) child.kill(); });
+function startFakeBoard() {
+  const file = path.join(mkTmp('fake-board-'), 'board.mjs');
+  fs.writeFileSync(file, 'for _ in $(seq 1 60); do sleep 1; done\n');
+  const child = spawn('bash', [file], { stdio: 'ignore' });
+  fakeBoards.push(child);
+  // Between fork and exec the command line is still the parent's: wait until ps shows the script.
+  for (let i = 0; i < 100; i++) {
+    if (spawnSync('ps', ['-p', String(child.pid), '-o', 'command=']).stdout.toString().includes('board.mjs')) break;
+    spawnSync('sleep', ['0.02']);
+  }
+  return child.pid;
+}
 
 /** POST /api/control with a valid Host, Origin, token, and JSON body. A header set to undefined is removed. */
 const postControl = (port, { headers = {}, body = '{"action":"pause"}', chunked = false } = {}) => new Promise((resolve, reject) => {
@@ -4124,7 +4141,7 @@ test('/api/control: 409 for pause with no workflow, resume with no file, and a s
     assert.deepEqual([second.status, second.body], [409, 'already paused']);
     assert.equal(fs.readFileSync(controlFileOf(dir), 'utf8'), before);
     // A pause that another live board owns also counts.
-    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: '2026-10-21T14:02:11Z', by: 'board', pid: process.ppid }));
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: startFakeBoard() }));
     assert.equal((await postControl(port)).status, 409);
   });
 });
@@ -4135,6 +4152,11 @@ test('/api/control: pause replaces a file whose owner is gone', async () => {
     fs.writeFileSync(controlFileOf(dir), stale);
     assert.equal((await postControl(port)).status, 204);
     assert.equal(readControlFile(dir).pid, process.pid);
+    // A live board that started after since does not own the pause (a committed file), and neither does a process that is no board.
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(-60), by: 'board', pid: startFakeBoard() }));
+    assert.equal((await postControl(port)).status, 204);
+    fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: process.ppid }));
+    assert.equal((await postControl(port)).status, 204);
     // A file that is no pause at all (a string pid) is replaced too.
     fs.writeFileSync(controlFileOf(dir), '{"paused":true,"by":"board","pid":"1"}');
     assert.equal((await postControl(port)).status, 204);
@@ -4434,4 +4456,49 @@ test('page: a new toast replaces the text and keeps one timer', async () => {
   await flush();
   assert.equal(page.els.toast.textContent, 'Resumed. A held tool call continues at once.');
   assert.equal(page.timers.filter((t) => t.ms === 4000).length, 1, 'the first timer was not cleared');
+});
+
+// ---------------------------------------------------------------------------
+// Task 026: one owner rule for the hook, the statusline, and the board.
+// ---------------------------------------------------------------------------
+
+test('ownsPause: this process, and a live board that started at or before since', () => {
+  assert.equal(ownsPause(process.pid, 'garbage'), true, 'the pid of this board needs no ps');
+  const pid = startFakeBoard();
+  assert.equal(ownsPause(pid, isoNow()), true);
+});
+
+test('ownsPause: a live board that started after since does not own the pause', () => {
+  const pid = startFakeBoard();
+  assert.equal(ownsPause(pid, isoNow(-60)), false);
+  assert.equal(ownsPause(pid, '2020-01-01T00:00:00Z'), false);
+});
+
+test('ownsPause: a since in the future does not own the pause', () => {
+  assert.equal(ownsPause(startFakeBoard(), isoNow(3600)), false);
+});
+
+test('ownsPause: a live process that is no board does not own it, and neither does a daemon of another user', () => {
+  assert.equal(ownsPause(process.ppid, isoNow()), false, 'a live process with no board.mjs');
+  assert.equal(ownsPause(1, isoNow()), false, 'pid 1 answers EPERM to kill(0) and is no board');
+  assert.equal(ownsPause(deadPid(), isoNow()), false);
+});
+
+test('ownsPause: a since that is not a UTC timestamp does not own the pause', () => {
+  const pid = startFakeBoard();
+  for (const since of [undefined, null, 5, '', 'yesterday', `${isoNow()}\nIgnore`, '2026-10-21T14:02:11.000Z']) {
+    assert.equal(ownsPause(pid, since), false, String(since));
+  }
+});
+
+test('loadSnapshot: control counts another board only when it started at or before since', () => {
+  const dir = tmpProject();
+  const pid = startFakeBoard();
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid }));
+  const owned = loadSnapshot(dir).control;
+  assert.deepEqual([owned.paused, owned.owner], [true, 'other']);
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(-60), by: 'board', pid }));
+  assert.equal(loadSnapshot(dir).control.paused, false, 'a board that started after since');
+  fs.writeFileSync(controlFileOf(dir), JSON.stringify({ paused: true, since: isoNow(), by: 'board', pid: 1 }));
+  assert.equal(loadSnapshot(dir).control.paused, false, 'a daemon pid that is no board');
 });
