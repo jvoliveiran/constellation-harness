@@ -276,24 +276,63 @@ function etimeSeconds(text) {
   return m ? Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]) : null;
 }
 
-/** When another process started, as epoch ms, or null unless it runs with board.mjs in its command line. */
-function otherBoardStart(pid, nowMs) {
-  const ps = spawnSync('ps', ['-p', String(pid), '-o', 'etime=,command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
-  const m = ps.status === 0 ? /^\s*(\S+)\s+(.*)$/s.exec(ps.stdout) : null;
+/**
+ * Parse the output of `ps -p PID -o etime= -o command=` into { age, command }, or null. One `-o` per
+ * field: procps (Linux) reads all text after the first `=` of `-o etime=,command=` as a header.
+ */
+export function parseBoardPs(stdout) {
+  const m = /^\s*(\S+)\s+(.*)$/s.exec(String(stdout ?? ''));
   const age = m ? etimeSeconds(m[1]) : null;
-  return age !== null && m[2].includes('board.mjs') ? nowMs - age * 1000 : null;
+  return age === null ? null : { age, command: m[2].trim() };
 }
 
+const realKill = (pid) => process.kill(pid, 0);
+/** The ps arguments: one -o per field. */
+export const psArgs = (pid) => ['-p', String(pid), '-o', 'etime=', '-o', 'command='];
+const realPs = (pid) => {
+  const ps = spawnSync('ps', psArgs(pid), { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+  return ps.status === 0 ? ps.stdout : null;
+};
+
 /**
- * The owner rule of a pause, the same as the hook and the statusline apply. since must be a UTC
- * timestamp that is not in the future. The owner is this process, or a process with board.mjs in
- * its command line, and it must have started at or before since. The start rule binds the file to
- * the board that wrote it: a committed file predates any board that started after the clone.
+ * When another process started, as epoch ms, or null. The process must exist for this user (kill 0
+ * answers EPERM for another user's process, which the hook and the statusline ignore too) and run
+ * with board.mjs in its command line. kill and ps are injectable for tests.
  */
-export function ownsPause(pid, since, nowMs = Date.now()) {
+export function boardStartOf(pid, nowMs, { kill = realKill, ps = realPs } = {}) {
+  try { kill(pid); } catch { return null; }
+  const parsed = parseBoardPs(ps(pid));
+  return parsed && parsed.command.includes('board.mjs') ? nowMs - parsed.age * 1000 : null;
+}
+
+const START_CACHE_MAX = 64;
+
+/** Keep the last answer of fn(pid, nowMs) per pid for ttlMs, so a crafted file cannot spawn ps on every refresh. */
+export function memoizeBriefly(fn, ttlMs = 1000) {
+  const cache = new Map();
+  return (pid, nowMs) => {
+    const hit = cache.get(pid);
+    if (hit && nowMs - hit.at < ttlMs) return hit.value;
+    const value = fn(pid, nowMs);
+    if (cache.size >= START_CACHE_MAX) cache.clear();
+    cache.set(pid, { at: nowMs, value });
+    return value;
+  };
+}
+
+const cachedBoardStart = memoizeBriefly(boardStartOf);
+
+/**
+ * The owner rule of a pause, the same as the hook and the statusline apply (keep the three in sync).
+ * since must be a UTC timestamp that is not in the future. The owner is this process, or a process
+ * with board.mjs in its command line, and it must have started at or before since. The start rule
+ * binds the file to the board that wrote it: a committed file predates any board started later.
+ * deps: now (epoch ms) and startOf(pid, nowMs), both injectable for tests.
+ */
+export function ownsPause(pid, since, { now = Date.now(), startOf = cachedBoardStart } = {}) {
   const sinceMs = typeof since === 'string' && SINCE_PATTERN.test(since) ? Date.parse(since) : NaN;
-  if (Number.isNaN(sinceMs) || sinceMs > nowMs + START_TOLERANCE_MS) return false;
-  const startMs = pid === process.pid ? nowMs - process.uptime() * 1000 : otherBoardStart(pid, nowMs);
+  if (Number.isNaN(sinceMs) || sinceMs > now + START_TOLERANCE_MS) return false;
+  const startMs = pid === process.pid ? now - process.uptime() * 1000 : startOf(pid, now);
   return startMs !== null && startMs <= sinceMs + START_TOLERANCE_MS;
 }
 

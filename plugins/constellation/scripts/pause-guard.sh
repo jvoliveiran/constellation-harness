@@ -29,7 +29,9 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Owner gate. Prints the board pid and returns 0 only when the pause is in force: a regular
 # file of at most 1 KB, paused true, by board, an integer pid of a live process whose command
 # line holds board.mjs, a since that is not in the future, and a process that started at or
-# before since. The start rule binds the pause to the board that wrote it: a committed file
+# before since. since must match the exact UTC pattern (jq would also accept trailing text).
+# Keep this gate in sync with templates/statusline.sh and ownsPause in scripts/board.mjs.
+# The start rule binds the pause to the board that wrote it: a committed file
 # predates any board that started after the clone. etime is [[dd-]hh:]mm:ss on macOS and Linux.
 etime_seconds() {
   local t="$1" days=0 a b c
@@ -43,12 +45,12 @@ board_owner_pid() {
   local fields pid since_epoch etime command now started
   [ -f "$CONTROL" ] && [ ! -L "$CONTROL" ] || return 1
   [ "$(wc -c < "$CONTROL" 2>/dev/null | tr -d ' ')" -le "$CONTROL_MAX_BYTES" ] 2>/dev/null || return 1
-  fields=$(jq -r 'select(.paused == true and .by == "board") | [(.pid | select(type == "number" and . > 1 and . == floor)), (.since | fromdateiso8601)] | @tsv' "$CONTROL" 2>/dev/null)
+  fields=$(jq -r 'select(.paused == true and .by == "board") | .pid as $p | (.since | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")) | fromdateiso8601) as $s | select($p | type == "number" and . > 1 and . == floor) | [$p, $s] | @tsv' "$CONTROL" 2>/dev/null)
   pid=${fields%%$'\t'*}
   since_epoch=${fields##*$'\t'}
   case "$pid$since_epoch" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
-  read -r etime command <<< "$(ps -p "$pid" -o etime=,command= 2>/dev/null)"
+  read -r etime command <<< "$(ps -p "$pid" -o etime= -o command= 2>/dev/null)"
   case "$command" in *board.mjs*) ;; *) return 1 ;; esac
   [[ "$etime" =~ ^([0-9]+-)?([0-9]+:)?[0-9]+:[0-9]+$ ]] || return 1
   now=$(date +%s)
@@ -115,7 +117,8 @@ while true; do
     exit 0
   fi
   if ! board_owner_pid > /dev/null; then
-    log_event PauseReleased "$HELD" board-stopped
+    # A Resume can land between the file test and the gate: re-test before naming the reason.
+    if [ ! -f "$CONTROL" ]; then log_event PauseReleased "$HELD" resume; else log_event PauseReleased "$HELD" board-stopped; fi
     exit 0
   fi
   [ "$(date +%s)" -lt "$DEADLINE" ] || deny "$HELD"

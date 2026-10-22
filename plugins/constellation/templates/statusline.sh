@@ -37,7 +37,8 @@ CONFIG="$DIR/.constellation/config.json"
 # A board pause is in force only while the board that wrote state/control.json runs: a regular
 # file, at most 1 KB, paused true, by board, the integer pid of a live board.mjs process, a since
 # that is not in the future, and a process that started at or before since. The hook
-# scripts/pause-guard.sh applies the same gate. etime is [[dd-]hh:]mm:ss on macOS and Linux.
+# scripts/pause-guard.sh applies the same gate. Keep the two copies and ownsPause in
+# scripts/board.mjs in sync. etime is [[dd-]hh:]mm:ss on macOS and Linux.
 CONTROL="$DIR/.constellation/state/control.json"
 START_TOLERANCE=2
 etime_seconds() {
@@ -51,12 +52,12 @@ board_pause_in_force() {
   local fields pid since_epoch etime command now started
   [ -f "$CONTROL" ] && [ ! -L "$CONTROL" ] || return 1
   [ "$(wc -c < "$CONTROL" 2>/dev/null | tr -d ' ')" -le 1024 ] 2>/dev/null || return 1
-  fields=$(jq -r 'select(.paused == true and .by == "board") | [(.pid | select(type == "number" and . > 1 and . == floor)), (.since | fromdateiso8601)] | @tsv' "$CONTROL" 2>/dev/null)
+  fields=$(jq -r 'select(.paused == true and .by == "board") | .pid as $p | (.since | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")) | fromdateiso8601) as $s | select($p | type == "number" and . > 1 and . == floor) | [$p, $s] | @tsv' "$CONTROL" 2>/dev/null)
   pid=${fields%%$'\t'*}
   since_epoch=${fields##*$'\t'}
   case "$pid$since_epoch" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
-  read -r etime command <<< "$(ps -p "$pid" -o etime=,command= 2>/dev/null)"
+  read -r etime command <<< "$(ps -p "$pid" -o etime= -o command= 2>/dev/null)"
   case "$command" in *board.mjs*) ;; *) return 1 ;; esac
   [[ "$etime" =~ ^([0-9]+-)?([0-9]+:)?[0-9]+:[0-9]+$ ]] || return 1
   now=$(date +%s)

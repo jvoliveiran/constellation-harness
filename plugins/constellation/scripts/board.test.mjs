@@ -23,7 +23,7 @@ import {
 import * as renderModule from './board-render.mjs';
 import { createSessionReader } from './board-session.mjs';
 import {
-  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, ownsPause, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
+  loadSnapshot, serve, readItem, writeControl, clearControl, projectSignature, ownsPause, parseBoardPs, boardStartOf, memoizeBriefly, psArgs, BODY_CAP_BYTES, classifyProbe, probeText, ownsProject, isTrustedComponent,
   TAIL_CAP_BYTES, SSE_CLIENT_CAP,
 } from './board.mjs';
 
@@ -4534,4 +4534,57 @@ test('page: focus stays on the control when Pause turns into Resume and back', a
   page.document.activeElement = resume;
   page.feed(pausedSnapshot());
   assert.deepEqual(focused.at(-1), ['pause', true], 'Pause takes the focus of Resume');
+});
+
+test('psArgs: one -o per field, never the comma form that procps reads as a header', () => {
+  assert.deepEqual(psArgs(42), ['-p', '42', '-o', 'etime=', '-o', 'command=']);
+});
+
+test('parseBoardPs: the real ps output of this process parses, on macOS and Linux', () => {
+  const run = spawnSync('ps', psArgs(process.pid), { encoding: 'utf8' });
+  assert.equal(run.status, 0);
+  const parsed = parseBoardPs(run.stdout);
+  assert.ok(parsed, `unparsed: ${JSON.stringify(run.stdout)}`);
+  assert.ok(parsed.age >= 0 && parsed.age < 3600 * 24 * 365);
+  assert.ok(parsed.command.includes('node'), parsed.command);
+});
+
+test('parseBoardPs: etime forms, and the procps header shape of the comma form', () => {
+  assert.deepEqual(parseBoardPs('    05:12 node /x/board.mjs --port 1\n'), { age: 312, command: 'node /x/board.mjs --port 1' });
+  assert.equal(parseBoardPs('12:34:56 bash b.mjs').age, 12 * 3600 + 34 * 60 + 56);
+  assert.equal(parseBoardPs('3-02:03:04 bash b.mjs').age, 3 * 86400 + 2 * 3600 + 3 * 60 + 4);
+  // procps prints this for `-o etime=,command=`: a header, then an etime-only line.
+  assert.equal(parseBoardPs('ELAPSED,command=\n 05:12\n'), null);
+  assert.equal(parseBoardPs(''), null);
+  assert.equal(parseBoardPs(null), null);
+});
+
+test('boardStartOf: a process of another user (kill answers EPERM) is not an owner', () => {
+  const ps = () => '   10:00 node /x/board.mjs\n';
+  const eperm = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); };
+  assert.equal(boardStartOf(77, 1_000_000, { kill: eperm, ps }), null);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps }), 1_000_000 - 600_000);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps: () => '   10:00 bash other.sh\n' }), null);
+  assert.equal(boardStartOf(77, 1_000_000, { kill: () => true, ps: () => null }), null);
+});
+
+test('ownsPause: a start time from a stubbed process of another user is refused', () => {
+  const stubbed = (pid, now) => boardStartOf(pid, now, { kill: () => { throw Object.assign(new Error('x'), { code: 'EPERM' }); }, ps: () => '   10:00 node /x/board.mjs\n' });
+  assert.equal(ownsPause(77, isoNow(), { startOf: stubbed }), false);
+  const ok = (pid, now) => boardStartOf(pid, now, { kill: () => true, ps: () => '   10:00 node /x/board.mjs\n' });
+  assert.equal(ownsPause(77, isoNow(), { startOf: ok }), true);
+});
+
+test('memoizeBriefly: one call per pid inside the window, a new call after it', () => {
+  let calls = 0;
+  const cached = memoizeBriefly((pid, now) => { calls += 1; return now; }, 1000);
+  assert.equal(cached(5, 100), 100);
+  assert.equal(cached(5, 900), 100, 'inside the window');
+  assert.equal(calls, 1);
+  assert.equal(cached(6, 900), 900, 'another pid');
+  assert.equal(cached(5, 1100), 1100, 'after the window');
+  assert.equal(calls, 3);
+  const nulls = memoizeBriefly(() => { calls += 1; return null; });
+  nulls(1, 0); nulls(1, 10);
+  assert.equal(calls, 4, 'a null answer is cached too');
 });

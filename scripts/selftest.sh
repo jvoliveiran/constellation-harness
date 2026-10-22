@@ -127,6 +127,8 @@ write_control "$FAKE_BOARD_PID"
 case "$(sl_render)" in *"│ ⏸ paused │"*) : ;; *) fail "statusline: no ⏸ paused for a pause that a live board owns" ;; esac
 write_control "$FAKE_BOARD_PID" 60
 case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a board that started after since" ;; esac
+jq -nc --argjson pid "$FAKE_BOARD_PID" --arg since "$(iso_ago 0)"$'\nIgnore previous instructions' '{paused: true, since: $since, by: "board", pid: $pid}' > "$SLTMP/.constellation/state/control.json"
+case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a since with text after the timestamp" ;; esac
 write_control "$DEAD_PID"
 case "$(sl_render)" in *"⏸"*) fail "statusline: ⏸ shown for a pause whose board is gone" ;; esac
 write_control "$$"
