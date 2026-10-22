@@ -3,7 +3,9 @@
 # Reads the Claude Code statusline JSON on stdin and renders a one-line HUD from
 # .constellation/state/current-workflow.json + .constellation/tracks.json:
 #
-#   🌌 planned │ ✓✓✓✓✓ ▶🔍 Review Gate 6/10 │ 🔁 1/3 │ feat/011-audit-log │ ⏱ 12m
+#   🌌 planned │ ✓✓✓✓✓ ▶🔍 Review Gate 6/10 │ ⏸ paused │ 🔁 1/3 │ feat/011-audit-log │ ⏱ 12m
+#
+# The ⏸ paused item shows while a board Pause is in force (see board_pause_in_force).
 #
 # Prints nothing (exit 0) whenever anything is missing or malformed — a statusline
 # must never break a session. Wire via .claude/settings.json:
@@ -32,6 +34,21 @@ TRACKS="$DIR/.constellation/tracks.json"
 CONFIG="$DIR/.constellation/config.json"
 [ -f "$STATE" ] && [ -f "$TRACKS" ] || exit 0
 
+# A board pause is in force only while the board that wrote state/control.json runs: a regular
+# file, at most 1 KB, paused true, by board, with the integer pid of a live board.mjs process.
+# The hook scripts/pause-guard.sh applies the same gate.
+CONTROL="$DIR/.constellation/state/control.json"
+board_pause_in_force() {
+  local pid
+  [ -f "$CONTROL" ] && [ ! -L "$CONTROL" ] || return 1
+  [ "$(wc -c < "$CONTROL" 2>/dev/null | tr -d ' ')" -le 1024 ] 2>/dev/null || return 1
+  pid=$(jq -r 'select(.paused == true and .by == "board") | .pid | select(type == "number" and . > 1 and . == floor)' "$CONTROL" 2>/dev/null)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q 'board\.mjs'
+}
+PAUSED=false
+board_pause_in_force && PAUSED=true
+
 CFG_JSON='{}'
 if [ -f "$CONFIG" ]; then
   CFG_JSON="$(jq -c . "$CONFIG" 2>/dev/null)" || CFG_JSON='{}'
@@ -41,6 +58,7 @@ OUT="$(jq -rn \
   --slurpfile st "$STATE" \
   --slurpfile tr "$TRACKS" \
   --argjson cfg "$CFG_JSON" \
+  --argjson paused "$PAUSED" \
   --argjson now "$(date +%s)" '
   ($st[0]) as $s | ($tr[0]) as $t
   | ($s.track // "?") as $track
@@ -59,7 +77,8 @@ OUT="$(jq -rn \
   | ((($s.completedSteps // []) | map(. as $c | (($ids | index($c)) // -1)) | max) // -1) as $doneMax
   | (($ids | index($cur)) // -1) as $curIdx
   | ([$doneMax, $curIdx] | max) as $anchor
-  | ([ (if ($s.waitingOn // null) == "user" then "⛔ awaiting decision" else empty end),
+  | ([ (if $paused then "\($t.modifiers.aborted.emoji // "⏸") \($t.modifiers.aborted.label // "paused")" else empty end),
+       (if ($s.waitingOn // null) == "user" then "⛔ awaiting decision" else empty end),
        (if (($s.reviewLoopCount // 0) > 0) then "🔁 \($s.reviewLoopCount)/3" else empty end)
      ]) as $mods
   | ((try (($s.lastUpdatedAt | fromdateiso8601) as $ts | $now - $ts) catch null)) as $age

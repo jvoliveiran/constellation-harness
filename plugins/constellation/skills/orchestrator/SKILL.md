@@ -35,6 +35,7 @@ Project layout reference: `.constellation/project-map.md`.
 - **ALWAYS** check for a saved workflow state file (`.constellation/state/current-workflow.json`) on conversation start — if it exists, offer to resume from the saved step.
 - **ALWAYS** log workflow milestones to `.constellation/metrics/workflow-log.jsonl`.
 - **ALWAYS** print the [Progress Banner](#progress-banner) immediately after every state save — rendered from the state just written.
+- **ALWAYS** stop when a tool denial or an agent report carries `Constellation board paused this workflow`. End the turn with the pause message and the last save point (`currentStep` and `lastUpdatedAt` of the state file you last wrote). Do not save state. Do not retry. Do not spawn agents. The user clicks Resume on the board, then types `/constellation:resume`.
 - **ALWAYS** take timestamps from the shell — run `date -u +%Y-%m-%dT%H:%M:%SZ` with the Bash tool before every state save and every metrics append. Never write a timestamp from memory.
 
 ---
@@ -47,6 +48,7 @@ Users can issue these at any point during the workflow:
 |---|---|
 | `/constellation:dry-run` | Preview the entire workflow without executing — agents, skills, gates, estimated model usage. No files modified. Handle **before** any agent is invoked. |
 | `/constellation:abort` | Stop immediately. Save state to `.constellation/state/current-workflow.json`. Keep branch and changes. Report completed vs remaining. Does NOT commit or push. |
+| Board **Pause** / **Resume** (page buttons) | Pause holds the next tool call of the session and its subagents for up to 9 minutes. Resume within the hold continues with no typing. After the hold, the call is denied and the turn ends: click Resume, then type `/constellation:resume`. Unlike `/constellation:abort`, it saves nothing. |
 | `/constellation:resume` | Resume from the saved state file. If it doesn't exist, report that there is nothing to resume. |
 | `/constellation:skip-gate` | Skip the current gate after explicit confirmation: "Are you sure you want to skip [gate]? This bypasses [reviewer/security/test] checks." Log the skip. |
 | `/constellation:status` | Show current state — track, step, gates passed, review loop count. Never interrupts the workflow. |
@@ -602,7 +604,7 @@ Append events to `.constellation/metrics/workflow-log.jsonl` — one JSON object
 
 These reveal recurring blocker patterns, lint-gate savings, average review loops, track usage, and token cost per completed task/plan.
 
-A second file, `.constellation/metrics/events.jsonl`, is written **mechanically by the plugin's hooks** (`scripts/log-event.sh`): one line per `SubagentStart`, `SubagentStop`, `Stop`, and every Write/Edit under `.constellation/`, each stamped with the system clock. The orchestrator never writes to it. The board (`scripts/board.mjs`) tails it to show which specialist runs right now.
+A second file, `.constellation/metrics/events.jsonl`, is written **mechanically by the plugin's hooks** (`scripts/log-event.sh`): one line per `SubagentStart`, `SubagentStop`, `Stop`, and every Write/Edit under `.constellation/`, each stamped with the system clock. `scripts/pause-guard.sh` appends `PauseHold`, `PauseReleased`, and `PauseDenied`. The orchestrator never writes to it. The board (`scripts/board.mjs`) tails it to show which specialist runs right now.
 
 ### Token accounting
 

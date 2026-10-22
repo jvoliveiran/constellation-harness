@@ -6,6 +6,8 @@ description: Resume a previously aborted/interrupted Constellation workflow from
 
 Resume an interrupted workflow.
 
+0. If a tool call is denied with `Constellation board paused this workflow`, tell the user to click Resume on the board first, and stop.
+
 1. Read `.constellation/state/current-workflow.json`. If it does not exist, report that there is no workflow to resume and stop.
 2. **Validate the state before trusting it** — check ALL of the following; on any failure,
    report exactly what is invalid and offer two options: archive the stale state (move to
